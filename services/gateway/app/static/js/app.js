@@ -65,6 +65,8 @@ const els = {
   graphCanvas: $("graphCanvas"),
   graphCanvasWrap: $("graphCanvasWrap"),
   graphResizeHandle: $("graphResizeHandle"),
+  graphToolbarShell: $("graphToolbarShell"),
+  graphToolbarToggle: $("graphToolbarToggle"),
   graphNodeList: $("graphNodeList"),
   graphMapView: $("graphMapView"),
   graphRelsView: $("graphRelsView"),
@@ -2528,16 +2530,47 @@ function renderGraphViews(opts = {}) {
   renderL3Stats();
 }
 
+function getGraphMinHeight() {
+  return Math.max(400, Math.round(window.innerHeight * 0.6));
+}
+
+function getGraphMaxHeight() {
+  return Math.round(window.innerHeight * 0.92);
+}
+
+function initGraphToolbarCollapse() {
+  const shell = els.graphToolbarShell;
+  const toggle = els.graphToolbarToggle;
+  if (!shell || !toggle) return;
+  const key = "mkg_graph_toolbar_collapsed";
+  const collapsed = localStorage.getItem(key) === "1";
+  shell.classList.toggle("collapsed", collapsed);
+  toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  toggle.addEventListener("click", () => {
+    const nowCollapsed = !shell.classList.contains("collapsed");
+    shell.classList.toggle("collapsed", nowCollapsed);
+    toggle.setAttribute("aria-expanded", nowCollapsed ? "false" : "true");
+    localStorage.setItem(key, nowCollapsed ? "1" : "0");
+    refreshGraphViewport();
+  });
+}
+
 function initGraphResize() {
   const handle = els.graphResizeHandle;
   const wrap = els.graphCanvasWrap;
   if (!handle || !wrap) return;
+  const minH = getGraphMinHeight();
   const saved = localStorage.getItem("mkg_graph_h");
-  if (saved) wrap.style.height = `${saved}px`;
+  if (saved) {
+    const parsed = parseInt(saved, 10);
+    const h = Math.max(minH, Math.min(getGraphMaxHeight(), Number.isFinite(parsed) ? parsed : minH));
+    wrap.style.height = `${h}px`;
+    if (parsed !== h) localStorage.setItem("mkg_graph_h", String(h));
+  }
   let startY = 0;
   let startH = 0;
   const onMove = (e) => {
-    const h = Math.max(220, Math.min(window.innerHeight * 0.78, startH + (e.clientY - startY)));
+    const h = Math.max(getGraphMinHeight(), Math.min(getGraphMaxHeight(), startH + (e.clientY - startY)));
     wrap.style.height = `${h}px`;
     refreshGraphViewport();
   };
@@ -3056,41 +3089,3 @@ function bindEvents() {
   els.graphCompactBtn?.addEventListener("click", () => setGraphDensityMode("compact"));
   els.graphFullBtn?.addEventListener("click", () => setGraphDensityMode("full"));
   els.closeDetailBtn?.addEventListener("click", closeDetailPanel);
-  els.crossLayerToggle?.addEventListener("click", () => {
-    showCrossLayerOnly = !showCrossLayerOnly;
-    if (showCrossLayerOnly) graphLayerFilter = "all";
-    renderGraphViews();
-  });
-  els.toggleNodeListBtn?.addEventListener("click", toggleGraphNodeList);
-  els.viewMapBtn?.addEventListener("click", () => setGraphViewMode("map"));
-  els.viewRelsBtn?.addEventListener("click", () => setGraphViewMode("rels"));
-  els.originalGraphBtn?.addEventListener("click", resetGraphFilters);
-  els.headerNeo4jBtn?.addEventListener("click", openNeo4jBrowser);
-  initGraphResize();
-}
-
-function boot() {
-  if (window.marked?.setOptions) {
-    window.marked.setOptions({ breaks: true, gfm: true });
-  }
-  switchPage("chats");
-  bindNavigation();
-  try {
-    bindEvents();
-  } catch (err) {
-    console.error("MKG UI init error:", err);
-  }
-  updateDensityToggleUI();
-  els.appRoot?.classList.add("js-ready");
-  loadFormats();
-  loadNodeFieldHints();
-  loadConfig();
-  loadProjectStage();
-  refreshEmbeddingStatus();
-  renderDocsList();
-  setInterval(renderDocsList, 1500);
-  setInterval(refreshEmbeddingStatus, 30000);
-  window.MKGAuth?.init();
-}
-
-boot();
