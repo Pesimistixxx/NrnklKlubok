@@ -77,7 +77,11 @@ const els = {
   graphCanvasWrap: $("graphCanvasWrap"),
   graphResizeHandle: $("graphResizeHandle"),
   graphToolbarShell: $("graphToolbarShell"),
-  graphToolbarToggle: $("graphToolbarToggle"),
+  graphAdvFiltersShell: $("graphAdvFiltersShell"),
+  graphAdvFiltersToggle: $("graphAdvFiltersToggle"),
+  graphAdvFiltersBody: $("graphAdvFiltersBody"),
+  graphAdvFiltersNodeCount: $("graphAdvFiltersNodeCount"),
+  graphFilterApplyCompact: $("graphFilterApplyCompact"),
   graphNodeList: $("graphNodeList"),
   graphMapView: $("graphMapView"),
   graphRelsView: $("graphRelsView"),
@@ -381,6 +385,7 @@ const GRAPH_LABEL_MAX = 20;
 const GRAPH_ALL_ID = "__all__";
 const NEO4J_BROWSER_URL = "http://localhost:7474/browser/";
 const GRAPH_ADV_FILTERS_SESSION_KEY = "mkg_graph_adv_filters";
+const GRAPH_FILTERS_COLLAPSED_KEY = "mkg_graph_filters_collapsed";
 
 const ENTITY_TYPE_FILTERS = [
   { id: "material", label: "Материал", labels: ["Material"] },
@@ -4428,7 +4433,14 @@ function updateGraphYearLabel() {
   if (els.graphFilterYearLabel) els.graphFilterYearLabel.textContent = `${min} — ${max}`;
 }
 
+function updateGraphAdvFiltersNodeCount() {
+  if (!els.graphAdvFiltersNodeCount) return;
+  const { nodes } = filteredGraph();
+  els.graphAdvFiltersNodeCount.textContent = `${nodes.length} узл`;
+}
+
 function updateGraphFilterStatus() {
+  updateGraphAdvFiltersNodeCount();
   if (!els.graphFilterStatus) return;
   if (!graphAdvancedFilters.active) {
     els.graphFilterStatus.textContent = "";
@@ -4509,6 +4521,7 @@ function initGraphAdvancedFilters() {
   els.graphFilterYearMax?.addEventListener("input", onYearInput);
 
   els.graphFilterApplyBtn?.addEventListener("click", applyGraphAdvancedFiltersFromForm);
+  els.graphFilterApplyCompact?.addEventListener("click", applyGraphAdvancedFiltersFromForm);
   els.graphFilterResetBtn?.addEventListener("click", () => resetGraphAdvancedFilters());
 
   [els.graphFilterContradictions, els.graphFilterGaps].forEach((el) => {
@@ -5457,32 +5470,40 @@ function renderGraphViews(opts = {}) {
 }
 
 function getGraphMinHeight() {
-  return Math.max(400, Math.round(window.innerHeight * 0.6));
+  return Math.max(400, Math.round(window.innerHeight * 0.5));
 }
 
 function getGraphMaxHeight() {
   return Math.round(window.innerHeight * 0.92);
 }
 
-function initGraphToolbarCollapse() {
-  const shell = els.graphToolbarShell;
-  const toggle = els.graphToolbarToggle;
-  if (!shell || !toggle) return;
-  const key = "mkg_graph_filters_open";
-  const legacy = localStorage.getItem("mkg_graph_toolbar_collapsed");
-  if (localStorage.getItem(key) === null && legacy !== null) {
-    localStorage.setItem(key, legacy === "1" ? "false" : "true");
-  }
-  const setOpen = (open) => {
-    shell.classList.toggle("collapsed", !open);
-    toggle.setAttribute("aria-expanded", open ? "true" : "false");
-    toggle.title = open ? "Свернуть фильтры слоёв" : "Развернуть фильтры слоёв";
+function initGraphAdvFiltersCollapse() {
+  const shell = els.graphAdvFiltersShell;
+  const toggle = els.graphAdvFiltersToggle;
+  const body = els.graphAdvFiltersBody;
+  if (!shell || !toggle || !body) return;
+
+  const setCollapsed = (collapsed) => {
+    shell.classList.toggle("collapsed", collapsed);
+    body.hidden = collapsed;
+    toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    toggle.title = collapsed ? "Развернуть фильтры" : "Свернуть фильтры";
+    const icon = toggle.querySelector(".graph-adv-filters-toggle-icon");
+    if (icon) icon.textContent = collapsed ? "▸" : "▾";
   };
-  setOpen(localStorage.getItem(key) !== "false");
+
+  let collapsed = true;
+  try {
+    collapsed = sessionStorage.getItem(GRAPH_FILTERS_COLLAPSED_KEY) !== "false";
+  } catch { /* ignore */ }
+  setCollapsed(collapsed);
+
   toggle.addEventListener("click", () => {
-    const open = shell.classList.contains("collapsed");
-    setOpen(open);
-    localStorage.setItem(key, open ? "true" : "false");
+    const nextCollapsed = !shell.classList.contains("collapsed");
+    setCollapsed(nextCollapsed);
+    try {
+      sessionStorage.setItem(GRAPH_FILTERS_COLLAPSED_KEY, nextCollapsed ? "true" : "false");
+    } catch { /* ignore */ }
     refreshGraphViewport({ force: true });
   });
 }

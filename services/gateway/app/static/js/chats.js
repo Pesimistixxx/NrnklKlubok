@@ -1274,10 +1274,21 @@
   const PIPELINE_MAX_CHIPS_PER_ROUND = 12;
 
   function pipelineBusChipKey(m, roundNum) {
-    const fromLayer = agentIdToLayer(m.from) || m.from || "";
-    const toLayer = agentIdToLayer(m.to) || m.to || "";
+    const fromLayer = pipelineBusEndpoint(m.from);
+    const toLayer = pipelineBusEndpoint(m.to);
     const round = m.round ?? roundNum ?? 0;
     return `${round}|${fromLayer}|${toLayer}|${m.type || ""}`;
+  }
+
+  function pipelineBusEndpoint(ep) {
+    const raw = String(ep || "").toLowerCase();
+    if (!raw || raw === "broadcast") return "broadcast";
+    return agentIdToLayer(raw) || raw;
+  }
+
+  function pipelineBusEndpointLabel(ep) {
+    if (!ep || String(ep).toLowerCase() === "broadcast") return "all";
+    return agentIdToLayer(ep) || ep;
   }
 
   function pipelineAgentChipKey(item) {
@@ -1497,12 +1508,12 @@
         return { round: round.round, items: capped.items, overflow: capped.overflow };
       });
     const flatItems = [
-      ...setup,
+      ...setup.slice(0, 8),
       ...rounds.flatMap((r) => r.items),
-      ...tail,
+      ...tail.slice(0, 6),
     ];
 
-    return { setup, rounds, tail, maxRounds, flatItems };
+    return { setup: setup.slice(0, 8), rounds, tail: tail.slice(0, 6), maxRounds, flatItems };
   }
 
   function pipelineItemState(item, { live, activeId }) {
@@ -1531,8 +1542,8 @@
   }
 
   function renderPipelineBusChip(item, state) {
-    const fromLayer = agentIdToLayer(item.from) || item.from || "?";
-    const toLayer = agentIdToLayer(item.to) || item.to || "?";
+    const fromLayer = pipelineBusEndpointLabel(item.from);
+    const toLayer = pipelineBusEndpointLabel(item.to);
     const type = item.type ? ` · ${item.type}` : "";
     const count = item.count > 1 ? ` ×${item.count}` : "";
     const title = `${fromLayer} → ${toLayer}${type}${count}`;
@@ -2769,15 +2780,18 @@
     const box = $("chatMessages");
     if (!box) return;
     if (!force && userScrolledUp) return;
-    const nearBottom = isChatNearBottom();
-    if (!force && !nearBottom) return;
+    if (!force && !isChatNearBottom()) return;
+    chatScrollProgrammatic = true;
     const scroll = () => { box.scrollTop = box.scrollHeight; };
     scroll();
     requestAnimationFrame(() => {
       scroll();
-      requestAnimationFrame(scroll);
+      requestAnimationFrame(() => {
+        scroll();
+        chatScrollProgrammatic = false;
+        if (isChatNearBottom()) userScrolledUp = false;
+      });
     });
-    userScrolledUp = false;
   }
 
   function applyChatScrollPolicy(policy, prevScrollTop) {
@@ -2798,7 +2812,7 @@
     el.classList.toggle("hidden", !on);
     if (on) {
       showTraceLive(previewSteps);
-      scrollChatToBottom(false);
+      if (!userScrolledUp) scrollChatToBottom(false);
     } else {
       hideTraceLive();
     }
@@ -2953,6 +2967,11 @@
         if ($("chatActiveTitle") && t) $("chatActiveTitle").textContent = t.title;
         return;
       }
+      if (chatBusy && !options.forceRender) {
+        const t = threads.find((x) => x.id === threadId);
+        if ($("chatActiveTitle") && t) $("chatActiveTitle").textContent = t.title;
+        return;
+      }
       lastLoadedThreadId = threadId;
       lastMessagesFingerprint = fp;
       currentThreadMessages = items;
@@ -3011,7 +3030,7 @@
     return items.slice(idx + 1);
   }
 
-  async function apiDeleteMessage(msgId, { cascade = false, after = false } = {}) {
+  async function apiDeleteMessage(msgId, { cascade = false, after = false, reload = true } = {}) {
     if (!activeThreadId || !msgId) return false;
     let qs = "";
     if (cascade) qs = "?cascade=following";
@@ -3026,8 +3045,10 @@
       return false;
     }
     lastMessagesFingerprint = "";
-    await loadMessages(activeThreadId, { scroll: "restore", forceRender: true });
-    await loadThreads();
+    if (reload) {
+      await loadMessages(activeThreadId, { scroll: "restore", forceRender: true });
+      await loadThreads();
+    }
     return true;
   }
 
@@ -3080,13 +3101,15 @@
         showNotice("Текст сообщения не может быть пустым", true);
         return;
       }
-      if (nextText === msg.body) {
-        cancel();
+      delete article.dataset.editing;
+      if (nextText === msg.body && !findFollowingMessages(currentThreadMessages, msgId).length) {
+        bodyEl.textContent = msg.body;
+        if (actions) actions.classList.remove("hidden");
         return;
       }
       const patched = await apiPatchMessage(msgId, nextText);
       if (!patched) return;
-      await apiDeleteMessage(msgId, { cascade: true });
+      await apiDeleteMessage(msgId, { after: true });
       await loadMessages(activeThreadId, { scroll: "force", forceRender: true });
       await sendChatMessage({
         text: nextText,
@@ -3460,7 +3483,7 @@
     const input = $("chatMessageInput");
     let text = opts.text ?? (input?.value || "").trim();
     const hasPending = fromInput && pendingComposeAttachments?.files?.length;
-    if (!text && !hasPending && !opts.explain && !opts.regenerate) return;
+    if (!text && !hasPending && !opts.explain && !opts.regenerate && !opts.editResend) return;
 
     let skipUserPost = !!opts.skipUserPost;
     let prefetchedHistory = null;
@@ -3479,6 +3502,14 @@
       }
       text = userMsg.body;
       prefetchedHistory = buildHistoryBeforeMessage(currentThreadMessages, userMsg.id);
+      skipUserPost = true;
+      await apiDeleteMessage(opts.targetAgentMsgId, { reload: false });
+      await loadMessages(activeThreadId, { scroll: "restore", forceRender: true });
+    } else if (opts.editResend && opts.targetUserMsgId) {
+      text = (opts.text || text || "").trim();
+      if (!text) return;
+      prefetchedHistory = buildHistoryBeforeMessage(currentThreadMessages, opts.targetUserMsgId);
+      prefetchedHistory.push({ role: "user", content: text });
       skipUserPost = true;
     }
 

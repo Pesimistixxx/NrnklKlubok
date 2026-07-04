@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=96" />
+  <link rel="stylesheet" href="/static/css/app.css?v=99" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
@@ -256,10 +256,6 @@
             <div class="graph-toolbar-shell" id="graphToolbarShell">
               <div class="graph-toolbar">
                 <div class="graph-toolbar-head">
-                  <button type="button" class="graph-toolbar-toggle" id="graphToolbarToggle" aria-expanded="true" title="Свернуть фильтры слоёв">
-                    <span class="graph-toolbar-toggle-icon" aria-hidden="true">▾</span>
-                    <span class="graph-toolbar-toggle-label">Фильтры</span>
-                  </button>
                   <div class="graph-toolbar-primary">
                     <div class="graph-density-toggle">
                       <button type="button" class="view-btn active" id="graphCompactBtn">Компактный</button>
@@ -286,105 +282,119 @@
                     <button type="button" class="layer-chip connection-formation-toggle" id="connectionFormationBtn" title="Пошаговое появление слоёв L1→L6">Как формируются связи</button>
                     <button type="button" class="layer-chip" id="toggleNodeListBtn">Список узлов</button>
                   </div>
-                  <div class="graph-advanced-filters" id="graphAdvancedFilters" title="Расширенные фильтры: география (RU/зарубежная практика), год публикации, достоверность extraction_confidence, числовой диапазон Measurement (концентрация, температура, расход).">
-                    <div class="graph-adv-filter-row">
-                      <label class="graph-adv-label" for="graphFilterSearch">Поиск</label>
-                      <input type="search" class="graph-adv-input" id="graphFilterSearch" placeholder="Текст в узлах…" autocomplete="off" />
-                    </div>
-                    <fieldset class="graph-adv-entity-types">
-                      <legend class="graph-adv-label">Тип сущности</legend>
-                      <div class="graph-adv-checkboxes" id="graphEntityTypeChecks"></div>
-                    </fieldset>
-                    <div class="graph-adv-filter-row">
-                      <label class="graph-adv-label" for="graphFilterGeography">География</label>
-                      <select class="graph-adv-select" id="graphFilterGeography">
-                        <option value="">Все регионы</option>
-                      </select>
-                    </div>
-                    <div class="graph-adv-filter-row">
-                      <label class="graph-adv-label" for="graphFilterPracticeRegion" title="Российская практика — Location.country/region с RU; зарубежная — остальные">Практика</label>
-                      <select class="graph-adv-select" id="graphFilterPracticeRegion">
-                        <option value="">Все</option>
-                        <option value="domestic">Российская (RU)</option>
-                        <option value="foreign">Зарубежная</option>
-                      </select>
-                    </div>
-                    <div class="graph-adv-filter-row graph-adv-year-row">
-                      <span class="graph-adv-label">Год публикации</span>
-                      <div class="graph-adv-year-range">
-                        <input type="range" id="graphFilterYearMin" min="1990" max="2026" value="1990" />
-                        <input type="range" id="graphFilterYearMax" min="1990" max="2026" value="2026" />
-                        <span class="graph-adv-year-values" id="graphFilterYearLabel">1990 — 2026</span>
+                  <div class="connection-formation-timeline hidden" id="connectionFormationTimeline" aria-live="polite"></div>
+                </div>
+                <div class="graph-adv-filters-shell collapsed" id="graphAdvFiltersShell">
+                  <div class="graph-adv-filters-bar">
+                    <button type="button" class="graph-adv-filters-toggle" id="graphAdvFiltersToggle" aria-expanded="false" title="Развернуть фильтры">
+                      <span class="graph-adv-filters-toggle-icon" aria-hidden="true">▸</span>
+                      <span class="graph-adv-filters-toggle-label">Фильтры</span>
+                    </button>
+                    <span class="graph-adv-filters-meta muted" id="graphAdvFiltersNodeCount">—</span>
+                    <button type="button" class="btn btn-primary btn-small" id="graphFilterApplyCompact">Применить</button>
+                  </div>
+                  <div class="graph-adv-filters-body" id="graphAdvFiltersBody" hidden>
+                    <div class="graph-advanced-filters" id="graphAdvancedFilters" title="Расширенные фильтры: география (RU/зарубежная практика), год публикации, достоверность extraction_confidence, числовой диапазон Measurement (концентрация, температура, расход).">
+                      <div class="graph-adv-filter-row">
+                        <label class="graph-adv-label" for="graphFilterSearch">Поиск</label>
+                        <input type="search" class="graph-adv-input" id="graphFilterSearch" placeholder="Текст в узлах…" autocomplete="off" />
+                      </div>
+                      <fieldset class="graph-adv-entity-types">
+                        <legend class="graph-adv-label">Тип сущности</legend>
+                        <div class="graph-adv-checkboxes graph-adv-checkboxes-grid" id="graphEntityTypeChecks"></div>
+                      </fieldset>
+                      <div class="graph-adv-filter-row">
+                        <label class="graph-adv-label" for="graphFilterGeography">География</label>
+                        <select class="graph-adv-select" id="graphFilterGeography">
+                          <option value="">Все регионы</option>
+                        </select>
+                      </div>
+                      <div class="graph-adv-filter-row">
+                        <label class="graph-adv-label" for="graphFilterPracticeRegion" title="Российская практика — Location.country/region с RU; зарубежная — остальные">Практика</label>
+                        <select class="graph-adv-select" id="graphFilterPracticeRegion">
+                          <option value="">Все</option>
+                          <option value="domestic">Российская (RU)</option>
+                          <option value="foreign">Зарубежная</option>
+                        </select>
+                      </div>
+                      <div class="graph-adv-filter-row graph-adv-year-row">
+                        <span class="graph-adv-label">Год публикации</span>
+                        <div class="graph-adv-year-range">
+                          <input type="range" id="graphFilterYearMin" min="1990" max="2026" value="1990" />
+                          <input type="range" id="graphFilterYearMax" min="1990" max="2026" value="2026" />
+                          <span class="graph-adv-year-values" id="graphFilterYearLabel">1990 — 2026</span>
+                        </div>
+                      </div>
+                      <div class="graph-adv-filter-row">
+                        <label class="graph-adv-label" for="graphFilterConfidence">Мин. достоверность</label>
+                        <select class="graph-adv-select" id="graphFilterConfidence">
+                          <option value="0">Любая</option>
+                          <option value="0.5">≥ 50%</option>
+                          <option value="0.7">≥ 70%</option>
+                          <option value="0.85">≥ 85%</option>
+                        </select>
+                      </div>
+                      <div class="graph-adv-filter-row">
+                        <label class="graph-adv-label" for="graphFilterMaterial">Материал</label>
+                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterMaterial" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
+                      </div>
+                      <div class="graph-adv-filter-row">
+                        <label class="graph-adv-label" for="graphFilterProcess">Процесс</label>
+                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterProcess" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
+                      </div>
+                      <fieldset class="graph-adv-entity-types">
+                        <legend class="graph-adv-label">Тип документа</legend>
+                        <div class="graph-adv-checkboxes graph-adv-checkboxes-grid" id="graphDocTypeChecks"></div>
+                      </fieldset>
+                      <details class="graph-adv-rel-types">
+                        <summary class="graph-adv-sub-toggle">
+                          <span class="graph-adv-sub-toggle-label">Тип связи</span>
+                          <span class="graph-adv-sub-toggle-icon" aria-hidden="true">▼</span>
+                        </summary>
+                        <div class="graph-adv-checkboxes graph-adv-checkboxes-grid" id="graphRelationTypeChecks"></div>
+                      </details>
+                      <div class="graph-adv-filter-row">
+                        <label class="graph-adv-label" for="graphFilterLanguage">Язык</label>
+                        <select class="graph-adv-select" id="graphFilterLanguage">
+                          <option value="both">RU + EN</option>
+                          <option value="ru">RU</option>
+                          <option value="en">EN</option>
+                        </select>
+                      </div>
+                      <div class="graph-adv-filter-row graph-adv-param-row">
+                        <span class="graph-adv-label">Параметр (Measurement)</span>
+                        <div class="graph-adv-param-range">
+                          <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericParam" placeholder="конц., temp, flow…" autocomplete="off" />
+                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMin" placeholder="мин" step="any" />
+                          <span class="graph-adv-param-sep">—</span>
+                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMax" placeholder="макс" step="any" />
+                        </div>
+                      </div>
+                      <div class="graph-adv-filter-row">
+                        <label class="graph-adv-label" for="graphFilterNumericMin" title="Фильтр узлов Measurement по numeric_value, concentration, temperature, flow_rate">Числовой диапазон</label>
+                        <div class="graph-adv-numeric-range">
+                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMin" placeholder="мин" step="any" />
+                          <span class="graph-adv-numeric-sep">—</span>
+                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMax" placeholder="макс" step="any" />
+                        </div>
+                      </div>
+                      <div class="graph-adv-toggles">
+                        <label class="graph-adv-toggle">
+                          <input type="checkbox" id="graphFilterContradictions" />
+                          <span>Показывать противоречия</span>
+                        </label>
+                        <label class="graph-adv-toggle">
+                          <input type="checkbox" id="graphFilterGaps" />
+                          <span>Показывать пробелы</span>
+                        </label>
                       </div>
                     </div>
-                    <div class="graph-adv-filter-row">
-                      <label class="graph-adv-label" for="graphFilterConfidence">Мин. достоверность</label>
-                      <select class="graph-adv-select" id="graphFilterConfidence">
-                        <option value="0">Любая</option>
-                        <option value="0.5">≥ 50%</option>
-                        <option value="0.7">≥ 70%</option>
-                        <option value="0.85">≥ 85%</option>
-                      </select>
-                    </div>
-                    <div class="graph-adv-filter-row">
-                      <label class="graph-adv-label" for="graphFilterMaterial">Материал</label>
-                      <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterMaterial" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
-                    </div>
-                    <div class="graph-adv-filter-row">
-                      <label class="graph-adv-label" for="graphFilterProcess">Процесс</label>
-                      <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterProcess" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
-                    </div>
-                    <fieldset class="graph-adv-entity-types">
-                      <legend class="graph-adv-label">Тип документа</legend>
-                      <div class="graph-adv-checkboxes" id="graphDocTypeChecks"></div>
-                    </fieldset>
-                    <fieldset class="graph-adv-entity-types">
-                      <legend class="graph-adv-label">Тип связи</legend>
-                      <div class="graph-adv-checkboxes" id="graphRelationTypeChecks"></div>
-                    </fieldset>
-                    <div class="graph-adv-filter-row">
-                      <label class="graph-adv-label" for="graphFilterLanguage">Язык</label>
-                      <select class="graph-adv-select" id="graphFilterLanguage">
-                        <option value="both">RU + EN</option>
-                        <option value="ru">RU</option>
-                        <option value="en">EN</option>
-                      </select>
-                    </div>
-                    <div class="graph-adv-filter-row graph-adv-param-row">
-                      <span class="graph-adv-label">Параметр (Measurement)</span>
-                      <div class="graph-adv-param-range">
-                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericParam" placeholder="конц., temp, flow…" autocomplete="off" />
-                        <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMin" placeholder="мин" step="any" />
-                        <span class="graph-adv-param-sep">—</span>
-                        <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMax" placeholder="макс" step="any" />
-                      </div>
-                    </div>
-                    <div class="graph-adv-filter-row">
-                      <label class="graph-adv-label" for="graphFilterNumericMin" title="Фильтр узлов Measurement по numeric_value, concentration, temperature, flow_rate">Числовой диапазон</label>
-                      <div class="graph-adv-numeric-range">
-                        <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMin" placeholder="мин" step="any" />
-                        <span class="graph-adv-numeric-sep">—</span>
-                        <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMax" placeholder="макс" step="any" />
-                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericParam" placeholder="параметр…" title="parameter: concentration, temperature…" autocomplete="off" />
-                      </div>
-                    </div>
-                    <div class="graph-adv-toggles">
-                      <label class="graph-adv-toggle">
-                        <input type="checkbox" id="graphFilterContradictions" />
-                        <span>Показывать противоречия</span>
-                      </label>
-                      <label class="graph-adv-toggle">
-                        <input type="checkbox" id="graphFilterGaps" />
-                        <span>Показывать пробелы</span>
-                      </label>
-                    </div>
-                    <div class="graph-adv-actions">
+                    <div class="graph-adv-actions-sticky">
                       <button type="button" class="btn btn-ghost btn-small" id="graphFilterResetBtn">Сбросить</button>
                       <button type="button" class="btn btn-primary btn-small" id="graphFilterApplyBtn">Применить</button>
                       <span class="graph-adv-status muted" id="graphFilterStatus"></span>
                     </div>
                   </div>
-                  <div class="connection-formation-timeline hidden" id="connectionFormationTimeline" aria-live="polite"></div>
                 </div>
               </div>
             </div>
@@ -615,9 +625,9 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
-  <script src="/static/js/icons.js?v=96"></script>
-  <script src="/static/js/graph-mini.js?v=96"></script>
-  <script src="/static/js/app.js?v=96"></script>
-  <script src="/static/js/chats.js?v=96"></script>
+  <script src="/static/js/icons.js?v=99"></script>
+  <script src="/static/js/graph-mini.js?v=99"></script>
+  <script src="/static/js/app.js?v=99"></script>
+  <script src="/static/js/chats.js?v=99"></script>
 </body>
 </html>
