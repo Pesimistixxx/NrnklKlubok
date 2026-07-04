@@ -3089,3 +3089,42 @@ function bindEvents() {
   els.graphCompactBtn?.addEventListener("click", () => setGraphDensityMode("compact"));
   els.graphFullBtn?.addEventListener("click", () => setGraphDensityMode("full"));
   els.closeDetailBtn?.addEventListener("click", closeDetailPanel);
+  els.crossLayerToggle?.addEventListener("click", () => {
+    showCrossLayerOnly = !showCrossLayerOnly;
+    if (showCrossLayerOnly) graphLayerFilter = "all";
+    renderGraphViews();
+  });
+  els.toggleNodeListBtn?.addEventListener("click", toggleGraphNodeList);
+  els.viewMapBtn?.addEventListener("click", () => setGraphViewMode("map"));
+  els.viewRelsBtn?.addEventListener("click", () => setGraphViewMode("rels"));
+  els.originalGraphBtn?.addEventListener("click", resetGraphFilters);
+  els.headerNeo4jBtn?.addEventListener("click", openNeo4jBrowser);
+  initGraphToolbarCollapse();
+  initGraphResize();
+}
+
+function boot() {
+  if (window.marked?.setOptions) {
+    window.marked.setOptions({ breaks: true, gfm: true });
+  }
+  switchPage("chats");
+  bindNavigation();
+  try {
+    bindEvents();
+  } catch (err) {
+    console.error("MKG UI init error:", err);
+  }
+  updateDensityToggleUI();
+  els.appRoot?.classList.add("js-ready");
+  loadFormats();
+  loadNodeFieldHints();
+  loadConfig();
+  loadProjectStage();
+  refreshEmbeddingStatus();
+  renderDocsList();
+  setInterval(renderDocsList, 1500);
+  setInterval(refreshEmbeddingStatus, 30000);
+  window.MKGAuth?.init();
+}
+
+boot();
