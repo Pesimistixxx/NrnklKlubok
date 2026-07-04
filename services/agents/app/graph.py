@@ -7,10 +7,15 @@ from app.config import AgentSettings
 from app.llm import AgentLLM
 from app.nodes import (
     agent_loop_controller,
+    anomaly_graph_walker,
+    anomaly_qdrant_refine,
+    anomaly_seed_loader,
     capabilities_check,
+    choose_after_document_selector,
     choose_hypothesis_refinement,
     choose_loop,
     choose_mode,
+    choose_retry_target,
     consensus_detector,
     document_selector,
     evidence_collector,
@@ -51,6 +56,15 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     async def _document_selector(state: MKGAgentState) -> MKGAgentState:
         return await document_selector(state, gateway, settings)
 
+    async def _anomaly_seed_loader(state: MKGAgentState) -> MKGAgentState:
+        return await anomaly_seed_loader(state, gateway, settings)
+
+    async def _anomaly_graph_walker(state: MKGAgentState) -> MKGAgentState:
+        return await anomaly_graph_walker(state, gateway, settings)
+
+    async def _anomaly_qdrant_refine(state: MKGAgentState) -> MKGAgentState:
+        return await anomaly_qdrant_refine(state, gateway, settings)
+
     async def _retrieval_search(state: MKGAgentState) -> MKGAgentState:
         return await retrieval_search(state, gateway, settings)
 
@@ -72,11 +86,15 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     graph.add_node("capabilities_check", _capabilities_check)
     graph.add_node("llm_scope_planner", _llm_scope_planner)
     graph.add_node("document_selector", _document_selector)
+    graph.add_node("anomaly_seed_loader", _anomaly_seed_loader)
+    graph.add_node("anomaly_graph_walker", _anomaly_graph_walker)
+    graph.add_node("anomaly_qdrant_refine", _anomaly_qdrant_refine)
     graph.add_node("retrieval_search", _retrieval_search)
     graph.add_node("graph_context_loader", _graph_context_loader)
     graph.add_node("evidence_collector", evidence_collector)
     graph.add_node("llm_evidence_analyzer", _llm_evidence_analyzer)
     graph.add_node("agent_loop_controller", _agent_loop_controller)
+    graph.add_node("retry_router", route_by_mode)
     graph.add_node("literature_grouper", literature_grouper)
     graph.add_node("technology_coverage_analyzer", technology_coverage_analyzer)
     graph.add_node("consensus_detector", consensus_detector)
@@ -84,6 +102,7 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     graph.add_node("pattern_discovery", pattern_discovery)
     graph.add_node("audit_mode_builder", _llm_mode_builder)
     graph.add_node("hypothesis_mode_builder", _llm_mode_builder)
+    graph.add_node("anomaly_mode_builder", _llm_mode_builder)
     graph.add_node("hypothesis_critic", _hypothesis_critic)
     graph.add_node("literature_review_mode_builder", _llm_mode_builder)
     graph.add_node("recommendation_mode_builder", _llm_mode_builder)
@@ -101,7 +120,17 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
             "final_report_builder": "final_report_builder",
         },
     )
-    graph.add_edge("document_selector", "retrieval_search")
+    graph.add_conditional_edges(
+        "document_selector",
+        choose_after_document_selector,
+        {
+            "anomaly_seed_loader": "anomaly_seed_loader",
+            "retrieval_search": "retrieval_search",
+        },
+    )
+    graph.add_edge("anomaly_seed_loader", "anomaly_graph_walker")
+    graph.add_edge("anomaly_graph_walker", "anomaly_qdrant_refine")
+    graph.add_edge("anomaly_qdrant_refine", "graph_context_loader")
     graph.add_edge("retrieval_search", "graph_context_loader")
     graph.add_edge("graph_context_loader", "evidence_collector")
     graph.add_edge("evidence_collector", "llm_evidence_analyzer")
@@ -117,8 +146,16 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
         "agent_loop_controller",
         choose_loop,
         {
-            "retry": "retrieval_search",
+            "retry": "retry_router",
             "continue": "literature_grouper",
+        },
+    )
+    graph.add_conditional_edges(
+        "retry_router",
+        choose_retry_target,
+        {
+            "anomaly_qdrant_refine": "anomaly_qdrant_refine",
+            "retrieval_search": "retrieval_search",
         },
     )
     graph.add_edge("literature_grouper", "technology_coverage_analyzer")
@@ -132,10 +169,12 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
             "hypothesis_mode": "pattern_discovery",
             "literature_review_mode": "literature_review_mode_builder",
             "recommendation_mode": "recommendation_mode_builder",
+            "anomaly_mode": "anomaly_mode_builder",
         },
     )
     graph.add_edge("pattern_discovery", "hypothesis_mode_builder")
     graph.add_edge("audit_mode_builder", "final_report_builder")
+    graph.add_edge("anomaly_mode_builder", "final_report_builder")
     graph.add_edge("hypothesis_mode_builder", "hypothesis_critic")
     graph.add_conditional_edges(
         "hypothesis_critic",

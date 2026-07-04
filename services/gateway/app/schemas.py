@@ -33,6 +33,10 @@ class DocumentOut(BaseModel):
     neo4j_synced: bool | None = None
     graph_nodes: int | None = None
     graph_relationships: int | None = None
+    processing_mode: str | None = "full"
+    l4_clusters: int | None = None
+    l4_anomalies: int | None = None
+    l4_clustered: int | None = None
 
 
 class DocumentList(BaseModel):
@@ -259,6 +263,7 @@ class AgentSearchHit(BaseModel):
     props: dict[str, Any] = Field(default_factory=dict)
     mode: str = "keyword"
     document_id: str | None = None
+    md_file: str = ""
 
 
 class AgentSearchOut(BaseModel):
@@ -316,9 +321,14 @@ class AgentQdrantPointOut(BaseModel):
     collection: str
     point_id: str
     node_id: str | None = None
+    neo4j_node_id: str | None = None
+    document_id: str | None = None
     label: str | None = None
     layer: str | None = None
     text: str | None = None
+    cluster_id: int | None = None
+    is_anomaly: bool | None = None
+    anomaly_score: float | None = None
 
 
 class AgentQdrantPointsOut(BaseModel):
@@ -358,6 +368,11 @@ class RoleOut(BaseModel):
     can_admin: bool
     can_run_agents: bool
     description: str
+    icon: str = "•"
+    tagline: str = ""
+    accent_color: str = "#0071e3"
+    capability_ru: str = ""
+    differs_from: str = ""
 
 
 class RolesOut(BaseModel):
@@ -448,10 +463,71 @@ class ChatCompleteIn(BaseModel):
     role_id: str
     history: list[ChatHistoryTurn] = Field(default_factory=list, max_length=20)
     system_prompt: str | None = Field(default=None, max_length=12000)
+    include_graph: bool = True
+    include_artifacts: bool = True
+    document_ids: list[str] = Field(
+        default_factory=list,
+        description="Ограничить поиск Qdrant документами, загруженными в чат",
+    )
+
+
+class ChatArtifact(BaseModel):
+    type: Literal["chart", "image"]
+    title: str = ""
+    chart_type: str | None = Field(default=None, description="bar | line | doughnut | pie")
+    labels: list[str] = Field(default_factory=list)
+    datasets: list[dict[str, Any]] = Field(default_factory=list)
+    format: str | None = Field(default=None, description="svg для type=image")
+    content: str | None = Field(default=None, description="SVG/HTML содержимое для type=image")
+
+
+class ContextGraphOut(BaseModel):
+    nodes: list[GraphNode] = Field(default_factory=list)
+    relationships: list[GraphRelationship] = Field(default_factory=list)
+    seed_count: int = 0
+    document_ids: list[str] = Field(default_factory=list)
+
+
+class ChatSourceOut(BaseModel):
+    document_id: str
+    file_name: str = ""
+    node_id: str = ""
+    label: str = ""
+    layer: str = ""
+    score: float = 0
+    text: str = ""
+    md_file: str = ""
+    md_url: str = ""
 
 
 class ChatCompleteOut(BaseModel):
     reply: str
+    trace: list[dict[str, Any]] = Field(default_factory=list)
+    graph: ContextGraphOut | None = None
+    artifacts: list[ChatArtifact] = Field(default_factory=list)
+    sources: list[ChatSourceOut] = Field(default_factory=list)
+    timing_ms: int = 0
+
+
+class QueryTestIn(BaseModel):
+    """Тело POST /api/v1/query — программное тестирование сложных вопросов."""
+
+    question: str = Field(..., min_length=1, max_length=8000)
+    role_id: str = "researcher"
+    mode: str | None = Field(default=None, description="dialog | hypothesis_mode | audit_mode | …")
+    history: list[ChatHistoryTurn] = Field(default_factory=list, max_length=20)
+    include_graph: bool = True
+    include_artifacts: bool = True
+    system_prompt: str | None = None
+
+
+class QueryTestOut(BaseModel):
+    answer: str
+    trace: list[dict[str, Any]] = Field(default_factory=list)
+    graph: ContextGraphOut | None = None
+    artifacts: list[ChatArtifact] = Field(default_factory=list)
+    timing_ms: int = 0
+    mode: str = "dialog"
 
 
 class AgentServiceRunIn(BaseModel):
@@ -470,8 +546,10 @@ class AgentServiceRunOut(BaseModel):
     issues: list[dict[str, Any]] = Field(default_factory=list)
     hypotheses: list[dict[str, Any]] = Field(default_factory=list)
     recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    anomalies: list[dict[str, Any]] = Field(default_factory=list)
     literature_review: dict[str, Any] = Field(default_factory=dict)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    trace: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -483,3 +561,37 @@ class AgentServiceModeInfo(BaseModel):
 
 class AgentServiceModesOut(BaseModel):
     modes: list[AgentServiceModeInfo]
+
+
+class L4ClusterRequest(BaseModel):
+    document_id: str = Field(..., min_length=1)
+    min_cluster_size: int = Field(default=3, ge=2, le=50)
+
+
+class L4ClusterOut(BaseModel):
+    document_id: str | None = None
+    clustered: int = 0
+    anomalies: int = 0
+    points: int = 0
+    clusters: int = 0
+    min_cluster_size: int | None = None
+    message: str | None = None
+
+
+class AnomalyNodeOut(BaseModel):
+    document_id: str | None = None
+    node_id: str
+    label: str = ""
+    layer: str = "L4"
+    text: str = ""
+    cluster_id: int | None = None
+    anomaly_score: float | None = None
+    is_anomaly: bool = True
+    anomaly_reason: str = ""
+    props: dict[str, Any] = Field(default_factory=dict)
+
+
+class AnomaliesListOut(BaseModel):
+    total: int
+    document_id: str | None = None
+    items: list[AnomalyNodeOut] = Field(default_factory=list)

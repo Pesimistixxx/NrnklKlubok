@@ -18,6 +18,7 @@ services:
     environment:
       AGENTS_URL: http://agents:8010
       AGENTS_TIMEOUT_SECONDS: ${AGENTS_TIMEOUT_SECONDS:-30}
+      AUTO_EXTRACT_AFTER_INGEST: "true"
 
   worker:
     build:
@@ -31,6 +32,8 @@ services:
       - postgres
       - redis
       - qdrant
+    environment:
+      AUTO_EXTRACT_AFTER_INGEST: "true"
 
   analytics:
     build:

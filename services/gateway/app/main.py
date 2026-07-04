@@ -1,10 +1,14 @@
-"""MKG Gateway — FastAPI: загрузка, UI, диагностика, конфиг моделей."""
+"""MKG Gateway — FastAPI: upload, pipeline L1–L6, Neo4j/Qdrant/L4, UI, Agent API.
+
+REST: /api/v1/documents, /graph, /chat, /query, /agents, /agents-service.
+"""
 from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +28,7 @@ from mkg_core import (
     update_document_status,
     upsert_document,
 )
+from mkg_core.config import get_settings
 from mkg_core.queue import enqueue, abort_job
 from mkg_core.layer_pipeline import build_layer_pipeline
 from mkg_core.llm_cache import LLMResponseCache
@@ -35,6 +40,7 @@ from mkg_core.ontology import NODE_PROP_HINTS
 from app.agent_api import router as agent_router
 from app.agents_proxy import router as agents_proxy_router
 from app.collab_api import router as collab_router
+from app.graph_anomalies import router as graph_anomalies_router
 from app.schemas import (
     BatchUploadItem,
     BatchUploadOut,
@@ -63,14 +69,16 @@ app = FastAPI(
     title="MKG Gateway",
     version="0.4.0",
     description=(
-        "Gateway MKG: загрузка документов, extraction, граф L1–L6. "
-        "Agent API: `/api/v1/agents/` — см. Docs/14_agent_api.md"
+        "Gateway MKG: upload (full|answers_only), pipeline OCR→MD→L1–L6→Neo4j→Qdrant→L4 HDBSCAN, "
+        "чат dual search, LangGraph proxy. Agent API: `/api/v1/agents/`. "
+        "Docs: Docs/21_pipeline_and_layers.md, Docs/22_chat_agents.md"
     ),
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(agent_router, prefix=API)
 app.include_router(collab_router, prefix=API)
 app.include_router(agents_proxy_router, prefix=API)
+app.include_router(graph_anomalies_router, prefix=API)
 
 app.add_middleware(
     CORSMiddleware,
@@ -107,6 +115,12 @@ def _merge_repo(rec: dict) -> dict:
         "graph_relationships",
         "lang",
         "neo4j_error",
+        "processing_mode",
+        "l4_clusters",
+        "l4_anomalies",
+        "l4_clustered",
+        "l4_points",
+        "l4_error",
     ):
         if repo_rec.get(key) is not None:
             merged[key] = repo_rec[key]
@@ -150,6 +164,10 @@ def _to_out(rec: dict) -> DocumentOut:
         neo4j_synced=rec.get("neo4j_synced"),
         graph_nodes=rec.get("graph_nodes"),
         graph_relationships=rec.get("graph_relationships"),
+        processing_mode=rec.get("processing_mode") or "full",
+        l4_clusters=rec.get("l4_clusters"),
+        l4_anomalies=rec.get("l4_anomalies"),
+        l4_clustered=rec.get("l4_clustered"),
     )
 
 
@@ -169,6 +187,10 @@ async def _run_ingestion_inline(doc_id: str) -> None:
     try:
         result = await run_ingestion_process(doc_id, rec["file_name"], content)
         repo.save_markdown(doc_id, result.markdown)
+        repo.save_marked_markdown(
+            doc_id,
+            build_marked_markdown(doc_id, result.markdown, None),
+        )
         repo.set_status(
             doc_id,
             DocStatus.md_ready.value,
@@ -184,11 +206,63 @@ async def _run_ingestion_inline(doc_id: str) -> None:
             step="ingestion_done",
         )
         log.info("inline ingestion done doc_id=%s", doc_id)
+        from mkg_core.post_ingest import after_ingestion_done
+
+        await after_ingestion_done(doc_id)
     except Exception as exc:
         log.exception("inline ingestion failed doc_id=%s", doc_id)
         repo.set_status(doc_id, DocStatus.failed.value, error=str(exc))
         try:
             await update_document_status(doc_id, DocStatus.failed.value, error=str(exc))
+        except Exception:
+            pass
+
+
+async def _run_neo4j_sync_inline(doc_id: str) -> None:
+    """Повторная синхронизация локального графа в Neo4j."""
+    from mkg_extraction import load_graph
+
+    set_doc_context(doc_id)
+    repo = get_repo()
+    rec = repo.get(doc_id)
+    if not rec:
+        return
+    graph = repo.read_graph(doc_id)
+    if not graph or not graph.get("nodes"):
+        repo.set_status(doc_id, DocStatus.failed.value, error="граф не найден", step="neo4j_load")
+        return
+    try:
+        sync = await load_graph(graph)
+        repo.set_status(
+            doc_id,
+            DocStatus.loaded.value,
+            neo4j_synced=True,
+            step="done",
+            error=None,
+            neo4j_error=None,
+        )
+        try:
+            await update_document_status(
+                doc_id,
+                DocStatus.loaded.value,
+                neo4j_synced=True,
+                step="done",
+                error=None,
+            )
+        except Exception as exc:
+            log.warning("postgres update failed neo4j sync: %s", exc)
+        log.info("neo4j re-synced doc_id=%s nodes=%s rels=%s", doc_id, sync["nodes"], sync["relationships"])
+    except Exception as exc:
+        log.exception("neo4j re-sync failed doc_id=%s", doc_id)
+        repo.set_status(
+            doc_id,
+            DocStatus.failed.value,
+            error=str(exc),
+            step="neo4j_load",
+            neo4j_error=str(exc),
+        )
+        try:
+            await update_document_status(doc_id, DocStatus.failed.value, error=str(exc), step="neo4j_load")
         except Exception:
             pass
 
@@ -235,10 +309,16 @@ async def upload_document(
     background: BackgroundTasks,
     file: UploadFile = File(...),
     classification: str = Form("открытый"),
+    processing_mode: str = Form("full"),
 ) -> DocumentOut:
     content = await file.read()
     try:
-        rec = await accept_upload(file.filename or "unnamed", content, classification=classification)
+        rec = await accept_upload(
+            file.filename or "unnamed",
+            content,
+            classification=classification,
+            processing_mode=processing_mode,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if rec.get("job_id") is None and rec["status"] == DocStatus.uploaded.value:
@@ -251,6 +331,7 @@ async def upload_documents_batch(
     background: BackgroundTasks,
     files: list[UploadFile] = File(...),
     classification: str = Form("открытый"),
+    processing_mode: str = Form("full"),
 ) -> BatchUploadOut:
     if not files:
         raise HTTPException(status_code=400, detail="Не переданы файлы")
@@ -260,7 +341,12 @@ async def upload_documents_batch(
         name = file.filename or "unnamed"
         content = await file.read()
         try:
-            rec = await accept_upload(name, content, classification=classification)
+            rec = await accept_upload(
+                name,
+                content,
+                classification=classification,
+                processing_mode=processing_mode,
+            )
             if rec.get("job_id") is None and rec["status"] == DocStatus.uploaded.value:
                 background.add_task(_run_ingestion_inline, rec["id"])
             items.append(BatchUploadItem(file_name=name, document=_to_out(rec)))
@@ -280,6 +366,64 @@ async def reprocess_document(doc_id: str, background: BackgroundTasks) -> dict[s
     if job_id is None:
         background.add_task(_run_ingestion_inline, doc_id)
     return {"document_id": doc_id, "status": DocStatus.processing.value}
+
+
+@app.post(f"{API}/documents/{{doc_id}}/neo4j-sync")
+async def sync_document_neo4j(doc_id: str, background: BackgroundTasks) -> dict[str, str]:
+    """Повторная загрузка локального графа в Neo4j."""
+    rec = get_repo().get(doc_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    graph = get_repo().read_graph(doc_id)
+    if not graph or not graph.get("nodes"):
+        raise HTTPException(status_code=409, detail="Локальный граф ещё не сформирован")
+    background.add_task(_run_neo4j_sync_inline, doc_id)
+    get_repo().set_status(doc_id, DocStatus.extracting.value, error=None, step="neo4j_load")
+    return {"document_id": doc_id, "status": DocStatus.extracting.value, "step": "neo4j_load"}
+
+
+@app.post(f"{API}/documents/{{doc_id}}/index")
+async def index_document_vectors(doc_id: str) -> dict[str, Any]:
+    """Индексация в Qdrant: из графа или напрямую из Markdown (answers_only)."""
+    from mkg_core.embeddings import index_document_graph, index_document_markdown
+    from mkg_core.l4_clustering import apply_document_l4_cluster
+
+    rec = get_repo().get(doc_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    graph = get_repo().read_graph(doc_id)
+    if graph and graph.get("nodes"):
+        stats = await index_document_graph(doc_id, graph)
+        if (rec.get("processing_mode") or "full") != "answers_only":
+            l4 = await apply_document_l4_cluster(doc_id)
+            stats = {**stats, "l4": l4}
+    else:
+        md = get_repo().read_markdown(doc_id)
+        if not md:
+            raise HTTPException(status_code=409, detail="Markdown ещё не готов")
+        stats = await index_document_markdown(doc_id, md)
+    return {"document_id": doc_id, **stats}
+
+
+@app.post(f"{API}/documents/{{doc_id}}/l4-cluster")
+async def cluster_document_l4(doc_id: str) -> dict[str, Any]:
+    """HDBSCAN L4 после Qdrant — перезапуск этапа кластеризации."""
+    from mkg_core.embeddings import index_document_graph
+    from mkg_core.l4_clustering import apply_document_l4_cluster
+
+    rec = get_repo().get(doc_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    if (rec.get("processing_mode") or "full") == "answers_only":
+        raise HTTPException(status_code=409, detail="L4 недоступен в режиме answers_only")
+    graph = get_repo().read_graph(doc_id)
+    if not graph or not graph.get("nodes"):
+        raise HTTPException(status_code=409, detail="Граф ещё не сформирован")
+    await index_document_graph(doc_id, graph)
+    try:
+        return await apply_document_l4_cluster(doc_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get(f"{API}/documents", response_model=DocumentList)
@@ -307,12 +451,36 @@ async def get_document(doc_id: str) -> DocumentOut:
     return _to_out(rec)
 
 
-@app.get(f"{API}/documents/{{doc_id}}/markdown", response_class=PlainTextResponse)
-async def get_markdown(doc_id: str) -> str:
-    md = get_repo().read_markdown(doc_id)
-    if md is None:
-        raise HTTPException(status_code=404, detail="Markdown ещё не готов")
-    return md
+@app.get(f"{API}/documents/{{doc_id}}/markdown")
+async def get_markdown(
+    doc_id: str,
+    variant: str = Query(default="clean", pattern="^(clean|marked)$"),
+    download: bool = Query(default=False),
+) -> Response:
+    repo = get_repo()
+    if variant == "marked":
+        md = repo.read_marked_markdown(doc_id)
+        if md is None:
+            clean = repo.read_markdown(doc_id)
+            if clean is None:
+                raise HTTPException(status_code=404, detail="Markdown ещё не готов")
+            md = build_marked_markdown(doc_id, clean, repo.read_graph(doc_id))
+    else:
+        md = repo.read_markdown(doc_id)
+        if md is None:
+            raise HTTPException(status_code=404, detail="Markdown ещё не готов")
+    rec = repo.get(doc_id) or {}
+    file_stem = Path(rec.get("file_name") or doc_id).stem
+    suffix = "marked" if variant == "marked" else "clean"
+    filename = f"{file_stem}_{suffix}.md"
+    headers: dict[str, str] = {}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return Response(
+        content=md,
+        media_type="text/markdown; charset=utf-8",
+        headers=headers,
+    )
 
 
 @app.get(f"{API}/documents/{{doc_id}}/source")
@@ -379,6 +547,7 @@ async def get_preview(doc_id: str) -> dict:
         source_kind = "text"
         source_text = raw.decode("utf-8", errors="replace")[:20000]
     clean_md = get_repo().read_markdown(doc_id) or ""
+    repo = get_repo()
     return {
         "document_id": doc_id,
         "status": rec["status"],
@@ -396,10 +565,19 @@ async def get_preview(doc_id: str) -> dict:
         "source_text": source_text,
         "markdown": clean_md,
         "markdown_marked": build_marked_markdown(doc_id, clean_md, get_repo().read_graph(doc_id)),
+        "md_file": repo.markdown_relative_path(doc_id) if clean_md else None,
+        "md_marked_file": repo.marked_markdown_relative_path(doc_id) if clean_md else None,
+        "markdown_url": f"{API}/documents/{doc_id}/markdown",
         "error": rec.get("error") or rec.get("neo4j_error"),
         "graph_nodes": nodes,
         "graph_relationships": rels,
         "neo4j_synced": neo4j_synced,
+        "processing_mode": rec.get("processing_mode") or "full",
+        "l4_clusters": rec.get("l4_clusters"),
+        "l4_anomalies": rec.get("l4_anomalies"),
+        "l4_clustered": rec.get("l4_clustered"),
+        "l4_points": rec.get("l4_points"),
+        "l4_error": rec.get("l4_error"),
     }
 
 

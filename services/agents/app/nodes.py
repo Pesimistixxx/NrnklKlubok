@@ -14,13 +14,14 @@ _VALID_MODES = {
     "hypothesis_mode",
     "literature_review_mode",
     "recommendation_mode",
+    "anomaly_mode",
 }
 
 _PLANNER_PROMPT = """
 Ты Scope Planner Agent для R&D knowledge graph горно-металлургической отрасли.
 Верни только JSON object:
 {
-  "mode": "audit_mode|hypothesis_mode|literature_review_mode|recommendation_mode",
+  "mode": "audit_mode|hypothesis_mode|literature_review_mode|recommendation_mode|anomaly_mode",
   "keywords": ["..."],
   "materials": ["..."],
   "processes": ["..."],
@@ -68,11 +69,13 @@ _BUILDER_PROMPT = """
   "issues": [],
   "hypotheses": [],
   "recommendations": [],
+  "anomalies": [],
   "literature_review": {},
   "warnings": []
 }
 Для audit_mode заполни issues.
 Для hypothesis_mode заполни hypotheses: hypothesis, basis, supporting_evidence, contradictions, novelty, feasibility, confidence, next_experiments, rank.
+Для anomaly_mode заполни anomalies: node_id, doc_id, label, text, anomaly_reason, explanation, severity, related_neighbors, suggested_action.
 Для literature_review_mode заполни literature_review: source_groups, domestic_only_technologies, foreign_only_technologies, consensus_points, disagreement_zones.
 Для recommendation_mode заполни recommendations: similar_cases, adjacent_solutions, related_experts, related_labs, deep_dive_topics, reason.
 Не добавляй утверждения без опоры на evidence; если данных мало, напиши это в summary и warnings.
@@ -409,12 +412,219 @@ async def llm_evidence_analyzer(
     return new_state
 
 
+async def anomaly_seed_loader(
+    state: MKGAgentState,
+    gateway: GatewayClient,
+    settings: AgentSettings,
+) -> MKGAgentState:
+    """Загружает L4-аномалии из графа (HDBSCAN noise / is_anomaly)."""
+    if _should_stop(state):
+        return state
+    new_state = dict(state)
+    doc_ids = list(new_state.get("candidate_doc_ids") or [])
+    seeds: list[dict[str, Any]] = []
+
+    if doc_ids:
+        for doc_id in doc_ids:
+            try:
+                payload = await gateway.anomalies(document_id=doc_id, limit=settings.max_context_nodes)
+            except Exception as exc:
+                add_warning(new_state, f"аномалии {doc_id} недоступны: {exc}")
+                continue
+            for item in payload.get("items") or []:
+                seeds.append({**item, "doc_id": item.get("document_id") or doc_id})
+    else:
+        try:
+            payload = await gateway.anomalies(limit=settings.max_context_nodes)
+            for item in payload.get("items") or []:
+                seeds.append({**item, "doc_id": item.get("document_id")})
+        except Exception as exc:
+            add_warning(new_state, f"список аномалий недоступен: {exc}")
+
+    if not seeds and doc_ids:
+        for doc_id in doc_ids[:1]:
+            try:
+                await gateway.cluster_l4(doc_id)
+                payload = await gateway.anomalies(document_id=doc_id, limit=settings.max_context_nodes)
+                for item in payload.get("items") or []:
+                    seeds.append({**item, "doc_id": item.get("document_id") or doc_id})
+            except Exception as exc:
+                add_warning(new_state, f"кластеризация L4 для {doc_id} не выполнена: {exc}")
+
+    new_state["anomaly_seeds"] = seeds
+    if not seeds:
+        add_warning(new_state, "аномалии L4 не найдены — запустите extraction и L4-кластеризацию")
+    add_trace(new_state, "anomaly_seed_loader", anomaly_count=len(seeds), doc_count=len(doc_ids))
+    return new_state
+
+
+async def anomaly_graph_walker(
+    state: MKGAgentState,
+    gateway: GatewayClient,
+    settings: AgentSettings,
+) -> MKGAgentState:
+    """Обход графа от узлов-аномалий: соседи, входящие/исходящие связи."""
+    if _should_stop(state):
+        return state
+    new_state = dict(state)
+    seeds = new_state.get("anomaly_seeds") or []
+    hits: list[dict[str, Any]] = []
+    context: list[dict[str, Any]] = []
+
+    async def walk_one(seed: dict[str, Any]) -> None:
+        doc_id = str(seed.get("doc_id") or seed.get("document_id") or "")
+        node_id = str(seed.get("node_id") or "")
+        if not doc_id or not node_id:
+            return
+        hits.append(
+            {
+                "doc_id": doc_id,
+                "node_id": node_id,
+                "label": seed.get("label"),
+                "layer": seed.get("layer") or "L4",
+                "score": float(seed.get("anomaly_score") or 1.0),
+                "text": compact_text(str(seed.get("text") or ""), 500),
+                "props": seed.get("props") or {},
+                "retrieval_sources": ["anomaly_seed"],
+                "anomaly_reason": seed.get("anomaly_reason"),
+                "cluster_id": seed.get("cluster_id"),
+            }
+        )
+        try:
+            detail = await gateway.node(doc_id, node_id)
+        except Exception as exc:
+            add_warning(new_state, f"обход узла {node_id}: {exc}")
+            context.append({"hit": hits[-1], "detail": None})
+            return
+        context.append({"hit": hits[-1], "detail": detail})
+        for neighbor in detail.get("neighbors") or []:
+            n_id = str(neighbor.get("id") or "")
+            if not n_id or n_id == node_id:
+                continue
+            n_props = neighbor.get("props") or {}
+            hits.append(
+                {
+                    "doc_id": doc_id,
+                    "node_id": n_id,
+                    "label": neighbor.get("label"),
+                    "layer": "L?",
+                    "score": 0.55,
+                    "text": compact_text(text_from_props(n_props), 300),
+                    "props": n_props,
+                    "retrieval_sources": ["anomaly_neighbor"],
+                }
+            )
+
+    await asyncio.gather(*(walk_one(seed) for seed in seeds[: settings.max_context_nodes]))
+
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for hit in hits:
+        key = (str(hit.get("doc_id")), str(hit.get("node_id")))
+        if key[0] and key[1]:
+            existing = merged.get(key)
+            if existing:
+                existing["score"] = max(float(existing.get("score") or 0), float(hit.get("score") or 0))
+                sources = set(existing.get("retrieval_sources") or [])
+                sources.update(hit.get("retrieval_sources") or [])
+                existing["retrieval_sources"] = sorted(sources)
+            else:
+                merged[key] = hit
+
+    new_state["search_hits"] = list(merged.values())[: settings.max_docs * settings.search_limit]
+    new_state["node_context"] = context
+    add_trace(
+        new_state,
+        "anomaly_graph_walker",
+        seed_count=len(seeds),
+        hit_count=len(new_state["search_hits"]),
+        context_count=len(context),
+    )
+    return new_state
+
+
+async def anomaly_qdrant_refine(
+    state: MKGAgentState,
+    gateway: GatewayClient,
+    settings: AgentSettings,
+) -> MKGAgentState:
+    """Qdrant-поиск по запросу, приоритет точкам рядом с аномалиями."""
+    if _should_stop(state):
+        return state
+    new_state = dict(state)
+    seeds = new_state.get("anomaly_seeds") or []
+    doc_ids = list(new_state.get("candidate_doc_ids") or [])
+    scope = normalize_dict(new_state.get("scope"))
+    search_query = (
+        scope.get("search_query")
+        or new_state.get("query", "")
+        or "аномалии выбросы L4"
+    )
+    seed_ids = {str(s.get("node_id")) for s in seeds if s.get("node_id")}
+    merged = {
+        (str(h.get("doc_id")), str(h.get("node_id"))): h
+        for h in (new_state.get("search_hits") or [])
+        if h.get("doc_id") and h.get("node_id")
+    }
+
+    targets = doc_ids or list({str(s.get("doc_id") or s.get("document_id")) for s in seeds if s.get("doc_id") or s.get("document_id")})
+    for doc_id in targets[: settings.max_docs]:
+        try:
+            result = await gateway.search(doc_id, str(search_query), min(settings.search_limit, 8))
+        except Exception as exc:
+            add_warning(new_state, f"Qdrant refine {doc_id}: {exc}")
+            continue
+        for hit in result.get("hits") or []:
+            node_id = str(hit.get("node_id") or "")
+            if not node_id:
+                continue
+            key = (doc_id, node_id)
+            bonus = 0.25 if node_id in seed_ids else 0.0
+            item = {
+                "doc_id": doc_id,
+                "node_id": node_id,
+                "label": hit.get("label"),
+                "layer": hit.get("layer"),
+                "score": float(hit.get("score") or 0.5) + bonus,
+                "text": compact_text(str(hit.get("text") or ""), 400),
+                "props": hit.get("props") or {},
+                "retrieval_sources": [f"anomaly_qdrant:{result.get('mode')}"],
+            }
+            existing = merged.get(key)
+            if existing:
+                existing["score"] = max(float(existing.get("score") or 0), item["score"])
+            else:
+                merged[key] = item
+
+    hits = sorted(merged.values(), key=lambda x: float(x.get("score") or 0), reverse=True)
+    new_state["search_hits"] = hits[: settings.max_docs * settings.search_limit]
+    add_trace(
+        new_state,
+        "anomaly_qdrant_refine",
+        query=search_query,
+        hit_count=len(new_state["search_hits"]),
+        seed_filter_count=len(seed_ids),
+    )
+    return new_state
+
+
 async def route_by_mode(state: MKGAgentState) -> MKGAgentState:
     return state
 
 
 def choose_mode(state: MKGAgentState) -> str:
     return str(state.get("mode") or "hypothesis_mode")
+
+
+def choose_after_document_selector(state: MKGAgentState) -> str:
+    if str(state.get("mode")) == "anomaly_mode":
+        return "anomaly_seed_loader"
+    return "retrieval_search"
+
+
+def choose_retry_target(state: MKGAgentState) -> str:
+    if str(state.get("mode")) == "anomaly_mode":
+        return "anomaly_qdrant_refine"
+    return "retrieval_search"
 
 
 def choose_loop(state: MKGAgentState) -> str:
@@ -746,6 +956,7 @@ async def final_report_builder(state: MKGAgentState) -> MKGAgentState:
         "issues": normalize_list(result.get("issues")) or normalize_list(analysis.get("issues")),
         "hypotheses": normalize_list(result.get("hypotheses")),
         "recommendations": normalize_list(result.get("recommendations")),
+        "anomalies": normalize_list(result.get("anomalies")) or normalize_list(analysis.get("anomalies")),
         "literature_review": normalize_dict(result.get("literature_review")),
         "evidence": normalize_list(new_state.get("evidence")),
         "trace": normalize_list(new_state.get("trace")),

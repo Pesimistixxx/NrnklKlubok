@@ -1,11 +1,14 @@
-"""API пользователей, ролей и командного чата."""
+"""Collab API: 8 ролей, чат (dual Qdrant L3+L4 + graph traversal), POST /query.
+
+Эндпоинты: /roles, /users/session, /chat/*, POST /api/v1/query (dialog | agent modes).
+"""
 from __future__ import annotations
+
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from mkg_core.config import get_settings
-from mkg_core.llm import YandexLLMClient
-
+from app.chat_engine import run_chat_query
 from app.collab_db import (
     add_message,
     create_thread,
@@ -30,6 +33,8 @@ from app.schemas import (
     ChatThreadOut,
     ChatThreadsOut,
     MessageCreate,
+    QueryTestIn,
+    QueryTestOut,
     RoleOut,
     RolePromptOut,
     RolePromptUpdate,
@@ -209,34 +214,66 @@ async def post_thread_message(thread_id: str, body: MessageCreate) -> ChatMessag
 
 @router.post("/chat/complete", response_model=ChatCompleteOut)
 async def chat_complete(body: ChatCompleteIn) -> ChatCompleteOut:
-    role = get_role(body.role_id)
-    if not role:
-        raise HTTPException(status_code=400, detail="Неизвестная роль")
-    settings = get_settings()
-    if not settings.yandex_api_key or not settings.yandex_folder_id:
-        raise HTTPException(
-            status_code=503,
-            detail="LLM не настроен: задайте YANDEX_API_KEY и YANDEX_FOLDER_ID",
+    history = [{"role": t.role, "content": t.content} for t in body.history]
+    return await run_chat_query(
+        body.message,
+        body.role_id,
+        history=history,
+        system_prompt=body.system_prompt,
+        include_graph=body.include_graph,
+        include_artifacts=body.include_artifacts,
+        document_ids=body.document_ids or None,
+    )
+
+
+@router.post("/query", response_model=QueryTestOut, summary="Тестовый API для сложных вопросов")
+async def query_test(body: QueryTestIn) -> QueryTestOut:
+    """
+    Программный запрос к MKG AI без чата.
+
+    Пример:
+    curl -X POST http://localhost:8000/api/v1/query \\
+      -H "Content-Type: application/json" \\
+      -d '{"question":"Какие материалы в документе?","role_id":"analyst","include_graph":true}'
+    """
+    history = [{"role": t.role, "content": t.content} for t in body.history]
+    mode = body.mode or "dialog"
+
+    if mode and mode != "dialog":
+        from app.agents_proxy import proxy_agents_run
+
+        try:
+            result = await proxy_agents_run(
+                query=body.question,
+                mode=mode,
+                doc_ids=[],
+                user_role=body.role_id,
+                limit=5,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return QueryTestOut(
+            answer=result.get("summary") or "",
+            trace=result.get("trace") or [],
+            graph=None,
+            artifacts=[],
+            timing_ms=int(result.get("elapsed_ms") or 0),
+            mode=mode,
         )
-    custom = await get_role_prompt(body.role_id)
-    system = (body.system_prompt or custom or default_prompt(body.role_id)).strip()
-    lines: list[str] = []
-    for turn in body.history[-12:]:
-        label = "Пользователь" if turn.role == "user" else "Ассистент"
-        lines.append(f"{label}: {turn.content.strip()}")
-    lines.append(f"Пользователь: {body.message.strip()}")
-    user_prompt = "\n\n".join(lines)
-    try:
-        llm = YandexLLMClient.instance()
-        reply = await llm.chat(
-            system,
-            user_prompt,
-            temperature=0.35,
-            max_tokens=1536,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Ошибка LLM: {exc}") from exc
-    text = (reply or "").strip()
-    if not text:
-        raise HTTPException(status_code=502, detail="LLM вернул пустой ответ")
-    return ChatCompleteOut(reply=text)
+
+    out = await run_chat_query(
+        body.question,
+        body.role_id,
+        history=history,
+        system_prompt=body.system_prompt,
+        include_graph=body.include_graph,
+        include_artifacts=body.include_artifacts,
+    )
+    return QueryTestOut(
+        answer=out.reply,
+        trace=out.trace,
+        graph=out.graph,
+        artifacts=out.artifacts,
+        timing_ms=out.timing_ms,
+        mode="dialog",
+    )

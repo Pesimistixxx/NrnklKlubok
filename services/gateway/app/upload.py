@@ -15,17 +15,20 @@ async def accept_upload(
     content: bytes,
     *,
     classification: str = "открытый",
+    processing_mode: str = "full",
     enqueue_ingestion: bool = True,
 ) -> dict[str, Any]:
     """Сохранить файл, поставить ingestion в очередь, синхронизировать Postgres."""
     settings = get_settings()
     validate_upload(file_name, len(content), max_bytes=settings.max_upload_bytes)
 
+    mode = processing_mode if processing_mode in ("full", "answers_only") else "full"
     rec = get_repo().create(
         file_name,
         content,
         classification=classification,
         organization=None,
+        processing_mode=mode,
     )
     rec["doc_type"] = detect_route(file_name)
     rec["mime_type"] = mime_type(file_name)

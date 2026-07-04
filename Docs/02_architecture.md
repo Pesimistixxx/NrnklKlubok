@@ -2,46 +2,45 @@
 
 ## Принцип
 
-Асинхронная сервис-ориентированная архитектура: 4 контейнера логики + 3 хранилища + брокер.
-Не «куча микросервисов», а модульная структура с чёткими границами, готовая к дроблению.
+Асинхронная модульная архитектура: gateway + worker + agents + analytics + 4 хранилища.
+Чёткие границы пакетов `mkg_*`, готовность к масштабированию без «зоопарка микросервисов».
 
 ## Компоненты
 
 ```
-                          ┌────────────────────────────┐
-                          │           Web UI            │
-                          │ upload · library · md-view  │
-                          │ graph-view (ноды/связи)     │
-                          └──────────────┬──────────────┘
-                                         │ REST
-                          ┌──────────────▼──────────────┐
-                          │        gateway (FastAPI)     │
-                          │  /documents /preview /graph  │
-                          │  /library /search (позже)    │
-                          └───┬───────────┬──────────┬───┘
-                     enqueue  │           │ read     │ read
-                    ┌─────────▼──┐   ┌────▼─────┐ ┌──▼───────┐
-                    │   redis    │   │ postgres │ │  neo4j   │
-                    │  (broker)  │   │ (jobs,   │ │ (граф    │
-                    └─────┬──────┘   │  audit)  │ │  знаний) │
-                          │          └──────────┘ └────▲─────┘
-              ┌───────────▼───────────┐                │ write
-              │        worker         │                │
-              │ ingestion→extraction  │────────────────┘
-              │ →resolve→load(Cypher) │        ┌───────────────┐
-              └───────────┬───────────┘        │    qdrant     │
-                          │  embeddings         │ (векторы     │
-                          └────────────────────▶│  чанки/claims)│
-                          ┌───────────────┐     └───────▲───────┘
-                          │   analytics   │─────────────┘
-                          │ confidence ·  │  cluster/anomaly → back to neo4j
-                          │ contradictions│
-                          └───────┬───────┘
-                                  │ вызовы LLM/OCR/embeddings
+                          ┌────────────────────────────────────────┐
+                          │              Web UI (?v=43)             │
+                          │  Чат · Документы (Pipeline/MD/Graph)   │
+                          │  Qdrant · Настройки                    │
+                          └──────────────────┬─────────────────────┘
+                                             │ REST /api/v1
+                          ┌──────────────────▼─────────────────────┐
+                          │           gateway (FastAPI)             │
+                          │  documents · graph · collab · agents    │
+                          │  graph/anomalies · agents-service proxy │
+                          └───┬──────────┬──────────┬──────────┬───┘
+                     enqueue │          │          │          │
+                    ┌────────▼──┐  ┌────▼────┐ ┌───▼────┐ ┌──▼────────┐
+                    │   redis   │  │postgres │ │ neo4j  │ │  agents   │
+                    │  (arq)    │  │ meta +  │ │ граф   │ │ LangGraph │
+                    └─────┬─────┘  │ runtime │ │ L1–L6  │ │ 5 modes   │
+                          │        └─────────┘ └───▲────┘ └─────▲─────┘
+              ┌───────────▼───────────┐            │ write       │ read API
+              │        worker         │────────────┘             │
+              │ ingestion→extraction  │        ┌─────────────────┘
+              │ →neo4j→qdrant→l4      │        │
+              └───────────┬───────────┘        │
+                          │  embeddings         │
+                          └────────────────────▶┌───────────────┐
+                                                │    qdrant     │
+                          ┌───────────────┐     │ mkg_chunks L3 │
+                          │   analytics   │     │ mkg_claims L4 │
+                          │ (скелет)      │     └───────────────┘
+                          └───────────────┘
+                                  │
                           ┌───────▼───────────────────────┐
                           │        Yandex AI Studio        │
-                          │ YandexGPT 5.x · Vision OCR ·   │
-                          │ text-search-* embeddings       │
+                          │ GPT 5.x · Vision OCR · embed   │
                           └────────────────────────────────┘
 ```
 
@@ -49,67 +48,81 @@
 
 | Сервис | Ответственность | Стек |
 |--------|-----------------|------|
-| `gateway` | REST API, UI, Agent API, загрузка, preview, граф, поиск | FastAPI, Pydantic |
-| `worker` | OCR → Markdown → extraction L1–L6 → Neo4j MERGE | **arq** (Redis), `mkg_*` пакеты |
-| `analytics` | Пересчёт confidence, противоречия, HDBSCAN → Neo4j | **скелет**, не в hot-path MVP |
-| `rag` (позже) | Мульти-агентный ответ по графу + Qdrant | — |
+| `gateway` | REST, UI, Agent API, collab/chat, L4 anomalies | FastAPI |
+| `worker` | OCR → MD → extraction → Neo4j → Qdrant → L4 HDBSCAN | arq, `mkg_*` |
+| `agents` | LangGraph: audit, hypothesis, anomaly, review, recommend | LangGraph |
+| `analytics` | Confidence, contradictions (скелет, не hot-path) | Python |
 
-## Поток данных (актуальный MVP)
+## Поток данных (актуальный)
+
+### Режим `full`
 
 ```
-Upload (gateway)
-  → arq: run_ingestion → Markdown + storage
-  → UI: «Построить граф» → arq: run_extraction
+Upload (gateway, processing_mode=full)
+  → arq: run_ingestion → Markdown clean + marked
+  → after_ingest → arq: run_extraction (если AUTO_EXTRACT_AFTER_INGEST)
        → LLM L1/L2/L4/L6 + детерминированный L3/L5
-       → _bridge_text_to_layers (межсл. связи)
+       → _bridge_text_to_layers
        → load_graph → Neo4j
-  → UI: L3 / Qdrant → index_document_graph → Qdrant (mkg_chunks, mkg_claims)
-  → UI: Поиск → hybrid semantic + keyword (Agent API)
+       → index_document_graph → Qdrant (mkg_chunks + mkg_claims)
+       → apply_document_l4_cluster → HDBSCAN, is_anomaly на L4
+  → UI: Пайплайн | Markdown | Граф
+  → Chat: search_global (обе коллекции) → graph_traversal → LLM
 ```
 
-Эмбеддинги **не** пишутся в свойства Neo4j — только в Qdrant. См. [`15_l3_qdrant_clustering.md`](15_l3_qdrant_clustering.md).
+### Режим `answers_only`
 
-## Соответствие целевой модели
+```
+Upload (processing_mode=answers_only)
+  → run_ingestion → Markdown
+  → index_document_markdown → только mkg_chunks
+  → статус loaded (без Neo4j, без L4)
+```
 
-Полная таблица узлов/связей/ТЗ vs код: [`03_implementation_gap.md`](03_implementation_gap.md).
+## L3 vs L4 в Qdrant
+
+| | L3 | L4 |
+|---|----|----|
+| Коллекция | `mkg_chunks` | `mkg_claims` |
+| Узлы | TextParagraph, MD chunks | Claim, Measurement, Effect… |
+| Назначение | Semantic search цитат | Факты + HDBSCAN anomalies |
+| Кластеризация | Нет | HDBSCAN (`HDBSCAN_MIN_CLUSTER_SIZE`) |
+
+Эмбеддинги **не** в Neo4j. См. [`22_pipeline_layers.md`](22_pipeline_layers.md), [`21_api_reference.md`](21_api_reference.md).
 
 ## Хранилища
 
 | Хранилище | Данные |
 |-----------|--------|
-| **Neo4j** (локально в compose по умолчанию) | Граф знаний: 6 слоёв, `Claim`, противоречия, доверие |
-| **Qdrant** | Векторы чанков и `Claim`; кластеры и аномалии |
-| **Postgres** | Задания пайплайна, статусы документов, аудит, пользователи, runtime-конфиг достоверности |
-| **Redis** | Брокер очереди задач для worker/analytics |
+| **Neo4j** | Граф L1–L6, Document, связи |
+| **Qdrant** | Векторы L3/L4, payload cluster_id / is_anomaly |
+| **Postgres** | documents, runtime_config, collab (users, threads) |
+| **Redis** | Очередь arq |
+| **storage/** | source, md, graph JSON, llm_cache |
 
-## Общие пакеты (`packages/`)
+## Пакеты (`packages/`)
 
-- `core` — конфиг (env), синглтоны клиентов (Yandex LLM, Neo4j, Qdrant), логирование.
-- `prompts` (`mkg_prompts`) — реестр промптов ingestion / extraction (`catalog/<stage>/`).
-- `graph` — Cypher-шаблоны, схема, загрузчик JSON→граф.
-- `ingestion` — OCR, чанкинг, очистка, Markdown, диаграммы.
-- `extraction` — послойное извлечение, resolver, нормализация единиц; fallback-словарь Process/Material загружается из Neo4j.
-- `confidence` — расчёт композитного доверия.
+- `core` — config, llm, embeddings, l4_clustering, graph_traversal, layer_pipeline
+- `ingestion` — OCR, parsers, pipeline
+- `extraction` — extractor, loader
+- `graph` — schema.cypher, init_schema
+- `prompts` — реестр промптов по этапам
 
-## Синглтоны
+## Конфигурация (ключевые env)
 
-Все внешние клиенты — синглтоны (ленивая инициализация из env):
-- `PromptRegistry` — реестр промптов (реализован).
-- `YandexLLMClient` — обёртка над Yandex AI Studio (chat, vision, embeddings) с per-task конфигами.
-- `Neo4jClient` — драйвер + сессии.
-- `QdrantClientSingleton` — коллекции чанков и claims.
-
-Конфиги моделей (temperature, max_tokens) под каждую задачу берутся из реестра промптов,
-а не хардкодятся в коде.
-
-## Асинхронность
-
-- Загрузка файла → gateway кладёт задачу в очередь → worker обрабатывает.
-- Статус документа и этап (`status`, `step`) хранится в Postgres (`documents`) и дублируется в локальном repo как fallback.
-- Тяжёлые шаги (OCR, извлечение) не блокируют HTTP-запрос.
+| Переменная | Назначение |
+|------------|------------|
+| `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | LLM, OCR, embeddings |
+| `NEO4J_URI`, `NEO4J_PASSWORD` | Граф |
+| `QDRANT_URL`, `QDRANT_COLLECTION_*` | Векторный индекс |
+| `AUTO_EXTRACT_AFTER_INGEST` | Авто-extraction после OCR |
+| `GRAPH_TRAVERSAL_MAX_HOPS` | Глубина обхода графа в чате (default 2) |
+| `HDBSCAN_MIN_CLUSTER_SIZE` | Мин. размер кластера L4 (default 3) |
+| `AGENTS_URL` | LangGraph service |
 
 ## Развёртывание
 
-`docker-compose.yml` (Compose Spec, `name: mkg-local`) поднимает: `gateway`, `worker`, `analytics`, `neo4j`, `qdrant`,
-`postgres`, `redis`. При необходимости Neo4j может быть внешним — тогда меняется `NEO4J_URI` в `.env`.
-Секреты (`YANDEX_API_KEY`, `YANDEX_FOLDER_ID`, Neo4j creds) — только в `.env`.
+`docker compose --project-name mkg-local up --build` поднимает:
+`gateway`, `worker`, `agents`, `analytics`, `neo4j`, `qdrant`, `postgres`, `redis`.
+
+Секреты — только в `.env` (не коммитить).

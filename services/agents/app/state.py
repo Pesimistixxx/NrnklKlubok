@@ -8,6 +8,7 @@ AgentModeLiteral = Literal[
     "hypothesis_mode",
     "literature_review_mode",
     "recommendation_mode",
+    "anomaly_mode",
 ]
 
 
@@ -47,4 +48,5 @@ class MKGAgentState(TypedDict, total=False):
     related_labs: list[dict[str, Any]]
     analysis: dict[str, Any]
     mode_result: dict[str, Any]
+    anomaly_seeds: list[dict[str, Any]]
     final_response: dict[str, Any]

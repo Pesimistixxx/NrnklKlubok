@@ -4,14 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=30" />
+  <link rel="stylesheet" href="/static/css/app.css?v=43" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
     <main class="main-area" id="mainArea">
       <nav class="main-nav" role="navigation" aria-label="Разделы">
         <button class="page-nav-link active" data-page="chats" type="button">Чат</button>
-        <button class="page-nav-link" data-page="home" type="button">Главная</button>
         <button class="page-nav-link" data-page="docs" type="button">Документы</button>
         <button class="page-nav-link" data-page="qdrant" type="button">Qdrant</button>
         <button class="page-nav-link" data-page="settings" type="button">Настройки</button>
@@ -22,7 +21,11 @@
           <header class="chat-toolbar">
             <div class="chat-toolbar-row">
               <span class="chat-toolbar-label">Роль</span>
-              <div class="chip-row" id="roleCardGrid"></div>
+              <div class="role-card-grid role-card-grid-compact" id="roleCardGrid"></div>
+            </div>
+            <div class="chat-role-header hidden" id="chatRoleHeader">
+              <span class="user-role-badge" id="chatRoleBadge"></span>
+              <span class="chat-role-capability muted" id="chatRoleCapability"></span>
             </div>
             <div class="chat-toolbar-row">
               <span class="chat-toolbar-label">AI</span>
@@ -31,16 +34,24 @@
             </div>
             <p class="chat-notice hidden" id="chatIdentityStatus"></p>
             <details class="role-prompt-panel hidden" id="rolePromptPanel">
-              <summary>Промпт роли <span class="role-prompt-badge muted" id="rolePromptBadge"></span></summary>
-              <p class="muted small role-prompt-hint">Системная инструкция для выбранной роли. Используется при запросах к AI.</p>
-              <textarea id="rolePromptText" rows="5" placeholder="Системный промпт…"></textarea>
-              <div class="role-prompt-actions">
-                <button class="btn btn-primary btn-small" id="rolePromptSave" type="button">Сохранить</button>
-                <button class="btn btn-small" id="rolePromptReset" type="button">По умолчанию</button>
+              <summary>
+                <span class="role-prompt-summary">
+                  <span class="role-prompt-chevron" aria-hidden="true"></span>
+                  <span>Промпт роли</span>
+                  <span class="role-prompt-badge muted" id="rolePromptBadge"></span>
+                </span>
+              </summary>
+              <div class="role-prompt-body">
+                <p class="muted small role-prompt-hint">Системная инструкция для выбранной роли. Используется при запросах к AI.</p>
+                <textarea id="rolePromptText" rows="5" placeholder="Системный промпт…"></textarea>
+                <div class="role-prompt-actions">
+                  <button class="btn btn-primary btn-small" id="rolePromptSave" type="button">Сохранить</button>
+                  <button class="btn btn-small" id="rolePromptReset" type="button">По умолчанию</button>
+                </div>
               </div>
             </details>
           </header>
-          <div class="chats-layout">
+          <div class="chats-layout chats-layout-with-graph">
             <aside class="chats-sidebar">
               <button class="btn btn-primary btn-small chat-new-btn" id="chatNewBtn" type="button">+ Новый чат</button>
               <h3 class="chats-sidebar-title">История</h3>
@@ -52,22 +63,40 @@
                 <p class="chat-empty-hint">Выберите роль и напишите сообщение — AI ответит в режиме «Диалог».</p>
               </div>
               <div class="chat-typing hidden" id="chatTyping" aria-live="polite">
+                <div class="agent-trace-live" id="chatTraceLive"></div>
                 <span class="chat-typing-dots"><i></i><i></i><i></i></span>
                 MKG AI печатает…
               </div>
-              <div class="chats-compose">
+              <p class="chat-upload-error hidden" id="chatUploadError" role="alert"></p>
+              <div class="chats-compose" id="chatsCompose">
+                <input type="file" id="chatFileInput" class="visually-hidden" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp,.tif,.tiff" />
+                <button type="button" class="btn btn-ghost btn-icon chat-attach-btn" id="chatAttachBtn" title="Прикрепить файл или фото" aria-label="Прикрепить файл">📎</button>
                 <textarea id="chatMessageInput" rows="2" placeholder="Вопрос или сообщение…"></textarea>
                 <button class="btn btn-primary" id="chatSendBtn" type="button">Отправить</button>
               </div>
+              <p class="muted small chat-upload-hint" id="chatUploadHint">Файл в чате → OCR → MD → граф → Neo4j → Qdrant → L4 HDBSCAN · источники и «Сохранить как MD»</p>
             </section>
+            <aside class="chat-graph-panel" id="chatGraphPanel">
+              <header class="chat-graph-head">
+                <div class="chat-graph-head-text">
+                  <h3>Граф контекста</h3>
+                  <span class="chat-graph-stats muted" id="chatGraphStats">0 узлов</span>
+                </div>
+                <button type="button" class="btn-icon chat-graph-toggle" id="chatGraphToggle" title="Свернуть панель" aria-label="Свернуть">›</button>
+              </header>
+              <div class="chat-graph-building hidden" id="chatGraphBuilding">
+                <div class="chat-graph-pulse"></div>
+                <span id="chatGraphBuildingText">Поиск в Qdrant…</span>
+              </div>
+              <div class="chat-graph-canvas-wrap">
+                <div class="chat-graph-canvas" id="chatGraphCanvas"></div>
+                <div class="chat-graph-empty" id="chatGraphEmpty">
+                  <p class="muted small">Нет данных MKG для этого запроса.</p>
+                  <p class="muted small">Загрузите документы во вкладке «Документы» — пайплайн до графа и Qdrant запустится автоматически.</p>
+                </div>
+              </div>
+            </aside>
           </div>
-        </div>
-      </section>
-
-      <section class="page page-home hidden" id="pageHome">
-        <div class="about-hero about-hero-compact">
-          <h1>Единая карта знаний R&amp;D</h1>
-          <p class="muted project-stage-line" id="projectStageLine">Этап: загрузка…</p>
         </div>
       </section>
 
@@ -76,6 +105,7 @@
           <aside class="docs-sidebar">
             <div class="upload-panel upload-panel-compact" id="homeTabUpload">
               <h2>Загрузить документ</h2>
+              <p class="muted small upload-pipeline-hint">Upload → OCR → MD → граф → Neo4j → Qdrant → L4 HDBSCAN — автоматически после загрузки</p>
               <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
               <input type="hidden" id="classification" value="открытый" />
               <div class="drop drop-compact" id="drop" role="button" tabindex="0">
@@ -83,7 +113,7 @@
               </div>
               <div class="upload-actions upload-actions-compact">
                 <button class="btn btn-ghost btn-small" id="pickBtn" type="button">Выбрать</button>
-                <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled>Обработать</button>
+                <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled>Загрузить и обработать</button>
               </div>
               <p class="muted small" id="formatsHint">…</p>
               <div class="error-box" id="uploadError"></div>
@@ -127,9 +157,12 @@
         <div class="doc-page-panel hidden" id="docMdPanel">
           <div class="md-panel-head">
             <h4>Markdown</h4>
-            <div class="md-view-toggle">
-              <button type="button" class="view-btn active" id="mdViewRenderBtn">Просмотр</button>
-              <button type="button" class="view-btn" id="mdViewSourceBtn">Исходник</button>
+            <div class="md-panel-actions">
+              <button type="button" class="btn btn-ghost btn-small" id="docMdDownloadBtn" title="Скачать текущий вид как .md">Скачать .md</button>
+              <div class="md-view-toggle">
+                <button type="button" class="view-btn active" id="mdViewRenderBtn">Без разметки</button>
+                <button type="button" class="view-btn" id="mdViewSourceBtn">С разметкой</button>
+              </div>
             </div>
           </div>
           <div class="preview md-panel doc-md-panel md-render-view empty" id="previewMdRender">—</div>
@@ -142,10 +175,43 @@
       </section>
 
       <section class="graph-panel hidden" id="graphPanel">
+        <header class="doc-work-header hidden" id="docWorkHeader">
+          <div class="doc-work-title-row">
+            <h2 class="doc-work-title" id="docWorkTitle">Документ</h2>
+            <span class="badge s-uploaded" id="docWorkBadge">—</span>
+            <span class="muted doc-work-meta" id="docWorkMeta"></span>
+          </div>
+          <nav class="doc-work-tabs" role="tablist" aria-label="Просмотр документа">
+            <button type="button" class="doc-work-tab active" data-tab="journey" id="docWorkTabJourney">Пайплайн</button>
+            <button type="button" class="doc-work-tab" data-tab="md" id="docWorkTabMd">Markdown</button>
+            <button type="button" class="doc-work-tab" data-tab="graph" id="docWorkTabGraph">Граф</button>
+          </nav>
+        </header>
         <div class="page-head graph-page-head" id="graphPageHead">
           <h1 id="graphPageTitle">Граф знаний</h1>
           <p class="muted page-lead" id="graphPageLead">Компактный режим. Перетаскивайте узлы; тяните нижний край для изменения высоты.</p>
         </div>
+        <div class="doc-work-body">
+          <div class="doc-work-pane active" id="docJourneyPane" data-pane="journey">
+            <div class="doc-journey" id="docJourneyContent">
+              <p class="muted doc-work-empty">Выберите документ слева или загрузите новый файл.</p>
+            </div>
+          </div>
+          <div class="doc-work-pane" id="docMdPane" data-pane="md">
+            <div class="md-panel-head md-inline-head">
+              <p class="muted small md-inline-hint">После OCR: «Без разметки» — рендер текста; «С разметкой» — L3-маркеры и узлы L1–L6 после extraction. Скачать текущий вид — «Скачать .md».</p>
+              <div class="md-panel-actions">
+                <button type="button" class="btn btn-ghost btn-small" id="docMdInlineDownloadBtn" title="Скачать текущий вид как .md">Скачать .md</button>
+                <div class="md-view-toggle">
+                  <button type="button" class="view-btn active" id="mdInlineCleanBtn">Без разметки</button>
+                  <button type="button" class="view-btn" id="mdInlineMarkedBtn">С разметкой</button>
+                </div>
+              </div>
+            </div>
+            <div class="preview md-panel doc-md-inline md-clean-view" id="docMdInlineClean">—</div>
+            <div class="preview md-panel doc-md-inline md-marked-view hidden" id="docMdInlineMarked">—</div>
+          </div>
+          <div class="doc-work-pane" id="docGraphPane" data-pane="graph">
         <div class="graphs-empty hidden" id="graphsEmpty">
           <p class="muted">Нет графа. Выберите документ во вкладке «Документы» и нажмите «Построить граф».</p>
         </div>
@@ -188,12 +254,14 @@
             </div>
           </div>
         </div>
+          </div>
+        </div>
       </section>
 
       <section class="page page-qdrant hidden" id="pageQdrant">
         <div class="page-head">
           <h1>Qdrant</h1>
-          <p class="muted page-lead">Векторный индекс L3/L4 — точки, статус, логи индексации (как Neo4j).</p>
+          <p class="muted page-lead">L3: эмбеддинг-поиск (mkg_chunks). L4: HDBSCAN-кластеры (mkg_claims). AI-поиск использует оба фактора.</p>
         </div>
         <div class="qdrant-doc-picker">
           <label class="small" for="qdrantDocFilter">Документ</label>
@@ -214,15 +282,16 @@
             <div class="embedding-status-line" id="l3EmbeddingStatus">Загрузка…</div>
             <pre class="qdrant-info muted" id="l3QdrantInfo"></pre>
             <div class="l3-actions">
-              <button class="btn btn-primary btn-small" id="l3IndexBtn" type="button">Индексировать</button>
+              <button class="btn btn-primary btn-small" id="l3IndexBtn" type="button">Индекс L3 (Qdrant)</button>
               <button class="btn btn-ghost btn-small" id="l3IndexAllBtn" type="button">Все документы</button>
+              <button class="btn btn-ghost btn-small" id="l4ClusterBtn" type="button">HDBSCAN L4</button>
             </div>
             <div class="qdrant-index-log" id="qdrantIndexLog"></div>
           </section>
           <section class="l3-section">
-            <h3>Карта точек Qdrant <span class="muted" id="qdrantClusterCount">(0)</span></h3>
+            <h3>Карта L4-кластеров <span class="muted" id="qdrantClusterCount">(0)</span></h3>
             <div class="qdrant-cluster-map" id="qdrantClusterMap">
-              <p class="muted">Проиндексируйте документы — точки появятся на карте кластера.</p>
+              <p class="muted">Проиндексируйте L3/L4 и запустите HDBSCAN — кластеры L4 появятся здесь.</p>
             </div>
           </section>
           <section class="l3-section">
@@ -287,9 +356,25 @@
     </aside>
   </div>
 
+  <div class="mkg-modal hidden" id="chatUploadModal" role="dialog" aria-labelledby="chatUploadModalTitle" aria-modal="true">
+    <div class="mkg-modal-backdrop" id="chatUploadModalBackdrop"></div>
+    <div class="mkg-modal-card">
+      <h3 id="chatUploadModalTitle">Как обработать файл?</h3>
+      <p class="muted small" id="chatUploadModalFiles"></p>
+      <div class="mkg-modal-actions">
+        <button type="button" class="btn btn-primary" id="chatUploadModeFull">Загрузить и обработать</button>
+        <button type="button" class="btn btn-ghost" id="chatUploadModeAnswers">Только для ответов</button>
+        <button type="button" class="btn btn-ghost btn-small" id="chatUploadModalCancel">Отмена</button>
+      </div>
+      <p class="muted small mkg-modal-hint">Полный путь: OCR → MD → граф L1–L6 → Neo4j → Qdrant → L4 HDBSCAN. Лёгкий: OCR → MD → Qdrant для поиска в чате (без графа и L4).</p>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=30"></script>
-  <script src="/static/js/chats.js?v=30"></script>
+  <script src="/static/js/graph-mini.js?v=43"></script>
+  <script src="/static/js/app.js?v=43"></script>
+  <script src="/static/js/chats.js?v=43"></script>
 </body>
 </html>

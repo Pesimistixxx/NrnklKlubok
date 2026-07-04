@@ -45,6 +45,7 @@ class DocumentRepository:
         *,
         classification: str = "открытый",
         organization: str | None = None,
+        processing_mode: str = "full",
     ) -> dict[str, Any]:
         hash_sum = hashlib.sha256(content).hexdigest()
         doc_id = f"doc:{hash_sum[:16]}"
@@ -61,6 +62,7 @@ class DocumentRepository:
                 "mime_type": None,
                 "classification": classification,
                 "organization": organization,
+                "processing_mode": processing_mode if processing_mode in ("full", "answers_only") else "full",
                 "hash_sum": hash_sum,
                 "status": "uploaded",
                 "upload_date": datetime.now(timezone.utc).isoformat(),
@@ -112,20 +114,29 @@ class DocumentRepository:
         rec = self.get(doc_id)
         return bool(rec and rec.get("cancel_requested"))
 
+    def markdown_filename(self, doc_id: str) -> str:
+        return f"{doc_id.replace(':', '_')}.md"
+
+    def markdown_relative_path(self, doc_id: str) -> str:
+        return f"md/{self.markdown_filename(doc_id)}"
+
+    def marked_markdown_relative_path(self, doc_id: str) -> str:
+        return f"md_marked/{self.markdown_filename(doc_id)}"
+
     def save_markdown(self, doc_id: str, markdown: str) -> None:
-        (self.md / f"{doc_id.replace(':', '_')}.md").write_text(markdown, encoding="utf-8")
+        (self.md / self.markdown_filename(doc_id)).write_text(markdown, encoding="utf-8")
 
     def save_marked_markdown(self, doc_id: str, markdown: str) -> None:
         marked_dir = self.base / "md_marked"
         marked_dir.mkdir(parents=True, exist_ok=True)
-        (marked_dir / f"{doc_id.replace(':', '_')}.md").write_text(markdown, encoding="utf-8")
+        (marked_dir / self.markdown_filename(doc_id)).write_text(markdown, encoding="utf-8")
 
     def read_marked_markdown(self, doc_id: str) -> str | None:
-        path = self.base / "md_marked" / f"{doc_id.replace(':', '_')}.md"
+        path = self.base / "md_marked" / self.markdown_filename(doc_id)
         return path.read_text(encoding="utf-8") if path.exists() else None
 
     def read_markdown(self, doc_id: str) -> str | None:
-        path = self.md / f"{doc_id.replace(':', '_')}.md"
+        path = self.md / self.markdown_filename(doc_id)
         return path.read_text(encoding="utf-8") if path.exists() else None
 
     def read_source(self, doc_id: str) -> bytes | None:

@@ -167,9 +167,9 @@ async def run_ingestion(ctx: dict[str, Any], document_id: str) -> dict[str, Any]
 
 
 
-        if get_settings().auto_extract_after_ingest:
+        from mkg_core.post_ingest import after_ingestion_done
 
-            await enqueue("run_extraction", document_id)
+        await after_ingestion_done(document_id)
 
 
 
@@ -424,6 +424,45 @@ async def run_extraction(ctx: dict[str, Any], document_id: str) -> dict[str, Any
 
 
 
+    l4_stats: dict[str, Any] = {}
+
+    if node_count > 0:
+
+        try:
+
+            repo.set_status(document_id, final_status, step="qdrant_index")
+
+            try:
+
+                await update_document_status(document_id, final_status, step="qdrant_index")
+
+            except Exception as exc:
+
+                log.warning("postgres update failed qdrant_index start: %s", exc)
+
+            from mkg_core.embeddings import index_document_graph
+
+            await index_document_graph(document_id, payload)
+
+            log.info("qdrant indexed doc_id=%s", document_id)
+
+        except Exception as exc:
+
+            log.warning("qdrant index failed doc_id=%s: %s", document_id, exc)
+
+        else:
+            mode = (repo.get(document_id) or rec).get("processing_mode") or "full"
+            if mode != "answers_only":
+                try:
+                    from mkg_core.l4_clustering import apply_document_l4_cluster
+
+                    l4_stats = await apply_document_l4_cluster(document_id)
+                    log.info("l4 clustered doc_id=%s stats=%s", document_id, l4_stats)
+                except Exception as exc:
+                    log.warning("l4 cluster failed doc_id=%s: %s", document_id, exc)
+
+
+
     return {
 
         "document_id": document_id,
@@ -441,6 +480,8 @@ async def run_extraction(ctx: dict[str, Any], document_id: str) -> dict[str, Any
         "synced_relationships": sync["relationships"],
 
         "neo4j_error": neo4j_error,
+
+        "l4": l4_stats,
 
     }
 

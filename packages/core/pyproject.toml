@@ -16,6 +16,8 @@ dependencies = [
   "qdrant-client>=1.9",
   "arq>=0.26",
   "asyncpg>=0.29",
+  "numpy>=1.26",
+  "hdbscan>=0.8.36",
 ]
 
 [tool.setuptools.packages.find]

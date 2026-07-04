@@ -16,14 +16,13 @@ const els = {
   classification: $("classification"),
   clearDbBtn: $("clearDbBtn"),
   docs: $("docs"),
-  pageHome: $("pageHome"),
   pageDocs: $("pageDocs"),
   pageGraphShell: $("pageGraphShell"),
   graphPanel: $("graphPanel"),
   pageQdrant: $("pageQdrant"),
   pageChats: $("pageChats"),
   pageSettings: $("pageSettings"),
-  projectStageLine: $("projectStageLine"),
+  projectStageLine: null,
   viewAllGraphBtn: $("viewAllGraphBtn"),
   docPageBar: $("docPageBar"),
   docBackBtn: $("docBackBtn"),
@@ -34,7 +33,8 @@ const els = {
   docPrimaryBtn: $("docPrimaryBtn"),
   docRebuildGraphBtn: $("docRebuildGraphBtn"),
   docReprocessBtn: $("docReprocessBtn"),
-  docMdBtn: $("docMdBtn"),
+  docMdDownloadBtn: $("docMdDownloadBtn"),
+  docMdInlineDownloadBtn: $("docMdInlineDownloadBtn"),
   docLogsBtn: $("docLogsBtn"),
   docNeo4jBtn: $("docNeo4jBtn"),
   docStopBtn: $("docStopBtn"),
@@ -82,6 +82,7 @@ const els = {
   l3Stats: $("l3Stats"),
   l3IndexBtn: $("l3IndexBtn"),
   l3IndexAllBtn: $("l3IndexAllBtn"),
+  l4ClusterBtn: $("l4ClusterBtn"),
   graphCompactBtn: $("graphCompactBtn"),
   graphFullBtn: $("graphFullBtn"),
   llmModel: $("llmModel"),
@@ -96,6 +97,21 @@ const els = {
   livePipeline: $("livePipeline"),
   liveStep: $("liveStep"),
   liveRels: $("liveRels"),
+  docWorkHeader: $("docWorkHeader"),
+  docWorkTitle: $("docWorkTitle"),
+  docWorkBadge: $("docWorkBadge"),
+  docWorkMeta: $("docWorkMeta"),
+  docWorkTabJourney: $("docWorkTabJourney"),
+  docWorkTabMd: $("docWorkTabMd"),
+  docWorkTabGraph: $("docWorkTabGraph"),
+  docJourneyPane: $("docJourneyPane"),
+  docJourneyContent: $("docJourneyContent"),
+  docMdPane: $("docMdPane"),
+  docGraphPane: $("docGraphPane"),
+  docMdInlineClean: $("docMdInlineClean"),
+  docMdInlineMarked: $("docMdInlineMarked"),
+  mdInlineCleanBtn: $("mdInlineCleanBtn"),
+  mdInlineMarkedBtn: $("mdInlineMarkedBtn"),
   detailPanel: $("detailPanel"),
   detailBody: $("detailBody"),
   closeDetailBtn: $("closeDetailBtn"),
@@ -128,6 +144,417 @@ const GRAPH_LABEL_MAX = 20;
 const GRAPH_ALL_ID = "__all__";
 const NEO4J_BROWSER_URL = "http://localhost:7474/browser/";
 
+const DOC_PIPELINE = [
+  { id: "upload", label: "Загрузка", short: "Файл" },
+  { id: "ocr", label: "OCR / ingestion", short: "OCR" },
+  { id: "md", label: "Markdown", short: "MD" },
+  { id: "graph", label: "Extraction / граф", short: "Граф" },
+  { id: "neo4j", label: "Neo4j", short: "Neo4j" },
+  { id: "qdrant", label: "Индекс эмбеддингов L3 (Qdrant)", short: "L3" },
+  { id: "l4", label: "HDBSCAN кластеризация L4", short: "L4" },
+];
+
+const JOURNEY_STAGES = [
+  { id: "upload", title: "Загрузка файла", hint: "PDF, DOCX или другой формат принят в хранилище" },
+  { id: "ocr", title: "OCR и ingestion", hint: "Распознавание текста, очистка, сборка Markdown" },
+  { id: "md", title: "Markdown готов", hint: "Чистый MD и размеченный (L3 + узлы графа) — вкладка «Markdown», скачивание .md" },
+  { id: "layers", title: "Извлечение слоёв L1–L6", hint: "LLM извлекает сущности, абзацы, факты, роли доступа…", isLayers: true },
+  { id: "graph", title: "Граф знаний", hint: "Узлы и связи сохранены локально" },
+  { id: "neo4j", title: "Neo4j", hint: "Синхронизация в графовую базу данных" },
+  { id: "qdrant", title: "L3: индекс эмбеддингов (Qdrant)", hint: "TextParagraph → mkg_chunks, только семантический поиск (без HDBSCAN)" },
+  { id: "l4", title: "L4: HDBSCAN кластеризация", hint: "Claim/Measurement → mkg_claims, cluster_id и is_anomaly для AI-поиска" },
+];
+
+/** Кнопки ↺ Перезапустить по этапам пайплайна */
+const STAGE_RETRY = {
+  ocr: { action: "reprocess", label: "↺ OCR", showOn: ["failed", "done"] },
+  md: { action: "reprocess", label: "↺ OCR", showOn: ["done"] },
+  layers: { action: "extract", label: "↺ Извлечение", showOn: ["failed", "done"] },
+  graph: { action: "extract", label: "↺ Извлечение", showOn: ["failed", "done"] },
+  neo4j: { action: "neo4j", label: "↺ Neo4j", showOn: ["failed", "done"] },
+  qdrant: { action: "index", label: "↺ Индекс", showOn: ["failed", "done"] },
+  l4: { action: "l4_cluster", label: "↺ HDBSCAN L4", showOn: ["failed", "done"] },
+};
+
+function isAnswersOnlyMode(doc) {
+  return (doc?.processing_mode || "full") === "answers_only";
+}
+
+function shouldShowStageRetry(stageId, state, doc) {
+  if (!doc || state === "active" || state === "pending" || state === "skipped") return false;
+  const cfg = STAGE_RETRY[stageId];
+  if (!cfg || !cfg.showOn.includes(state)) return false;
+  if (isAnswersOnlyMode(doc) && ["layers", "graph", "neo4j", "l4"].includes(stageId)) return false;
+  if (stageId === "md" && state !== "done") return false;
+  if (stageId === "layers" && state === "done" && (doc.graph_nodes || 0) === 0) return false;
+  if (stageId === "l4" && (doc.graph_nodes || 0) === 0) return false;
+  return true;
+}
+
+function renderStageRetryBtn(docId, stageId, state, doc) {
+  if (!shouldShowStageRetry(stageId, state, doc)) return "";
+  const cfg = STAGE_RETRY[stageId];
+  return `<button type="button" class="btn btn-ghost btn-small journey-retry-btn" data-retry-doc="${esc(docId)}" data-retry-action="${esc(cfg.action)}" data-retry-stage="${esc(stageId)}" title="Перезапустить этап">${esc(cfg.label)}</button>`;
+}
+
+function isL4Done(doc) {
+  if (doc?.step === "l4_done") return true;
+  if (doc?.step === "l4_cluster" || doc?.step === "l4_failed") return false;
+  return doc?.l4_clusters != null;
+}
+
+function applyL4PipelineState(states, doc, { st, step, qdrant, nodes }) {
+  if (isAnswersOnlyMode(doc)) {
+    states.l4 = "skipped";
+    return;
+  }
+  if (step === "l4_failed" || (st === "failed" && step === "l4_failed")) {
+    states.l4 = "failed";
+    return;
+  }
+  if (isL4Done(doc)) {
+    states.l4 = "done";
+    return;
+  }
+  if (states.qdrant === "done" && nodes > 0) {
+    states.l4 = step === "l4_cluster" ? "active" : "active";
+  } else if (states.qdrant === "done") {
+    states.l4 = "pending";
+  }
+}
+
+function getDocPipelineStates(doc) {
+  const st = doc.status || "";
+  const step = doc.step || "";
+  const nodes = doc.graph_nodes || 0;
+  const neo = doc.neo4j_synced === true;
+  const docId = doc.id || doc.document_id;
+  const qdrant = docId ? indexedDocsSet.has(docId) : false;
+  const states = Object.fromEntries(DOC_PIPELINE.map((s) => [s.id, "pending"]));
+  states.upload = "done";
+
+  if (isAnswersOnlyMode(doc)) {
+    states.ocr = ["uploaded", "processing"].includes(st) ? "active" : (st === "failed" && (step.includes("ingestion") || step === "ingestion_failed") ? "failed" : "done");
+    states.md = states.ocr === "active" ? "pending" : (states.ocr === "failed" ? "pending" : "done");
+    states.graph = "skipped";
+    states.neo4j = "skipped";
+    if (st === "failed" && (step === "index_failed" || step.includes("index"))) {
+      states.qdrant = "failed";
+    } else if (qdrant || (st === "loaded" && step === "answers_indexed")) {
+      states.qdrant = "done";
+    } else if (states.md === "done" && ["md_ready", "loaded"].includes(st)) {
+      states.qdrant = "active";
+    }
+    applyL4PipelineState(states, doc, { st, step, qdrant, nodes: 0 });
+    return states;
+  }
+
+  const markDoneThrough = (stageId) => {
+    let found = false;
+    for (const s of DOC_PIPELINE) {
+      if (s.id === stageId) { found = true; continue; }
+      if (!found) states[s.id] = "done";
+    }
+  };
+
+  if (st === "failed") {
+    markDoneThrough("upload");
+    if (step.includes("ingestion") || step === "ingestion_failed") {
+      states.ocr = "failed";
+    } else if (step.includes("extraction") || step === "extraction_empty") {
+      states.ocr = states.md = "done";
+      states.graph = "failed";
+    } else if (step === "neo4j_load") {
+      states.ocr = states.md = states.graph = "done";
+      states.neo4j = "failed";
+    } else if (step === "l4_failed" || step === "l4_cluster") {
+      states.ocr = states.md = states.graph = "done";
+      states.neo4j = neo ? "done" : "failed";
+      states.qdrant = qdrant ? "done" : "failed";
+      states.l4 = step === "l4_failed" ? "failed" : "active";
+    } else {
+      states.graph = "failed";
+    }
+    applyL4PipelineState(states, doc, { st, step, qdrant, nodes });
+    return states;
+  }
+
+  switch (st) {
+    case "uploaded":
+      states.ocr = "active";
+      break;
+    case "processing":
+      states.ocr = "active";
+      break;
+    case "md_ready":
+      states.ocr = states.md = "done";
+      if (nodes > 0) {
+        states.graph = "done";
+        states.neo4j = neo ? "done" : "pending";
+        states.qdrant = qdrant ? "done" : "pending";
+      } else {
+        states.graph = "active";
+      }
+      break;
+    case "extracting":
+      states.ocr = states.md = "done";
+      if (step === "neo4j_load") {
+        states.graph = "done";
+        states.neo4j = "active";
+      } else {
+        states.graph = "active";
+      }
+      break;
+    case "loaded":
+      states.ocr = states.md = "done";
+      states.graph = nodes > 0 ? "done" : "failed";
+      states.neo4j = neo ? "done" : (nodes > 0 ? "active" : "pending");
+      states.qdrant = qdrant ? "done" : (neo && nodes > 0 ? "active" : "pending");
+      break;
+    default:
+      break;
+  }
+  applyL4PipelineState(states, doc, { st, step, qdrant, nodes });
+  return states;
+}
+
+function renderDocPipelineHtml(doc, { compact = true, showRetry = true } = {}) {
+  const states = getDocPipelineStates(doc);
+  const docId = doc.id || doc.document_id;
+  const chips = DOC_PIPELINE.map((s, i) => {
+    const state = states[s.id] || "pending";
+    const label = compact ? s.short : s.label;
+    const stepHint = doc.step && state === "active" ? (STEP_RU[doc.step] || doc.step) : "";
+    const title = stepHint ? `${s.label} · ${stepHint}` : s.label;
+    const retry = showRetry && docId && shouldShowStageRetry(s.id, state, doc)
+      ? `<button type="button" class="doc-pipe-retry" data-retry-doc="${esc(docId)}" data-retry-action="${esc(STAGE_RETRY[s.id]?.action || "")}" data-retry-stage="${esc(s.id)}" title="Перезапустить">${esc(STAGE_RETRY[s.id]?.label || "↺")}</button>`
+      : "";
+    return `<span class="doc-pipe-step ${state}" title="${esc(title)}">${esc(label)}${retry}</span>`;
+  });
+  const joined = [];
+  chips.forEach((chip, i) => {
+    joined.push(chip);
+    if (i < chips.length - 1) joined.push('<span class="doc-pipe-arrow">→</span>');
+  });
+  return `<div class="doc-pipeline">${joined.join("")}</div>`;
+}
+
+function getLayersJourneyState(doc, layers) {
+  if (isAnswersOnlyMode(doc)) return "skipped";
+  const st = doc?.status || "";
+  const nodes = doc?.graph_nodes || 0;
+  const pipe = getDocPipelineStates(doc);
+  if (st === "failed" && pipe.graph === "failed") return "failed";
+  if (pipe.graph === "done" || (st === "loaded" && nodes > 0)) return "done";
+  if (st === "extracting") return "active";
+  if (st === "md_ready" && nodes === 0) return "active";
+  if (layers?.some((l) => l.status === "running")) return "active";
+  if (layers?.some((l) => l.status === "done" || l.status === "partial")) return "active";
+  if (pipe.md === "done") return "pending";
+  return "pending";
+}
+
+function journeyMarkerIcon(state) {
+  if (state === "done") return "✓";
+  if (state === "failed") return "!";
+  if (state === "skipped") return "—";
+  if (state === "active") return "●";
+  return "○";
+}
+
+function renderJourneyLayerGrid(layers) {
+  if (!layers?.length) {
+    return '<p class="muted">Слои появятся при запуске извлечения графа.</p>';
+  }
+  return `<div class="journey-layer-grid">${layers.map((l) => `
+    <div class="journey-layer st-${l.status}" title="${esc(l.title)}">
+      <span class="jl-id l-${l.id}">${esc(l.id)}</span>
+      <span class="jl-title">${esc(l.title)}</span>
+      <span class="jl-stat">${esc(LAYER_STATUS_RU[l.status] || l.status)} · ${l.nodes} узл · ${l.relationships} св</span>
+    </div>`).join("")}</div>`;
+}
+
+function renderJourneyRecentRels(rels) {
+  if (!rels?.length) return "";
+  const chips = rels.slice(-8).map((rel) =>
+    `<span class="rel-chip rel-chip-${esc(rel.layer || "L?")}" title="${esc(rel.type)}"><span class="rel-from">${esc(rel.from_short)}</span><b>${esc(rel.type)}</b><span class="rel-to">${esc(rel.to_short)}</span></span>`,
+  ).join("");
+  return `<div class="journey-recent-rels"><h6>Последние связи</h6>${chips}</div>`;
+}
+
+function renderDocJourneyHtml(doc, layerPayload) {
+  if (!doc) {
+    return '<p class="muted doc-work-empty">Выберите документ слева или загрузите новый файл.</p>';
+  }
+  const docId = doc.id || doc.document_id;
+  const states = getDocPipelineStates(doc);
+  const layers = layerPayload?.layers || [];
+  const layersState = getLayersJourneyState(doc, layers);
+  const stepHint = doc.step ? (STEP_RU[doc.step] || doc.step) : "";
+  const showLayerBlock = ["md_ready", "extracting", "loaded", "failed"].includes(doc.status);
+
+  const steps = JOURNEY_STAGES.map((stage) => {
+    let state = states[stage.id] || "pending";
+    if (stage.isLayers) state = layersState;
+    if (stage.id === "graph" && isAnswersOnlyMode(doc)) state = "skipped";
+    if (stage.id === "neo4j" && isAnswersOnlyMode(doc)) state = "skipped";
+    if (stage.id === "l4" && isAnswersOnlyMode(doc)) state = "skipped";
+    let detail = "";
+    if (state === "active" && stepHint && (stage.id === "ocr" || stage.id === "layers" || stage.id === "graph" || stage.id === "neo4j" || stage.id === "l4")) {
+      detail = `<div class="journey-step-detail">${esc(stepHint)}</div>`;
+    } else if (stage.id === "upload" && doc.size_bytes) {
+      detail = `<div class="journey-step-detail">${esc(formatBytes(doc.size_bytes))} · ${esc(formatDateTime(doc.upload_date))}</div>`;
+    } else if (stage.id === "md" && state === "done") {
+      detail = '<div class="journey-step-detail">Вкладка «Markdown»: без разметки / с L3-маркерами · «Скачать .md»</div>';
+    } else if (stage.id === "graph" && state === "done" && doc.graph_nodes) {
+      detail = `<div class="journey-step-detail">${doc.graph_nodes} узлов · ${doc.graph_relationships || 0} связей</div>`;
+    } else if (stage.id === "neo4j" && doc.neo4j_synced) {
+      detail = '<div class="journey-step-detail">Синхронизировано с Neo4j</div>';
+    } else if (stage.id === "qdrant" && docId && indexedDocsSet.has(docId)) {
+      detail = '<div class="journey-step-detail">L3 TextParagraph проиндексированы в mkg_chunks</div>';
+    } else if (stage.id === "l4" && isL4Done(doc)) {
+      const clusters = doc.l4_clusters ?? 0;
+      const anomalies = doc.l4_anomalies ?? 0;
+      const clustered = doc.l4_clustered ?? 0;
+      detail = `<div class="journey-step-detail">${clustered} точек · ${clusters} кластеров · ${anomalies} аномалий</div>`;
+    } else if (stage.id === "l4" && doc.l4_error) {
+      detail = `<div class="journey-step-detail">${esc(doc.l4_error)}</div>`;
+    } else if (state === "failed" && doc.error) {
+      detail = `<div class="journey-step-detail">${esc(doc.error)}</div>`;
+    }
+
+    const layerBlock = stage.isLayers && showLayerBlock
+      ? `<div class="journey-layer-block"><h5>Слои L1–L6</h5>${renderJourneyLayerGrid(layers)}${doc.status === "extracting" ? renderJourneyRecentRels(layerPayload?.recent_relationships) : ""}</div>`
+      : "";
+
+    return `
+      <div class="journey-step ${state}">
+        <div class="journey-marker">${journeyMarkerIcon(state)}</div>
+        <div class="journey-body">
+          <div class="journey-step-head">
+            <h4>${esc(stage.title)}</h4>
+            ${renderStageRetryBtn(docId, stage.id, state, doc)}
+          </div>
+          <p class="muted">${state === "skipped" ? "Пропущено (режим «только для ответов»)" : esc(stage.hint)}</p>
+          ${detail}
+          ${layerBlock}
+        </div>
+      </div>`;
+  });
+
+  return `<div class="doc-journey-timeline">${steps.join("")}</div>`;
+}
+
+let docWorkTab = "journey";
+let docWorkTabManual = false;
+let layerJourneyCache = null;
+let layerJourneyDocId = null;
+
+async function refreshDocJourney(docId) {
+  if (!docId || !els.docJourneyContent) return null;
+  let layerPayload = null;
+  const doc = docsListCache.find((d) => d.id === docId);
+  const needLayers = doc && ["md_ready", "extracting", "loaded", "failed"].includes(doc.status);
+  if (needLayers) {
+    try {
+      const r = await fetch(`${API}/documents/${encodeURIComponent(docId)}/pipeline/layers`);
+      if (r.ok) {
+        layerPayload = await r.json();
+        layerJourneyCache = layerPayload;
+        layerJourneyDocId = docId;
+      }
+    } catch { /* ignore */ }
+  } else {
+    layerJourneyCache = null;
+    layerJourneyDocId = null;
+  }
+  return layerPayload;
+}
+
+function updateDocWorkHeader(doc) {
+  const show = isInlineGraphPage() && graphScope === "doc" && doc;
+  els.docWorkHeader?.classList.toggle("hidden", !show);
+  if (!show || !doc) return;
+  const label = statusLabel(doc);
+  if (els.docWorkTitle) els.docWorkTitle.textContent = doc.file_name || doc.document_id || doc.id;
+  if (els.docWorkBadge) {
+    els.docWorkBadge.textContent = label.text;
+    els.docWorkBadge.className = `badge ${label.cls}`;
+  }
+  if (els.docWorkMeta) {
+    const step = doc.step ? stepLabel(doc.step) : "";
+    els.docWorkMeta.textContent = step ? `Шаг: ${step}` : "";
+  }
+  const isAll = graphScope === "all";
+  els.docWorkTabJourney?.classList.toggle("hidden", isAll);
+  els.docWorkTabMd?.classList.toggle("hidden", isAll);
+}
+
+function syncDocWorkTabUI(tab) {
+  if (!["journey", "md", "graph"].includes(tab)) tab = "journey";
+  document.querySelectorAll(".doc-work-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tab);
+  });
+  els.docJourneyPane?.classList.toggle("active", tab === "journey");
+  els.docMdPane?.classList.toggle("active", tab === "md");
+  els.docGraphPane?.classList.toggle("active", tab === "graph");
+}
+
+function setDocWorkTab(tab, { manual = false } = {}) {
+  if (!["journey", "md", "graph"].includes(tab)) tab = "journey";
+  if (manual) docWorkTabManual = true;
+  docWorkTab = tab;
+  syncDocWorkTabUI(tab);
+  if (tab === "graph") {
+    refreshGraphViewport();
+    const docId = graphScope === "all" ? GRAPH_ALL_ID : (graphViewDocId || selectedDoc || pickGraphDocId());
+    if (docId && isGraphHostPage()) loadGraph(docId);
+  }
+}
+
+function maybeAutoDocWorkTab(doc, prevStatus) {
+  if (!isInlineGraphPage() || graphScope !== "doc" || !doc) return;
+  if (docWorkTabManual && docWorkTab === "graph") return;
+  if (prevStatus === "processing" && doc.status === "md_ready") {
+    setDocWorkTab("md");
+    docWorkTabManual = false;
+    return;
+  }
+  if (ACTIVE_DOC_STATUSES.has(doc.status)) {
+    setDocWorkTab("journey");
+    return;
+  }
+  if (doc.status === "loaded" && (doc.graph_nodes || 0) > 0 && !docWorkTabManual) {
+    setDocWorkTab("graph");
+  }
+}
+
+async function updateDocWorkArea(doc, previewData) {
+  if (!isInlineGraphPage()) return;
+  const data = previewData || doc;
+  updateDocWorkHeader(data);
+  if (!data || graphScope !== "doc") {
+    if (els.docJourneyContent) {
+      els.docJourneyContent.innerHTML = renderDocJourneyHtml(null);
+    }
+    return;
+  }
+  const docId = data.id || data.document_id;
+  let layerPayload = layerJourneyDocId === docId ? layerJourneyCache : null;
+  if (["md_ready", "extracting", "loaded", "failed"].includes(data.status)) {
+    layerPayload = await refreshDocJourney(docId) || layerPayload;
+  }
+  if (els.docJourneyContent) {
+    els.docJourneyContent.innerHTML = renderDocJourneyHtml(data, layerPayload);
+    bindRetryButtons(els.docJourneyContent);
+  }
+  syncDocWorkTabUI(docWorkTab);
+}
+
+function updateDocPipelinePanel(doc) {
+  updateDocWorkArea(doc);
+}
+
 const STEP_RU = {
   ingestion: "OCR / ingestion",
   reprocess: "повтор OCR",
@@ -141,6 +568,12 @@ const STEP_RU = {
   neo4j_load: "загрузка Neo4j",
   extraction_failed: "ошибка extraction",
   ingestion_failed: "ошибка ingestion",
+  index_failed: "ошибка индексации",
+  answers_indexed: "индекс для чата",
+  qdrant_index: "индекс эмбеддингов L3",
+  l4_cluster: "HDBSCAN L4",
+  l4_done: "кластеризация L4 готова",
+  l4_failed: "ошибка L4",
   cancelling: "остановка",
   extraction_cancelled: "остановлено",
   extraction_empty: "пустой граф",
@@ -164,8 +597,10 @@ let graphNodeListVisible = false;
 let lastQdrantIndexLog = "";
 let markdownClean = "";
 let markdownMarked = "";
-let mdViewMode = "render";
+let mdViewMode = "clean";
 const ACTIVE_DOC_STATUSES = new Set(["uploaded", "processing", "extracting"]);
+/** Документы, ожидающие автозапуск extraction после ingestion */
+const pipelineQueue = new Set();
 let graphLayerFilter = "all";
 let showCrossLayerOnly = false;
 let graphDensityMode = "compact";
@@ -187,6 +622,8 @@ let docStatusCache = new Map();
 let indexedDocsSet = new Set(JSON.parse(localStorage.getItem("mkg_indexed_docs") || "[]"));
 let lastLogsDocId = null;
 let lastLogsKey = "";
+let docGraphCountCache = new Map();
+const GRAPH_CONTENT_HASH_LIMIT = 12000;
 
 let nodeFieldHints = {};
 
@@ -343,6 +780,7 @@ async function uploadFiles() {
   }
   fd.append("classification", els.classification?.value || "открытый");
   let ok = false;
+  const uploadedIds = [];
   try {
     const url = useBatch ? `${API}/documents/batch` : `${API}/documents`;
     const r = await fetch(url, { method: "POST", body: fd });
@@ -353,23 +791,122 @@ async function uploadFiles() {
       const items = (data.items || []).filter((x) => x.document);
       const bad = (data.items || []).filter((x) => x.error);
       if (bad.length) showBox(els.uploadError, bad.map((x) => `${x.file_name}: ${x.error}`).join("\n"));
+      items.forEach((x) => {
+        if (x.document?.id) {
+          uploadedIds.push(x.document.id);
+          pipelineQueue.add(x.document.id);
+        }
+      });
       if (items.length) {
         switchPage("docs");
         await openDoc(items[0].document.id, { keepPage: true, showGraph: true });
       }
     } else {
+      uploadedIds.push(data.id);
+      pipelineQueue.add(data.id);
       switchPage("docs");
       await openDoc(data.id, { keepPage: true, showGraph: true });
     }
     resetDropZone();
+    await renderDocsList();
+    for (const id of uploadedIds) {
+      ensurePipeline(id).catch(() => {});
+    }
   } catch (e) {
     showBox(els.uploadError, e.message);
     if (selectedFiles.length) els.uploadBtn.disabled = false;
   } finally {
-    els.uploadBtn.textContent = "Обработать";
+    els.uploadBtn.textContent = "Загрузить и обработать";
     if (!ok && selectedFiles.length) els.uploadBtn.disabled = false;
     renderDocsList();
   }
+}
+
+async function ensurePipeline(docId) {
+  if (!docId || !pipelineQueue.has(docId)) return;
+  try {
+    const r = await fetch(`${API}/documents/${encodeURIComponent(docId)}/preview`);
+    if (!r.ok) return;
+    const data = await r.json();
+    const st = data.status;
+    if (st === "uploaded" || st === "processing") return;
+    if (st === "md_ready" && !(data.graph_nodes > 0)) {
+      if (data.processing_mode === "answers_only") {
+        if (!indexedDocsSet.has(docId)) {
+          await fetch(`${API}/documents/${encodeURIComponent(docId)}/index`, { method: "POST" });
+          indexedDocsSet.add(docId);
+          saveIndexedDocs();
+        }
+        pipelineQueue.delete(docId);
+        return;
+      }
+      await fetch(`${API}/documents/${encodeURIComponent(docId)}/submit`, { method: "POST" });
+      return;
+    }
+    if (st === "loaded" || st === "md_ready" || st === "failed") {
+      const needsL4 = data.processing_mode !== "answers_only" && (data.graph_nodes > 0);
+      const l4Ready = !needsL4 || isL4Done(data) || data.step === "l4_failed";
+      if (l4Ready) pipelineQueue.delete(docId);
+    }
+  } catch { /* retry on next poll */ }
+}
+
+async function retryPipelineStage(docId, action, btn) {
+  if (!docId || !action) return;
+  const prev = btn?.textContent;
+  if (btn) { btn.disabled = true; if (prev) btn.textContent = "…"; }
+  try {
+    let url = "";
+    if (action === "reprocess") url = `${API}/documents/${encodeURIComponent(docId)}/reprocess`;
+    else if (action === "extract") url = `${API}/documents/${encodeURIComponent(docId)}/submit`;
+    else if (action === "neo4j") url = `${API}/documents/${encodeURIComponent(docId)}/neo4j-sync`;
+    else if (action === "index") url = `${API}/documents/${encodeURIComponent(docId)}/index`;
+    else if (action === "l4_cluster") url = `${API}/documents/${encodeURIComponent(docId)}/l4-cluster`;
+    else return;
+    const r = await fetch(url, { method: "POST" });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.detail || "Ошибка перезапуска");
+    }
+    if (action === "index") {
+      const data = await r.json();
+      if ((data.indexed ?? 0) > 0 || !data.error) {
+        indexedDocsSet.add(docId);
+        saveIndexedDocs();
+      }
+    }
+    if (action === "l4_cluster") {
+      const data = await r.json();
+      if (data.l4_clustered > 0 || data.step === "l4_done" || data.clusters != null) {
+        indexedDocsSet.add(docId);
+        saveIndexedDocs();
+      }
+    }
+    pipelineQueue.add(docId);
+    if (docId === selectedDoc) await openDoc(docId, { keepPage: true });
+    else await renderDocsList();
+    document.querySelectorAll(`[data-upload-doc="${CSS.escape(docId)}"]`).forEach(() => {
+      pollUploadDocExternal?.(docId);
+    });
+  } catch (e) {
+    if (btn) btn.title = e.message || "Ошибка";
+  } finally {
+    if (btn) { btn.disabled = false; if (prev) btn.textContent = prev; }
+  }
+}
+
+let pollUploadDocExternal = null;
+
+function bindRetryButtons(root = document) {
+  root.querySelectorAll("[data-retry-action]").forEach((btn) => {
+    if (btn.dataset.retryBound) return;
+    btn.dataset.retryBound = "1";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      retryPipelineStage(btn.dataset.retryDoc, btn.dataset.retryAction, btn);
+    });
+  });
 }
 
 function setPreview(el, text, isEmpty) {
@@ -448,18 +985,21 @@ async function reloadGraphForDoc(docId, { silent = false } = {}) {
     const gr = await fetch(`${API}/graph/documents/${encodeURIComponent(docId)}`);
     if (!gr.ok) return;
     const g = await gr.json();
-    graphData = {
-      nodes: g.nodes || [],
-      relationships: (g.relationships || []).map((rel) => ({
-        type: rel.type,
-        from: rel.from || rel.from_,
-        to: rel.to,
-        props: rel.props || {},
-      })),
-    };
+    const rels = (g.relationships || []).map((rel) => ({
+      type: rel.type,
+      from: rel.from || rel.from_,
+      to: rel.to,
+      props: rel.props || {},
+    }));
+    const nodes = g.nodes || [];
+    const newKey = graphContentKey(nodes, rels);
+    if (newKey === lastGraphDataKey && docId === lastGraphDocId) return;
+    graphData = { nodes, relationships: rels };
+    lastGraphDataKey = newKey;
+    lastGraphDocId = docId;
     updateCrossLayerStat();
     updatePreviewMeta(docId);
-    if (graphVisible) renderGraphViews();
+    if (graphVisible) renderGraphViews({ skipLayerFilters: silent });
   } catch {
     if (!silent) { /* ignore */ }
   }
@@ -475,12 +1015,15 @@ async function applyPreviewUpdate(data, opts = {}) {
   renderDocMetadata(data);
   applyMarkdownFromPreview(data);
 
-
   docStatusCache.set(docId, data.status);
+  maybeAutoDocWorkTab(data, prevStatus);
 
   const graphCount = data.graph_nodes || 0;
+  const prevGraphCount = docGraphCountCache.get(docId) || 0;
   const hadGraph = graphData.nodes.length > 0;
-  if (graphCount > 0 && (!hadGraph || opts.forceGraph || prevStatus === "extracting")) {
+  const graphCountChanged = graphCount !== prevGraphCount;
+  docGraphCountCache.set(docId, graphCount);
+  if (graphCount > 0 && (graphCountChanged || !hadGraph || opts.forceGraph)) {
     await reloadGraphForDoc(docId, { silent: true });
   } else if (graphCount === 0 && hadGraph && data.status === "extracting") {
     graphData = { nodes: [], relationships: [] };
@@ -491,7 +1034,7 @@ async function applyPreviewUpdate(data, opts = {}) {
   if (docPanelMode === "logs" && ACTIVE_DOC_STATUSES.has(data.status)) {
     loadLogs(docId, { silent: true });
   }
-  if (data.status === "extracting" && (currentPage === "doc" || currentPage === "graphAll")) {
+  if (data.status === "extracting" && (currentPage === "doc" || currentPage === "graphAll" || isInlineGraphPage())) {
     refreshLiveExtract(docId);
   }
 
@@ -504,12 +1047,17 @@ async function applyPreviewUpdate(data, opts = {}) {
   if (
     (prevStatus === "processing" || prevStatus === "uploaded")
     && data.status === "md_ready"
-    && currentPage === "doc"
+    && (currentPage === "doc" || isInlineGraphPage())
     && graphScope === "doc"
   ) {
     docPanelMode = "md";
     els.docMdPanel?.classList.remove("hidden");
     els.docMdBtn?.classList.add("active");
+    if (isInlineGraphPage()) setDocWorkTab("md");
+  }
+
+  if (isInlineGraphPage()) {
+    await updateDocWorkArea(data, data);
   }
 }
 
@@ -527,30 +1075,47 @@ function renderMarkdownHtml(text) {
 }
 
 function setMdViewMode(mode) {
-  mdViewMode = mode === "source" ? "source" : "render";
-  els.mdViewRenderBtn?.classList.toggle("active", mdViewMode === "render");
-  els.mdViewSourceBtn?.classList.toggle("active", mdViewMode === "source");
-  els.previewMdRender?.classList.toggle("hidden", mdViewMode !== "render");
-  els.previewMdSource?.classList.toggle("hidden", mdViewMode !== "source");
+  mdViewMode = mode === "marked" ? "marked" : "clean";
+  els.mdViewRenderBtn?.classList.toggle("active", mdViewMode === "clean");
+  els.mdViewSourceBtn?.classList.toggle("active", mdViewMode === "marked");
+  els.mdInlineCleanBtn?.classList.toggle("active", mdViewMode === "clean");
+  els.mdInlineMarkedBtn?.classList.toggle("active", mdViewMode === "marked");
+  els.previewMdRender?.classList.toggle("hidden", mdViewMode !== "clean");
+  els.previewMdSource?.classList.toggle("hidden", mdViewMode !== "marked");
+  els.docMdInlineClean?.classList.toggle("hidden", mdViewMode !== "clean");
+  els.docMdInlineMarked?.classList.toggle("hidden", mdViewMode !== "marked");
 }
 
 function updateMarkdownPreview(isEmpty) {
   const renderEl = els.previewMdRender;
   const sourceEl = els.previewMdSource;
-  if (!renderEl || !sourceEl) return;
+  const inlineClean = els.docMdInlineClean;
+  const inlineMarked = els.docMdInlineMarked;
 
-  if (isEmpty || !markdownClean.trim()) {
-    renderEl.innerHTML = esc(markdownClean || "—");
-    sourceEl.textContent = markdownClean || "—";
-    renderEl.className = "preview md-panel doc-md-panel md-render-view empty";
-    sourceEl.className = "preview md-panel doc-md-panel md-source-view hidden empty";
-    return;
+  const emptyText = markdownClean || "—";
+  const cleanHtml = isEmpty || !markdownClean.trim()
+    ? esc(emptyText)
+    : renderMarkdownHtml(markdownClean);
+  const markedText = isEmpty || !(markdownMarked || markdownClean).trim()
+    ? emptyText
+    : (markdownMarked || markdownClean).slice(0, 120000);
+
+  if (renderEl) {
+    renderEl.innerHTML = cleanHtml;
+    renderEl.className = `preview md-panel doc-md-panel md-render-view${isEmpty || !markdownClean.trim() ? " empty" : ""}`;
   }
-
-  renderEl.innerHTML = renderMarkdownHtml(markdownMarked || markdownClean);
-  sourceEl.textContent = markdownClean.slice(0, 120000);
-  renderEl.className = "preview md-panel doc-md-panel md-render-view";
-  sourceEl.className = "preview md-panel doc-md-panel md-source-view hidden";
+  if (sourceEl) {
+    sourceEl.textContent = markedText;
+    sourceEl.className = `preview md-panel doc-md-panel md-source-view hidden${isEmpty ? " empty" : ""}`;
+  }
+  if (inlineClean) {
+    inlineClean.innerHTML = cleanHtml;
+    inlineClean.className = `preview md-panel doc-md-inline md-clean-view${isEmpty || !markdownClean.trim() ? " empty" : ""}`;
+  }
+  if (inlineMarked) {
+    inlineMarked.textContent = markedText;
+    inlineMarked.className = `preview md-panel doc-md-inline md-marked-view hidden${isEmpty ? " empty" : ""}`;
+  }
   setMdViewMode(mdViewMode);
 }
 
@@ -558,6 +1123,27 @@ function setMarkdownViews(clean, marked, isEmpty) {
   markdownClean = clean || "";
   markdownMarked = marked || clean || "";
   updateMarkdownPreview(isEmpty);
+}
+
+function downloadDocumentMd(variant) {
+  if (!selectedDoc) return;
+  const v = variant || (mdViewMode === "marked" ? "marked" : "clean");
+  const url = `${API}/documents/${encodeURIComponent(selectedDoc)}/markdown?variant=${v}&download=1`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.rel = "noopener";
+  a.click();
+}
+
+async function openDocWithMd(docId) {
+  if (!docId) return;
+  await openDoc(docId, { switchTo: "doc" });
+  docPanelMode = "md";
+  els.docMdPanel?.classList.remove("hidden");
+  els.docLogsPanel?.classList.add("hidden");
+  els.docMdBtn?.classList.add("active");
+  els.docLogsBtn?.classList.remove("active");
+  setDocWorkTab("md", { manual: true });
 }
 
 function layerOf(label) {
@@ -791,7 +1377,9 @@ function renderSearchHits(hits, targetEl, opts = {}) {
         <span class="search-hit-layer" style="background:${LAYER_COLOR[hit.layer] || LAYER_COLOR["L?"]}">${esc(hit.layer)}</span>
         <span class="search-hit-label">${esc(hit.label)}</span>
         <span class="search-hit-score">${hit.score != null ? (hit.score <= 1 ? `${(hit.score * 100).toFixed(0)}%` : hit.score.toFixed(2)) : "—"}</span>
-        <span class="search-hit-mode muted">${esc(hit.mode)}</span>
+        <span class="search-hit-mode muted">${esc((hit.retrieval_factors || []).join("+") || hit.mode || "")}</span>
+        ${hit.cluster_id != null ? `<span class="search-hit-cluster muted">c${esc(String(hit.cluster_id))}</span>` : ""}
+        ${hit.is_anomaly ? '<span class="search-hit-anomaly muted">anomaly</span>' : ""}
       </div>
       <p class="search-hit-text">${esc(hit.text || "—")}</p>
       <code class="search-hit-id">${esc(hit.node_id)}</code>
@@ -918,11 +1506,11 @@ function setLiveExtractVisible(show) {
 }
 
 function isGraphHostPage(page = currentPage) {
-  return page === "home" || page === "docs" || page === "doc" || page === "graphAll";
+  return page === "docs" || page === "doc" || page === "graphAll";
 }
 
 function isInlineGraphPage(page = currentPage) {
-  return page === "home" || page === "docs";
+  return page === "docs";
 }
 
 function docsWithGraph(items) {
@@ -959,7 +1547,14 @@ function updateGraphVisibility() {
 
   els.graphPanel?.classList.toggle("hidden", !showGraphArea);
   els.pageGraphShell?.classList.toggle("doc-detail-only", isDocPage && isDocDetail);
-  els.graphPageHead?.classList.toggle("hidden", !showGraphArea || (isDocPage && isDocDetail));
+  els.graphPageHead?.classList.toggle("hidden", !showGraphArea || (isDocPage && isDocDetail) || (isInlineGraph && graphScope === "doc"));
+  els.docWorkHeader?.classList.toggle("hidden", !isInlineGraph || graphScope !== "doc" || !selectedDoc);
+
+  if (isInlineGraph && graphScope === "doc") {
+    syncDocWorkTabUI(docWorkTab);
+  } else if (isInlineGraph && graphScope === "all") {
+    syncDocWorkTabUI("graph");
+  }
 
   if (!isGraphHostPage()) return;
 
@@ -973,13 +1568,9 @@ function updateGraphVisibility() {
 
   const emptyMsg = els.graphsEmpty?.querySelector("p");
   if (emptyMsg) {
-    if (currentPage === "home") {
-      emptyMsg.textContent = "Нет документов с графом. Откройте «Документы» и постройте граф.";
-    } else {
-      emptyMsg.textContent = graphScope === "all"
-        ? "Нет документов с графом. Постройте граф хотя бы для одного документа."
-        : "Нет графа. Выберите документ и нажмите «Построить граф».";
-    }
+    emptyMsg.textContent = graphScope === "all"
+      ? "Нет документов с графом. Загрузите файл на вкладке «Документы» — пайплайн запустится автоматически."
+      : "Граф строится… или загрузите документ и дождитесь обработки.";
   }
 }
 
@@ -1004,18 +1595,23 @@ function updateGraphsPageState() {
 function renderDocCard(d) {
   const st = statusLabel(d);
   const typeHint = d.doc_type ? ` · ${d.doc_type}` : "";
+  const isLive = ["uploaded", "processing", "extracting"].includes(d.status);
   return `
-    <div class="doc ${selectedDoc === d.id ? "active" : ""}" data-id="${esc(d.id)}" role="button">
+    <div class="doc ${selectedDoc === d.id ? "active" : ""} ${isLive ? "doc-live" : ""}" data-id="${esc(d.id)}" role="button">
       <div class="doc-name">${esc(d.file_name)}</div>
       <div class="doc-meta">${formatBytes(d.size_bytes)}${esc(typeHint)} · ${formatDateTime(d.upload_date)}</div>
+      ${renderDocPipelineHtml(d)}
       <span class="badge ${st.cls}">${esc(st.text)}</span>
     </div>`;
 }
 
 function bindDocCards(container) {
+  bindRetryButtons(container);
   container?.querySelectorAll(".doc").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.dataset.id;
+      docWorkTabManual = false;
+      docWorkTab = "journey";
       if (currentPage === "docs") {
         openDoc(id, { keepPage: true, showGraph: true });
         graphScope = "doc";
@@ -1044,24 +1640,75 @@ async function loadQdrantClusterMap() {
       els.qdrantClusterMap.innerHTML = '<p class="muted">Нет точек — проиндексируйте документы</p>';
       return;
     }
-    const byLayer = {};
-    points.forEach((p) => {
-      const layer = p.layer || "L?";
-      if (!byLayer[layer]) byLayer[layer] = [];
-      byLayer[layer].push(p);
+    const l4Points = points.filter((p) => p.layer === "L4");
+    const byCluster = {};
+    l4Points.forEach((p) => {
+      const cid = p.cluster_id != null ? p.cluster_id : (p.is_anomaly ? -1 : "none");
+      const key = String(cid);
+      if (!byCluster[key]) byCluster[key] = [];
+      byCluster[key].push(p);
     });
-    els.qdrantClusterMap.innerHTML = Object.entries(byLayer).map(([layer, pts]) => `
+    const clusterKeys = Object.keys(byCluster).sort((a, b) => {
+      if (a === "none") return 1;
+      if (b === "none") return -1;
+      return Number(a) - Number(b);
+    });
+    if (!clusterKeys.length || (clusterKeys.length === 1 && clusterKeys[0] === "none")) {
+      const byLayer = {};
+      points.forEach((p) => {
+        const layer = p.layer || "L?";
+        if (!byLayer[layer]) byLayer[layer] = [];
+        byLayer[layer].push(p);
+      });
+      els.qdrantClusterMap.innerHTML = Object.entries(byLayer).map(([layer, pts]) => `
+        <div class="qdrant-cluster-group">
+          <div class="qdrant-cluster-head">
+            <span class="qp-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)}</span>
+            <span class="muted">${pts.length} точек · запустите HDBSCAN</span>
+          </div>
+          <div class="qdrant-cluster-dots">
+            ${pts.map((p) => `<span class="qdrant-dot" title="${esc(p.text || p.node_id || "")}" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}"></span>`).join("")}
+          </div>
+        </div>`).join("");
+      return;
+    }
+    els.qdrantClusterMap.innerHTML = clusterKeys.map((key) => {
+      const pts = byCluster[key];
+      const isAnomaly = key === "-1";
+      const label = key === "none" ? "без кластера" : (isAnomaly ? `аномалии (${pts.length})` : `кластер ${key}`);
+      const color = isAnomaly ? "#c62828" : (LAYER_COLOR.L4 || "#ef6c00");
+      return `
       <div class="qdrant-cluster-group">
         <div class="qdrant-cluster-head">
-          <span class="qp-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)}</span>
-          <span class="muted">${pts.length} точек</span>
+          <span class="qp-layer" style="background:${color}">${esc(label)}</span>
+          <span class="muted">${pts.length} L4-точек</span>
         </div>
         <div class="qdrant-cluster-dots">
-          ${pts.map((p) => `<span class="qdrant-dot" title="${esc(p.text || p.node_id || "")}" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}"></span>`).join("")}
+          ${pts.map((p) => `<span class="qdrant-dot ${p.is_anomaly ? "qdrant-dot-anomaly" : ""}" title="${esc(p.text || p.neo4j_node_id || p.node_id || "")}" style="background:${color}"></span>`).join("")}
         </div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
   } catch {
     els.qdrantClusterMap.innerHTML = '<p class="muted">Ошибка загрузки карты точек</p>';
+  }
+}
+
+async function runL4Clustering() {
+  const docParam = selectedDoc ? `?document_id=${encodeURIComponent(selectedDoc)}` : "";
+  if (els.qdrantIndexLog) {
+    els.qdrantIndexLog.textContent = "HDBSCAN L4…";
+  }
+  try {
+    const r = await fetch(`${AGENT_API}/analytics/l4-cluster${docParam}`, { method: "POST" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Ошибка кластеризации");
+    if (els.qdrantIndexLog) {
+      els.qdrantIndexLog.textContent = `L4: ${data.clustered || 0} точек, ${data.clusters || 0} кластеров, ${data.anomalies || 0} аномалий`;
+    }
+    await loadQdrantClusterMap();
+    if (selectedDoc && graphVisible) await loadGraph(selectedDoc, { silent: true });
+  } catch (e) {
+    if (els.qdrantIndexLog) els.qdrantIndexLog.textContent = `Ошибка: ${e.message}`;
   }
 }
 
@@ -1070,12 +1717,14 @@ function viewAllGraph() {
   graphDensityMode = "full";
   graphVisible = true;
   graphViewDocId = GRAPH_ALL_ID;
+  docWorkTabManual = true;
   if (!isGraphHostPage()) {
     switchPage("docs");
     return;
   }
   updateGraphScopeUI();
   updateDensityToggleUI();
+  setDocWorkTab("graph");
   updateGraphsPageState();
   refreshGraphViewport();
 }
@@ -1231,6 +1880,10 @@ function updateDocPageBar(data) {
   updatePreviewMeta(data.document_id || data.id);
   updateDocPrimaryBtn(data);
   updateDocRebuildBtn(data);
+  if (currentPage === "docs") {
+    const cached = docsListCache.find((x) => x.id === (data.document_id || data.id));
+    updateDocWorkArea(cached || data);
+  }
 }
 
 function statusLabel(doc) {
@@ -1416,31 +2069,24 @@ function filteredGraph() {
 function switchPage(page) {
   if (!page) return;
   if (page === "graphs" || page === "fullgraph") page = "doc";
-  if (page === "search") page = "chats";
+  if (page === "search" || page === "home") page = "docs";
   currentPage = page;
   const isGraphView = page === "doc" || page === "graphAll";
   const isDocsArea = page === "docs" || isGraphView;
   const isInlineGraph = isInlineGraphPage(page);
-  els.pageHome?.classList.toggle("hidden", page !== "home");
   els.pageDocs?.classList.toggle("hidden", page !== "docs");
   els.pageGraphShell?.classList.toggle("hidden", !isGraphView);
   els.pageQdrant?.classList.toggle("hidden", page !== "qdrant");
   els.pageChats?.classList.toggle("hidden", page !== "chats");
   els.pageSettings?.classList.toggle("hidden", page !== "settings");
-  els.pageHome?.classList.toggle("page-home-graph", page === "home");
   els.pageDocs?.classList.toggle("page-docs-graph", page === "docs");
-  els.mainArea?.classList.toggle("layout-home-graph", page === "home");
   els.mainArea?.classList.toggle("layout-docs-graph", page === "docs");
   document.querySelectorAll(".page-nav-link").forEach((link) => {
     const p = link.dataset.page;
     link.classList.toggle("active", p === page || (p === "docs" && isDocsArea));
   });
 
-  if (page === "home") {
-    graphVisible = true;
-    graphScope = "all";
-    graphViewDocId = GRAPH_ALL_ID;
-  } else if (page === "docs") {
+  if (page === "docs") {
     graphVisible = true;
     if (graphScope !== "all") {
       graphScope = selectedDoc && docsWithGraph().some((d) => d.id === selectedDoc) ? "doc" : "all";
@@ -1480,6 +2126,10 @@ function switchPage(page) {
     updateGraphVisibility();
   }
   if (page === "docs") loadDocuments();
+  else {
+    updateDocWorkArea(null);
+    if (page !== "docs") els.docWorkHeader?.classList.add("hidden");
+  }
   if (page === "qdrant") {
     if (els.qdrantDocFilter && selectedDoc) els.qdrantDocFilter.value = selectedDoc;
     refreshEmbeddingStatus();
@@ -1494,6 +2144,19 @@ window.MKG = {
   get selectedDoc() { return selectedDoc; },
   get currentPage() { return currentPage; },
   switchPage,
+  openDocWithMd,
+  downloadDocumentMd,
+  renderDocPipelineHtml,
+  getDocPipelineStates,
+  formatLogEntry,
+  ensurePipeline,
+  indexEmbeddings,
+  isDocIndexed: (docId) => indexedDocsSet.has(docId),
+  markDocIndexed: (docId) => { indexedDocsSet.add(docId); saveIndexedDocs(); },
+  trackPipelineDoc(docId) { if (docId) pipelineQueue.add(docId); },
+  retryPipelineStage,
+  bindRetryButtons,
+  setPollUploadHook(fn) { pollUploadDocExternal = fn; },
 };
 
 function closeDetailPanel() {
@@ -1517,10 +2180,16 @@ function openDetailPanel(node) {
   const incoming = graphData.relationships.filter((r) => r.to === node.id);
   const outgoing = graphData.relationships.filter((r) => (r.from || r.from_) === node.id);
   const propsHtml = renderNodePropsSection(node.label, props);
+  const clusterBadge = props.cluster_id != null
+    ? `<span class="detail-badge">кластер ${esc(String(props.cluster_id))}</span>`
+    : "";
+  const anomalyBadge = props.is_anomaly
+    ? `<span class="detail-badge detail-badge-warn">аномалия</span>`
+    : "";
 
   els.detailBody.innerHTML = `
     <span class="detail-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)} · ${esc(node.label)}</span>
-    <div class="detail-id">${esc(node.id)}</div>
+    <div class="detail-id">${esc(node.id)} ${clusterBadge}${anomalyBadge}</div>
     <section class="detail-section">
       <h4 class="detail-section-title">Метаданные узла</h4>
       ${propsHtml}
@@ -1621,6 +2290,15 @@ function renderAllRelationshipsList() {
 
 function graphDataKey(nodes, rels) {
   return `${nodes.length}|${rels.length}|${nodes.map((n) => n.id).sort().join(",")}`;
+}
+
+function graphContentKey(nodes, rels) {
+  const propSig = nodes.map((n) => {
+    const p = n.props || {};
+    const keys = Object.keys(p).sort();
+    return `${n.id}:${keys.map((k) => `${k}=${String(p[k]).slice(0, 24)}`).join("|")}`;
+  }).join(";");
+  return `${graphDataKey(nodes, rels)}|${propSig.slice(0, GRAPH_CONTENT_HASH_LIMIT)}`;
 }
 
 function graphViewKey(nodes, rels) {
@@ -1782,11 +2460,7 @@ function renderGraphMap(nodes, rels) {
     } else {
       syncVisGraphData(visNodes, visEdges);
       lastGraphRenderKey = renderKey;
-      if (graphDensityMode === "compact") {
-        visNetwork.fit({ animation: { duration: 300, easingFunction: "easeInOutQuad" } });
-      } else if (graphPhysicsStable) {
-        visNetwork.redraw();
-      }
+      if (graphPhysicsStable) refreshGraphViewport();
       return;
     }
   }
@@ -1840,8 +2514,9 @@ function renderGraphMap(nodes, rels) {
   lastGraphRenderKey = renderKey;
 }
 
-function renderGraphViews() {
-  renderLayerFilters();
+function renderGraphViews(opts = {}) {
+  const skipLayerFilters = opts.skipLayerFilters === true;
+  if (!skipLayerFilters) renderLayerFilters();
   updateCrossLayerStat();
   const { nodes, rels } = filteredGraph();
   renderGraphNodeList(nodes);
@@ -1952,7 +2627,7 @@ async function clearDatabase() {
     indexedDocsSet.clear();
     saveIndexedDocs();
     docStatusCache.clear();
-    switchPage("home");
+    switchPage("docs");
     docPanelMode = null;
     els.docMdPanel?.classList.add("hidden");
     els.docLogsPanel?.classList.add("hidden");
@@ -2088,7 +2763,7 @@ async function loadGraph(docId, opts = {}) {
       props: rel.props || {},
     }));
     const nodes = g.nodes || [];
-    const newKey = graphDataKey(nodes, rels);
+    const newKey = graphContentKey(nodes, rels);
     const dataChanged = newKey !== lastGraphDataKey || docChanged;
     graphData = { nodes, relationships: rels };
     lastGraphDataKey = newKey;
@@ -2097,7 +2772,7 @@ async function loadGraph(docId, opts = {}) {
       if (!silent) renderGraphViews();
       return;
     }
-    renderGraphViews();
+    renderGraphViews({ skipLayerFilters: silent });
     if (docId === GRAPH_ALL_ID) {
       updateDocPageBar({ file_name: "Все документы", id: GRAPH_ALL_ID, graph_nodes: nodes.length });
     } else if (docId === selectedDoc) {
@@ -2202,8 +2877,12 @@ async function openDoc(id, opts = {}) {
   selectedDoc = id;
   graphViewDocId = id;
   graphScope = "doc";
-  if (opts.showGraph === true) graphVisible = true;
-  else if (opts.switchTo) graphVisible = false;
+  docWorkTabManual = false;
+  docWorkTab = "journey";
+  if (opts.showGraph === true) {
+    graphVisible = true;
+    docWorkTab = "journey";
+  } else if (opts.switchTo) graphVisible = false;
   closeDetailPanel();
   if (opts.switchTo) {
     switchPage(opts.switchTo);
@@ -2250,9 +2929,6 @@ async function pollSelectedDocumentPreview() {
     await applyPreviewUpdate(p, {
       forceGraph: p.status === "loaded" || p.status === "md_ready",
     });
-    if ((currentPage === "doc" || currentPage === "graphAll") && graphVisible) {
-      loadGraph(graphViewDocId || selectedDoc, { silent: true });
-    }
   } catch { /* ignore */ }
 }
 
@@ -2286,7 +2962,12 @@ async function renderDocsList() {
     }
     els.docs.innerHTML = filtered.map(renderDocCard).join("");
     bindDocCards(els.docs);
+    const sel = docsListCache.find((x) => x.id === selectedDoc);
+    updateDocWorkArea(sel || null);
     await pollSelectedDocumentPreview();
+    for (const id of [...pipelineQueue]) {
+      await ensurePipeline(id);
+    }
   } catch (e) {
     els.docs.innerHTML = `<div class="muted">Ошибка загрузки: ${esc(e.message)}</div>`;
   }
@@ -2321,6 +3002,7 @@ function bindEvents() {
   els.diagBtn?.addEventListener("click", runDiagnostics);
   els.l3IndexBtn?.addEventListener("click", () => indexEmbeddings(selectedDoc));
   els.l3IndexAllBtn?.addEventListener("click", indexAllEmbeddings);
+  els.l4ClusterBtn?.addEventListener("click", runL4Clustering);
   els.qdrantDocFilter?.addEventListener("change", () => {
     openDoc(els.qdrantDocFilter.value, { keepPage: true });
     loadQdrantPoints(selectedDoc);
@@ -2356,8 +3038,15 @@ function bindEvents() {
   });
   els.docMdBtn?.addEventListener("click", () => toggleDocPanel("md"));
   els.docLogsBtn?.addEventListener("click", () => toggleDocPanel("logs"));
-  els.mdViewRenderBtn?.addEventListener("click", () => setMdViewMode("render"));
-  els.mdViewSourceBtn?.addEventListener("click", () => setMdViewMode("source"));
+  els.mdViewRenderBtn?.addEventListener("click", () => setMdViewMode("clean"));
+  els.mdViewSourceBtn?.addEventListener("click", () => setMdViewMode("marked"));
+  els.mdInlineCleanBtn?.addEventListener("click", () => setMdViewMode("clean"));
+  els.mdInlineMarkedBtn?.addEventListener("click", () => setMdViewMode("marked"));
+  els.docMdDownloadBtn?.addEventListener("click", () => downloadDocumentMd());
+  els.docMdInlineDownloadBtn?.addEventListener("click", () => downloadDocumentMd());
+  document.querySelectorAll(".doc-work-tab").forEach((btn) => {
+    btn.addEventListener("click", () => setDocWorkTab(btn.dataset.tab, { manual: true }));
+  });
   els.docNeo4jBtn?.addEventListener("click", openNeo4jBrowser);
   els.docStopBtn?.addEventListener("click", async () => {
     if (!selectedDoc) return;

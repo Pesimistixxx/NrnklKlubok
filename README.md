@@ -1,138 +1,122 @@
 # MKG — Единая карта знаний R&D (горно-металлургия)
 
 Платформа на Neo4j + Qdrant + Postgres + Yandex AI Studio: загрузка документов,
-OCR → Markdown → извлечение сущностей в граф, объяснимая достоверность и RAG.
+OCR → Markdown → извлечение сущностей L1–L6 в граф, семантический поиск,
+HDBSCAN-анomalies L4, LangGraph-аналитика и диалоговый чат с источниками.
 
 ## Документация
 
+| Файл | Содержание |
+|------|------------|
+| [Docs/00_overview.md](./Docs/00_overview.md) | Суть системы, карта документов, где что в коде |
+| [Docs/02_architecture.md](./Docs/02_architecture.md) | Архитектура и сервисы |
+| [Docs/21_pipeline_and_layers.md](./Docs/21_pipeline_and_layers.md) | **L1–L6, L3 vs L4, HDBSCAN, dual search** |
+| [Docs/22_chat_agents.md](./Docs/22_chat_agents.md) | **Роли, AI-режимы, trace, anomaly agent** |
+| [Docs/21_api_reference.md](./Docs/21_api_reference.md) | **Сводка REST API** (`/api/v1/…`) |
+| [Docs/19_user_guide.md](./Docs/19_user_guide.md) | UI: Чат, Документы, пайплайн, роли |
+| [Docs/18_smoke_test.md](./Docs/18_smoke_test.md) | Запуск docker compose и проверка |
+| [Docs/20_project_status.md](./Docs/20_project_status.md) | Текущий этап MVP-2 |
+| [Docs/14_agent_api.md](./Docs/14_agent_api.md) | Agent REST API (+ capabilities, Qdrant) |
+| [Docs/15_l3_qdrant_clustering.md](./Docs/15_l3_qdrant_clustering.md) | L3, Qdrant, кластеризация L4 |
+| [Docs/21_multiagent_system.md](./Docs/21_multiagent_system.md) | LangGraph agents service |
+| [Docs/03_implementation_gap.md](./Docs/03_implementation_gap.md) | Целевая модель L1–L6 vs MVP |
+| [Docs/13_roadmap.md](./Docs/13_roadmap.md) | Этапы: что сделано / в работе |
 
-| Файл                                                                 | Содержание                                      |
-| -------------------------------------------------------------------- | ----------------------------------------------- |
-| [Docs/00_overview.md](./Docs/00_overview.md)                         | Зачем система, карта документов, где что в коде |
-| [Docs/02_architecture.md](./Docs/02_architecture.md)                 | Архитектура и сервисы                           |
-| [Docs/03_implementation_gap.md](./Docs/03_implementation_gap.md)     | Целевая модель L1–L6 vs MVP                     |
-| [Docs/13_roadmap.md](./Docs/13_roadmap.md)                           | Этапы: что сделано / в работе                   |
-| [Docs/15_l3_qdrant_clustering.md](./Docs/15_l3_qdrant_clustering.md) | L3, Qdrant, кластеризация, аномалии             |
-| [Docs/18_smoke_test.md](./Docs/18_smoke_test.md)                     | Запуск docker compose и проверка                |
-| [Docs/19_user_guide.md](./Docs/19_user_guide.md)                     | UI v3 (Главная, Граф, Qdrant…)                  |
-| [Docs/20_project_status.md](./Docs/20_project_status.md)             | Текущий этап MVP-2                              |
-| [Docs/14_agent_api.md](./Docs/14_agent_api.md)                       | Agent REST API (+ capabilities, Qdrant points)  |
-
-
-## Структура репозитория (по файлам)
+## Структура репозитория
 
 ```
-Docs/                          # 4 основных md-файла
-infra/postgres/init.sql        # схема Postgres: documents, confidence_*
+Docs/                          # Документация проекта
+infra/postgres/init.sql        # Postgres: documents, collab, runtime_config
 packages/
-  core/src/mkg_core/
-    config.py                  # Settings из .env
-    llm.py                     # YandexLLMClient (Responses API, vision, embed)
-    meta_db.py                 # Postgres: статусы документов
-    queue.py                   # arq enqueue → Redis
-    store.py                   # локальное хранилище source/md/graph
-  ingestion/src/mkg_ingestion/
-    formats.py                 # реестр форматов + validate_upload
-    ocr.py                     # Yandex OCR sync/async + PyMuPDF fallback
-    parsers.py                 # DOCX, XLSX, CSV, JSON, YAML, XML, text
-    pipeline.py                # orchestrator → markdown
-  extraction/src/mkg_extraction/
-    extractor.py               # LLM extraction L1–L6 → graph payload
-    loader.py                  # MERGE в Neo4j (schema.cypher)
-  graph/
-    schema.cypher              # онтология 6 слоёв
-    init_schema.py             # ручное применение схемы
+  core/src/mkg_core/           # config, llm, embeddings, l4_clustering, graph_traversal
+  ingestion/                   # OCR, parsers, pipeline → markdown
+  extraction/                  # LLM L1–L6 → graph payload → Neo4j
+  graph/                       # schema.cypher, init_schema.py
   prompts/                     # mkg_prompts — реестр промптов
-    catalog/                   # ingestion/, extraction/ по этапам пайплайна
 services/
-  gateway/app/main.py          # REST API + UI, upload → очередь
-  gateway/app/static/index.html
-  worker/app/tasks.py          # run_ingestion, run_extraction (arq)
-  worker/app/main.# WorkerSettings
-  analytics/app/confidence.py  # веса достоверности из Postgres
-docker-compose.yml             # name: mkg-local, neo4j/postgres/redis/qdrant/...
+  gateway/                     # REST API + UI (static/)
+  worker/                      # arq: run_ingestion, run_extraction
+  agents/                      # LangGraph: audit, hypothesis, anomaly
+  analytics/                   # confidence, batch clustering
+docker-compose.yml             # gateway, worker, agents, analytics + infra
 .env.example
 ```
 
-## Архитектура: цель vs текущее состояние
-
-### Целевая (полная) архитектура
+## Архитектура (текущая)
 
 ```
-UI (gateway) → upload → Redis/arq worker
-                ↓
-         ingestion: OCR → markdown → Qdrant chunks
-                ↓
-         extraction: LLM L1–L6 → entity resolve → Neo4j MERGE
-                ↓
-         analytics: confidence, contradictions, HDBSCAN anomalies
-                ↓
-         RAG: semantic search + answer synthesis
+UI (gateway :8000)
+  → upload → worker (arq/Redis)
+       → OCR → Markdown (clean + marked)
+       → extraction L1–L6 → Neo4j
+       → Qdrant L3 embeddings (mkg_chunks) + L4 (mkg_claims)
+       → L4 HDBSCAN → cluster_id / is_anomaly
+  → Чат: dual search (L3+L4) + Neo4j traversal
+  → Agents service (:8010): Audit / Hypotheses / Anomalies / …
 ```
 
-Хранилища: **Neo4j** (граф знаний), **Qdrant** (векторы), **Postgres** (метаданные, конфиг),
-**Redis** (очередь), **локальный storage** (артефакты пайплайна).
+Хранилища: **Neo4j** (граф), **Qdrant** (векторы), **Postgres** (метаданные, роли, промпты),
+**Redis** (очередь), **локальный storage** (source/md/graph/json).
 
-### Что реализовано сейчас
+## Что реализовано
 
+| Компонент | Статус |
+|-----------|--------|
+| Upload + validation (full / answers_only) | ✅ |
+| OCR, парсеры, Markdown clean + marked | ✅ |
+| Extraction L1–L6, bridge L3 ↔ L1–L6 | ✅ |
+| Neo4j MERGE, UI граф (vis-network) | ✅ |
+| Qdrant L3/L4 index + semantic search | ✅ |
+| **L4 HDBSCAN + anomalies API** | ✅ |
+| **Чат: dual search, sources, trace, Save MD** | ✅ |
+| **LangGraph agents** (audit, hypothesis, anomaly) | ✅ |
+| Pipeline retry-кнопки по этапам | ✅ |
+| Ролевые промпты (custom save) | ✅ |
+| Agent API + capabilities | ✅ |
+| Contradiction engine, полный RAG synthesis | ⬜ |
+| RBAC UI, визуальный конструктор | ⬜ |
 
-| Компонент                                               | Статус                                     |
-| ------------------------------------------------------- | ------------------------------------------ |
-| Upload + validation                                     | ✅ все форматы, лимит 50 МБ, batch          |
-| Парсеры DOCX/XLSX/CSV/JSON/YAML/XML                     | ✅                                          |
-| arq worker (ingestion/extraction)                       | ✅                                          |
-| Yandex OCR (sync + async PDF)                           | ✅ многостраничные PDF через async          |
-| PyMuPDF fallback                                        | ✅ если OCR недоступен                      |
-| Markdown + chunk filter                                 | ✅ базово                                   |
-| LLM extraction → graph payload                          | ✅ L2/L1/L4/L6 LLM, L3/L5 детерминированно  |
-| Neo4j load (MERGE)                                      | ✅                                          |
-| Postgres document status                                | ✅                                          |
-| Confidence config в Postgres                            | ✅ загрузка в analytics                     |
-| Qdrant indexing + semantic search                       | ✅ Agent API + UI «Qdrant» + preview search |
-| UI v4 (Граф / Полный граф / Qdrant / настройки моделей) | ✅ static `?v=4`                            |
-| Межсл. связи L3 bridge                                  | ✅ `_bridge_text_to_layers`                 |
-| Entity resolution + pint                                | ⬜                                          |
-| Contradictions / HDBSCAN                                | ⬜ см. Docs/15, 03                          |
-| RAG answer synthesis                                    | ⬜                                          |
-| RBAC / визуальный конструктор графа                     | ⬜                                          |
+## Пайплайн одного файла
 
+1. `POST /api/v1/documents` — сохраняет source, ставит `run_ingestion`.
+2. Worker: OCR/парсинг → **clean** и **marked** Markdown.
+3. При `AUTO_EXTRACT_AFTER_INGEST=true` — extraction L1–L6 → JSON graph → Neo4j.
+4. Индексация Qdrant: `POST /api/v1/documents/{id}/index` (или авто в UI).
+5. L4 HDBSCAN: `POST /api/v1/documents/{id}/l4-cluster` (режим `full`).
 
-### API загрузки
+Подробнее: [Docs/22_pipeline_layers.md](./Docs/22_pipeline_layers.md).
 
+## API (основное)
 
-| Метод | Путь                               | Описание                        |
-| ----- | ---------------------------------- | ------------------------------- |
-| GET   | `/api/v1/formats`                  | Список форматов и лимит размера |
-| POST  | `/api/v1/documents`                | Один файл (multipart `file`)    |
-| POST  | `/api/v1/documents/batch`          | Несколько файлов (`files[]`)    |
-| POST  | `/api/v1/documents/{id}/reprocess` | Повторный ingestion             |
-| POST  | `/api/v1/documents/{id}/submit`    | Запуск extraction → Neo4j       |
+| Метод | Путь | Описание |
+|-------|------|----------|
+| POST | `/api/v1/documents` | Загрузка (`processing_mode=full\|answers_only`) |
+| GET | `/api/v1/documents/{id}/markdown` | Markdown: `variant=clean\|marked` |
+| POST | `/api/v1/documents/{id}/submit` | Extraction → Neo4j |
+| POST | `/api/v1/documents/{id}/index` | Qdrant + L4 cluster |
+| POST | `/api/v1/chat/complete` | Диалог с dual search |
+| POST | `/api/v1/agents-service/run` | LangGraph (audit / hypothesis / anomaly) |
+| GET | `/api/v1/graph/anomalies` | L4-аномалии |
+| POST | `/api/v1/graph/l4/cluster` | HDBSCAN L4 |
+| POST | `/api/v1/query` | Тестовый query API |
+| POST | `/api/v1/admin/clear?confirm=true` | Очистка базы |
 
-
-Поддерживаемые расширения: `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`, `.md`, `.txt`, `.csv`, `.json`, `.yaml`, `.yml`, `.xml`, `.docx`, `.xlsx`.
-
-### Поток обработки одного файла
-
-1. **gateway** `POST /api/v1/documents` — сохраняет source, ставит `run_ingestion` в Redis.
-2. **worker** `run_ingestion` — `mkg_ingestion.process()`:
-  - PDF → `ocr.py` (async OCR для >1 стр., иначе sync; fallback PyMuPDF);
-  - chunking, junk-filter, сборка `.md`.
-3. UI показывает Markdown (не сырой `%PDF-1.5`).
-4. Кнопка «В граф» → `run_extraction`:
-  - `extract_from_markdown()` → JSON graph;
-  - `load_graph()` → Neo4j.
+Полный список: [Docs/21_api_reference.md](./Docs/21_api_reference.md).
 
 ## Стек
 
-Python 3.11 · FastAPI · Neo4j · Qdrant · Postgres · Redis · arq · YandexGPT 5.x · Vision OCR · PyMuPDF
+Python 3.11 · FastAPI · Neo4j · Qdrant · Postgres · Redis · arq · LangGraph · YandexGPT 5.x · Vision OCR · HDBSCAN
 
 ## Быстрый старт
 
 ```bash
-cp .env.example .env   # YANDEX_API_KEY + YANDEX_FOLDER_ID для LLM и OCR
+cp .env.example .env   # YANDEX_API_KEY + YANDEX_FOLDER_ID
 docker compose --project-name mkg-local up --build
 # UI: http://localhost:8000
+# Agents: http://localhost:8010/health
 ```
+
+Ключевые переменные: `YANDEX_API_KEY`, `YANDEX_FOLDER_ID`, `GRAPH_TRAVERSAL_MAX_HOPS`, `HDBSCAN_MIN_CLUSTER_SIZE`.
 
 Локально без Docker:
 
@@ -143,11 +127,10 @@ uvicorn app.main:app --app-dir services/gateway --reload
 cd services/worker && arq app.main.WorkerSettings
 ```
 
-Проверка OCR/PDF: загрузите многостраничный PDF — статус должен стать `md_ready`, в блоке «Результат» появится текст, не бинарник.
+Проверка: [Docs/18_smoke_test.md](./Docs/18_smoke_test.md).
 
-Схема Neo4j применяется автоматически при первой загрузке. Вручную:
+Схема Neo4j применяется при первой загрузке. Вручную:
 
 ```bash
 python packages/graph/init_schema.py
 ```
-

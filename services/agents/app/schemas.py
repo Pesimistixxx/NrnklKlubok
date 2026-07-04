@@ -11,6 +11,7 @@ class AgentMode(str, Enum):
     hypothesis = "hypothesis_mode"
     literature_review = "literature_review_mode"
     recommendation = "recommendation_mode"
+    anomaly = "anomaly_mode"
 
 
 class AgentRunRequest(BaseModel):
@@ -29,6 +30,7 @@ class AgentRunOut(BaseModel):
     issues: list[dict[str, Any]] = Field(default_factory=list)
     hypotheses: list[dict[str, Any]] = Field(default_factory=list)
     recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    anomalies: list[dict[str, Any]] = Field(default_factory=list)
     literature_review: dict[str, Any] = Field(default_factory=dict)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     trace: list[dict[str, Any]] = Field(default_factory=list)

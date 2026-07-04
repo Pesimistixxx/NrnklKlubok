@@ -55,3 +55,23 @@ class GatewayClient:
         doc = quote(doc_id, safe="")
         node = quote(node_id, safe="")
         return await self._get(f"/api/v1/agents/documents/{doc}/nodes/{node}")
+
+    async def anomalies(
+        self,
+        *,
+        document_id: str | None = None,
+        limit: int = 50,
+        auto_cluster: bool = True,
+    ) -> dict[str, Any]:
+        return await self._get(
+            "/api/v1/graph/anomalies",
+            document_id=document_id,
+            limit=limit,
+            auto_cluster=auto_cluster,
+        )
+
+    async def cluster_l4(self, document_id: str) -> dict[str, Any]:
+        return await self._post(
+            "/api/v1/graph/l4/cluster",
+            {"document_id": document_id, "min_cluster_size": 3},
+        )

@@ -65,7 +65,7 @@
 |---------|--------|
 | Индексация L3/L4 в Qdrant | ✅ |
 | Semantic search по документу | ✅ Agent API + UI «Поиск» |
-| HDBSCAN / аномалии → Neo4j | ⬜ см. [`15_l3_qdrant_clustering.md`](15_l3_qdrant_clustering.md) |
+| HDBSCAN / аномалии L4 → graph + Qdrant payload | ✅ `l4_clustering.py`, `/graph/anomalies`; ⬜ связь с Contradiction L5 |
 
 ---
 
@@ -76,7 +76,7 @@
 | Загрузка + библиотека | ✅ Главная + sidebar |
 | Превью MD + «отправить» | ✅ «Построить граф» |
 | GUI графа | ✅ vis-network, фильтры слоёв, межсл. связи |
-| Запрос на естественном языке | ✅ вкладка «Поиск» (semantic + keyword) |
+| Запрос на естественном языке | ✅ Чат + Qdrant search + LangGraph agents |
 | Визуальный конструктор | ⬜ |
 | RBAC | ⬜ |
 
@@ -87,5 +87,5 @@
 1. **Contradiction + `:EVALUATED_AGAINST`** — analytics, замыкание цепочки L4→L5.
 2. **TableMatrix + SynonymMap** — расширение L3/L1.
 3. **Entity resolution + pint** — нормализация единиц.
-4. **HDBSCAN по low-confidence** — ответ на открытый вопрос кластеризации.
-5. **RAG synthesis** — мульти-агентный ответ с цитатами и confidence.
+4. **Contradiction + low-confidence → HDBSCAN** — связать L5 с L4 anomalies (частично: HDBSCAN ✅).
+5. **RAG synthesis** — расширить beyond chat + agents (цитаты + confidence в одном ответе).

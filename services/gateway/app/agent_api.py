@@ -18,6 +18,8 @@ from mkg_core.embeddings import (
     search_document,
     search_global,
 )
+from mkg_core.graph_traversal import expand_from_search_hits
+from mkg_core.l4_clustering import run_l4_clustering
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
 from mkg_core.layer_pipeline import LAYER_ORDER, L5_LABELS, build_layer_pipeline
 from mkg_core.ontology import ALL_REL_TYPES
@@ -544,6 +546,11 @@ async def agent_search(doc_id: str, body: AgentSearchRequest) -> AgentSearchOut:
         layers=body.layers,
         index_if_missing=body.index_if_missing,
     )
+    hits = list(result.get("hits") or [])
+    if hits and graph.get("nodes"):
+        expanded = await expand_from_search_hits(hits, max_nodes=32)
+        for hit in hits:
+            hit["graph_neighbors"] = len(expanded.get("nodes") or [])
     return AgentSearchOut(
         document_id=doc_id,
         query=body.query,
@@ -581,10 +588,18 @@ async def agent_global_search(body: GlobalSearchRequest) -> AgentSearchOut:
     summary="Проиндексировать TextParagraph и Claim в Qdrant",
 )
 async def agent_index_embeddings(doc_id: str) -> dict[str, Any]:
-    """Явная индексация L3/L4 узлов в Qdrant (Yandex embeddings)."""
+    """Явная индексация L3/L4 узлов или Markdown-чанков в Qdrant."""
+    from mkg_core.embeddings import index_document_graph, index_document_markdown
+
     _require_doc(doc_id)
-    graph = _load_graph(doc_id, required=True)
-    stats = await index_document_graph(doc_id, graph)
+    graph = _load_graph(doc_id, required=False)
+    if graph and graph.get("nodes"):
+        stats = await index_document_graph(doc_id, graph)
+    else:
+        md = get_repo().read_markdown(doc_id)
+        if not md:
+            raise HTTPException(status_code=409, detail="Markdown ещё не готов")
+        stats = await index_document_markdown(doc_id, md)
     return {"document_id": doc_id, **stats}
 
 
@@ -655,6 +670,21 @@ async def get_all_qdrant_points(
     raw = await list_indexed_points(None, limit=limit)
     points = [AgentQdrantPointOut(**p) for p in raw]
     return AgentQdrantPointsOut(document_id="__all__", total=len(points), points=points)
+
+
+@router.post(
+    "/analytics/l4-cluster",
+    summary="HDBSCAN-кластеризация L4-точек Qdrant",
+)
+async def cluster_l4_layer(
+    document_id: str | None = Query(None, description="Ограничить одним документом"),
+    min_cluster_size: int | None = Query(None, ge=2, le=50),
+) -> dict[str, Any]:
+    """Кластеризует L4-вектора из Qdrant, пишет cluster_id/anomaly в Neo4j и JSON-граф."""
+    return await run_l4_clustering(
+        document_id=document_id,
+        min_cluster_size=min_cluster_size,
+    )
 
 
 @router.get(
@@ -739,6 +769,17 @@ async def get_agent_capabilities() -> AgentCapabilitiesOut:
             implementation="planned RBAC",
             endpoints=[
                 AgentEndpointOut(method="GET", path=f"{base}/documents/{{id}}/layers/L5", summary="SecurityRole узлы", status="partial"),
+            ],
+        ),
+        AgentCapabilityOut(
+            id="anomaly_hunter",
+            name_ru="Агент аномалий L4",
+            layer_scope="L4 + Qdrant + Neo4j",
+            implementation="LangGraph anomaly_mode + HDBSCAN clustering",
+            endpoints=[
+                AgentEndpointOut(method="GET", path="/api/v1/graph/anomalies", summary="Список L4-аномалий", status="ready"),
+                AgentEndpointOut(method="POST", path="/api/v1/graph/l4/cluster", summary="HDBSCAN кластеризация L4", status="ready"),
+                AgentEndpointOut(method="POST", path="/api/v1/agents-service/run", summary="Режим anomaly_mode", status="ready"),
             ],
         ),
         AgentCapabilityOut(

@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 from mkg_core import Neo4jClient, YandexLLMClient, get_settings
 from mkg_core.api_errors import format_api_error, is_fatal_api_error
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
-from mkg_core.ontology import sanitize_graph_payload
+from mkg_core.ontology import L4_LABELS, sanitize_graph_payload
 from mkg_core.runtime_config import get_llm_model
 
 try:
@@ -631,6 +631,91 @@ def _merge_payloads(*parts: GraphPayload) -> GraphPayload:
     return dedupe_graph_payload(combined)
 
 
+_CYRILLIC_RE = re.compile(r"[а-яА-ЯёЁ]")
+_LATIN_RE = re.compile(r"[a-zA-Z]")
+_FORMULA_RE = re.compile(r"^[A-Z0-9][A-Za-z0-9().·\-\s]{0,40}$")
+
+
+def _copy_quote_fields(props: dict[str, Any]) -> None:
+    quote = props.get("quote")
+    if isinstance(quote, str) and quote.strip():
+        if not props.get("source_quote"):
+            props["source_quote"] = quote.strip()
+
+
+def _fill_name_aliases(label: str, props: dict[str, Any]) -> None:
+    name_ru = str(props.get("name_ru") or "").strip()
+    name_en = str(props.get("name_en") or "").strip()
+    name = str(props.get("name") or "").strip()
+    if not name_ru and name and _CYRILLIC_RE.search(name):
+        props["name_ru"] = name
+        name_ru = name
+    if not name_en and name and _LATIN_RE.search(name) and not _CYRILLIC_RE.search(name):
+        props["name_en"] = name
+        name_en = name
+    if not name:
+        props["name"] = name_ru or name_en or name
+    aliases = props.get("aliases")
+    if isinstance(aliases, str) and aliases.strip():
+        props["aliases"] = [aliases.strip()]
+    elif not aliases:
+        alias_candidates: list[str] = []
+        for val in (name_ru, name_en, name):
+            if val and val not in alias_candidates:
+                alias_candidates.append(val)
+        if len(alias_candidates) > 1:
+            props["aliases"] = alias_candidates
+    if name_ru and not name_en and isinstance(props.get("aliases"), list):
+        for alias in props["aliases"]:
+            if isinstance(alias, str) and _LATIN_RE.search(alias) and not _CYRILLIC_RE.search(alias):
+                props["name_en"] = alias.strip()
+                break
+
+
+def _enrich_entity_props(payload: GraphPayload) -> GraphPayload:
+    """Дополняет пропущенные поля L1/L4 из уже извлечённых props."""
+    nodes: list[dict[str, Any]] = []
+    for node in payload.nodes:
+        label = str(node.get("label") or "")
+        props = dict(node.get("props") or {})
+        _copy_quote_fields(props)
+
+        if label == "Material":
+            _fill_name_aliases(label, props)
+            if not props.get("description"):
+                desc_parts = []
+                for key in ("name_ru", "name_en", "chemical_formula"):
+                    val = props.get(key)
+                    if isinstance(val, str) and val.strip():
+                        desc_parts.append(val.strip())
+                if desc_parts:
+                    props["description"] = "; ".join(desc_parts)
+                elif isinstance(props.get("source_quote"), str):
+                    props["description"] = props["source_quote"][:500]
+            formula = props.get("chemical_formula")
+            if isinstance(formula, str) and formula.strip() and _FORMULA_RE.match(formula.strip()):
+                props["chemical_formula"] = formula.strip()
+            if props.get("extraction_confidence") is None:
+                filled = sum(
+                    1
+                    for k in ("name_ru", "name_en", "chemical_formula", "aliases", "description", "source_quote")
+                    if props.get(k)
+                )
+                props["extraction_confidence"] = min(0.95, 0.55 + filled * 0.07)
+        elif label in {"Process", "Equipment", "ChemicalReagent", "StandardMetric"}:
+            _fill_name_aliases(label, props)
+            if props.get("extraction_confidence") is None and props.get("source_quote"):
+                props["extraction_confidence"] = 0.7
+        elif label in L4_LABELS:
+            if not props.get("description") and isinstance(props.get("text"), str):
+                props["description"] = props["text"][:500]
+            if props.get("extraction_confidence") is None and props.get("source_quote"):
+                props["extraction_confidence"] = 0.65
+
+        nodes.append({"id": node.get("id"), "label": label, "props": props})
+    return GraphPayload(nodes=nodes, relationships=payload.relationships)
+
+
 def _ensure_document_and_sources(document_id: str, payload: GraphPayload) -> GraphPayload:
     has_doc = any(n.get("id") == document_id and n.get("label") == "Document" for n in payload.nodes)
     nodes = list(payload.nodes)
@@ -936,7 +1021,9 @@ async def extract_from_markdown(
         rb = await _extract_rule_based(document_id, markdown)
         merged = _merge_payloads(rb, l3, l5)
         merged = _ensure_document_and_sources(document_id, merged)
-        return sanitize_graph_payload(_bridge_text_to_layers(document_id, markdown, merged))
+        merged = _bridge_text_to_layers(document_id, markdown, merged)
+        merged = _enrich_entity_props(merged)
+        return sanitize_graph_payload(merged)
 
     try:
         model = await get_llm_model()
@@ -950,7 +1037,9 @@ async def extract_from_markdown(
         )
         ef_schema = (
             '{"nodes":[{"id":"<id>","label":"Material|Process|Equipment|ChemicalReagent|StandardMetric|'
-            'ExperimentRun|TechStage|Measurement|Deviation|TrendVector|Formula|EnvironmentalCondition|Effect|Claim","props":{}}],'
+            'ExperimentRun|TechStage|Measurement|Deviation|TrendVector|Formula|EnvironmentalCondition|Effect|Claim",'
+            '"props":{"name_ru":"","name_en":"","name":"","chemical_formula":"","aliases":[],"description":"",'
+            '"quote":"","source_quote":"","extraction_confidence":0.8}}],'
             '"relationships":[{"type":"USES_MAT|OPERATES_PROC|IN_EQUIPMENT|CONSUMES_REAGENT|EVALUATED_AGAINST|'
             'CONDUCTED_AT|EXECUTES_STAGE|PRODUCED_MEASURE|TRIGGERED_DEV|HAS_TREND|COMPUTED_BY|SHOWED_EFFECT|UNDER_CONDITIONS|'
             'DATA_SOURCE_FOR|CONTEXT_FOR|DERIVED_FROM|ASSERTED_BY|ABOUT|HAS_OBJECT","from":"<id>","to":"<id>","props":{}}]}'
@@ -1012,7 +1101,9 @@ async def extract_from_markdown(
                 layer_hint="L1,L4",
                 rules=(
                     "Не выдумывай id. Используй детерминированные ключи: material:*, process:*, run:*, "
-                    "stage:*, measure:*; для каждого факта добавляй source quote в props при наличии."
+                    "stage:*, measure:*. Для Material заполни ВСЕ поля: name_ru, name_en, name, chemical_formula, "
+                    "aliases (массив синонимов), description (1–2 предложения), quote и source_quote (цитата из текста), "
+                    "extraction_confidence. Для каждого факта добавляй source_quote в props."
                 ),
             )
             try:
@@ -1051,6 +1142,7 @@ async def extract_from_markdown(
         merged = _merge_payloads(meta_payload, ef_payload, l6_payload, l3, l5)
         merged = _ensure_document_and_sources(document_id, merged)
         merged = _bridge_text_to_layers(document_id, markdown, merged)
+        merged = _enrich_entity_props(merged)
         return sanitize_graph_payload(merged)
     except ExtractionCancelled:
         raise
@@ -1068,4 +1160,6 @@ async def extract_from_markdown(
         rb = await _extract_rule_based(document_id, markdown)
         merged = _merge_payloads(rb, l3, l5)
         merged = _ensure_document_and_sources(document_id, merged)
-        return sanitize_graph_payload(_bridge_text_to_layers(document_id, markdown, merged))
+        merged = _bridge_text_to_layers(document_id, markdown, merged)
+        merged = _enrich_entity_props(merged)
+        return sanitize_graph_payload(merged)

@@ -66,6 +66,11 @@ async def modes() -> ModesOut:
                 title="Recommendation mode",
                 description="Похожие кейсы, смежные решения, эксперты, команды, лаборатории и темы для изучения.",
             ),
+            ModeInfo(
+                id=AgentMode.anomaly,
+                title="Anomaly mode",
+                description="Обход L4-аномалий графа: HDBSCAN noise, соседи Neo4j, Qdrant, объяснение причин.",
+            ),
         ]
     )
 
@@ -116,6 +121,7 @@ async def run_agents(body: AgentRunRequest) -> AgentRunOut:
                 "issues": [],
                 "hypotheses": [],
                 "recommendations": [],
+                "anomalies": [],
                 "literature_review": {},
                 "evidence": [],
                 "trace": initial_state["trace"],
@@ -132,6 +138,7 @@ async def run_agents(body: AgentRunRequest) -> AgentRunOut:
                 "issues": [],
                 "hypotheses": [],
                 "recommendations": [],
+                "anomalies": [],
                 "literature_review": {},
                 "evidence": [],
                 "trace": initial_state["trace"],

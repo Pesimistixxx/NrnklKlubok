@@ -60,12 +60,17 @@ class Settings(BaseSettings):
     )
     default_llm_model: str = Field(default="yandexgpt", alias="DEFAULT_LLM_MODEL")
     max_upload_bytes: int = Field(default=52_428_800, alias="MAX_UPLOAD_BYTES")  # 50 MiB
-    auto_extract_after_ingest: bool = Field(default=False, alias="AUTO_EXTRACT_AFTER_INGEST")
+    auto_extract_after_ingest: bool = Field(default=True, alias="AUTO_EXTRACT_AFTER_INGEST")
     llm_concurrency: int = Field(default=3, alias="LLM_CONCURRENCY")
     llm_cache_enabled: bool = Field(default=True, alias="LLM_CACHE_ENABLED")
     llm_cache_embeddings: bool = Field(default=True, alias="LLM_CACHE_EMBEDDINGS")
     agents_url: str = Field(default="http://agents:8010", alias="AGENTS_URL")
     agents_timeout_seconds: float = Field(default=30.0, alias="AGENTS_TIMEOUT_SECONDS")
+
+    # Graph traversal & L4 clustering
+    graph_traversal_max_hops: int = Field(default=2, alias="GRAPH_TRAVERSAL_MAX_HOPS")
+    hdbscan_min_cluster_size: int = Field(default=3, alias="HDBSCAN_MIN_CLUSTER_SIZE")
+    hdbscan_min_samples: int | None = Field(default=None, alias="HDBSCAN_MIN_SAMPLES")
 
     # helpers ------------------------------------------------------------
     def gpt_uri(self, model_name: str) -> str:
