@@ -1,6 +1,6 @@
 # Статус проекта MKG (актуально)
 
-> UI cache: `?v=43`. Обновляйте этот файл при смене этапа.
+> UI cache: `?v=68`. Обновляйте этот файл при смене этапа.
 
 ## Текущий этап: **MVP-2+**
 
@@ -16,7 +16,7 @@
 | Qdrant L4 (`mkg_claims`) | ✅ | Claim, Measurement… |
 | L4 HDBSCAN + anomalies API | ✅ | `GET /graph/anomalies` |
 | Chat dual search + traversal | ✅ | L3+L4, `GRAPH_TRAVERSAL_MAX_HOPS` |
-| Chat upload full / answers_only | ✅ | Modal при 📎 |
+| Chat upload full / answers_only | ✅ | Modal при кнопке прикрепления |
 | Trace / reasoning chain | ✅ | qdrant → graph → LLM / agent |
 | Sources + Save as MD | ✅ | Links to markdown API |
 | 8 ролей + anomaly_hunter | ✅ | `roles.py` |
@@ -70,7 +70,7 @@
 
 | Вкладка | Функции |
 |---------|---------|
-| Чат | Роль, AI-mode, 📎, trace, sources, MD export |
+| Чат | Роль, AI-mode, attach, trace, sources, MD export |
 | Документы | Pipeline chips L1–L6 stages, MD tabs, graph |
 | Qdrant | Index, search, points map, L4 |
 | Настройки | Models, clear DB |

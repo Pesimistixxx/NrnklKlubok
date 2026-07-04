@@ -22,7 +22,13 @@ log = logging.getLogger(__name__)
 from mkg_core import Neo4jClient, YandexLLMClient, get_settings
 from mkg_core.api_errors import format_api_error, is_fatal_api_error
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
-from mkg_core.ontology import L4_LABELS, sanitize_graph_payload
+from mkg_core.ontology import (
+    L4_LABELS,
+    normalize_entity_props,
+    sanitize_graph_payload,
+    short_name_from_full_name,
+    _build_l2_normalize_context,
+)
 from mkg_core.runtime_config import get_llm_model
 
 try:
@@ -600,14 +606,27 @@ def _payload_from_meta_object(document_id: str, raw: dict[str, Any]) -> GraphPay
             if not isinstance(name, str) or not name.strip():
                 continue
             exp_id = f"{document_id}:expert:{idx}"
+            full_name = name.strip()
             nodes.append(
                 {
                     "id": exp_id,
                     "label": "Expert",
-                    "props": {"id": exp_id, "full_name": name.strip()},
+                    "props": {
+                        "id": exp_id,
+                        "full_name": full_name,
+                        "name": short_name_from_full_name(full_name),
+                        "quote": full_name,
+                        "source_quote": full_name,
+                    },
                 }
             )
-            rels.append({"type": "AUTHORED", "from": exp_id, "to": document_id, "props": {"role": "author"}})
+            rel_props: dict[str, Any] = {"role": "author"}
+            org = raw.get("organization")
+            if isinstance(org, str) and org.strip():
+                rel_props["organization"] = org.strip()
+            rels.append({"type": "AUTHORED", "from": exp_id, "to": document_id, "props": rel_props})
+            if isinstance(org, str) and org.strip():
+                nodes[-1]["props"]["organization"] = org.strip()
     org = raw.get("organization")
     if isinstance(org, str) and org.strip():
         org_id = f"{document_id}:org:{_slug(org)}"
@@ -673,14 +692,17 @@ def _fill_name_aliases(label: str, props: dict[str, Any]) -> None:
 
 
 def _enrich_entity_props(payload: GraphPayload) -> GraphPayload:
-    """Дополняет пропущенные поля L1/L4 из уже извлечённых props."""
+    """Дополняет пропущенные поля L1/L2/L4 из уже извлечённых props."""
+    l2_ctx = _build_l2_normalize_context(list(payload.nodes), list(payload.relationships))
     nodes: list[dict[str, Any]] = []
     for node in payload.nodes:
         label = str(node.get("label") or "")
         props = dict(node.get("props") or {})
         _copy_quote_fields(props)
 
-        if label == "Material":
+        if label in _L2_LABELS:
+            normalize_entity_props(label, props, rel_context=l2_ctx.get(node_id))
+        elif label == "Material":
             _fill_name_aliases(label, props)
             if not props.get("description"):
                 desc_parts = []
@@ -1032,8 +1054,11 @@ async def extract_from_markdown(
         llm = YandexLLMClient.instance()
 
         l2_schema = (
-            '{"nodes":[{"id":"<id>","label":"Expert|Organization|Location|Timeline|Event|Facility","props":{}}],'
-            '"relationships":[{"type":"AUTHORED|BELONGS_TO|ISSUED_AT|ON_TIMELINE|HAS_EVENT","from":"<id>","to":"<id>","props":{}}]}'
+            '{"nodes":[{"id":"<id>","label":"Expert|Organization|Location|Timeline|Event|Facility",'
+            '"props":{"full_name":"","name":"","legal_name":"","city":"","country":"","organization":"","role":"",'
+            '"quote":"","source_quote":"","extraction_confidence":0.8}}],'
+            '"relationships":[{"type":"AUTHORED|BELONGS_TO|ISSUED_AT|ON_TIMELINE|HAS_EVENT",'
+            '"from":"<id>","to":"<id>","props":{"role":""}}]}'
         )
         ef_schema = (
             '{"nodes":[{"id":"<id>","label":"Material|Process|Equipment|ChemicalReagent|StandardMetric|'

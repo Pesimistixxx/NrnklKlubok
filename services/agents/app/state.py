@@ -9,6 +9,7 @@ AgentModeLiteral = Literal[
     "literature_review_mode",
     "recommendation_mode",
     "anomaly_mode",
+    "orchestrator_mode",
 ]
 
 
@@ -49,4 +50,31 @@ class MKGAgentState(TypedDict, total=False):
     analysis: dict[str, Any]
     mode_result: dict[str, Any]
     anomaly_seeds: list[dict[str, Any]]
+    walk_graph: dict[str, Any]
     final_response: dict[str, Any]
+
+
+class OrchestratorState(TypedDict, total=False):
+    start_ts: float
+    query: str
+    doc_ids: list[str]
+    user_role: str
+    limit: int
+    warnings: list[str]
+    trace: list[dict[str, Any]]
+    fatal_error: str | None
+
+    candidate_doc_ids: list[str]
+    planned_layers: list[str]
+    orchestrator_plan: dict[str, Any]
+    layer_results: list[dict[str, Any]]
+    accumulated_graph: dict[str, Any]
+    connection_gaps: dict[str, Any]
+    final_response: dict[str, Any]
+
+    # Flexible agent loop + JSON bus
+    agent_bus: list[dict[str, Any]]
+    round: int
+    max_rounds: int
+    layers_invoked: list[str]
+    orchestrator_next: str | None

@@ -328,6 +328,58 @@ def detect_ocr_model(file_name: str, content: bytes) -> tuple[str, str]:
     return "markdown", "отчёт/PDF → структурированный Markdown"
 
 
+def _ocr_quality() -> str:
+    return (get_settings().ocr_quality or "high").strip().lower()
+
+
+def _render_pdf_page_png(page: Any, *, zoom: float = 2.0) -> bytes:
+    """Рендер страницы PDF в PNG для OCR (выше разрешение → лучше качество)."""
+    matrix = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=matrix, alpha=False)
+    return pix.tobytes("png")
+
+
+async def _ocr_pdf_pages(
+    client: httpx.AsyncClient,
+    content: bytes,
+    *,
+    model: str,
+    zoom: float = 2.0,
+) -> str:
+    """Постраничный OCR PDF через рендер в PNG + sync recognizeText."""
+    if fitz is None:
+        return await _ocr_async(client, content, "application/pdf", model=model)
+
+    parts: list[str] = []
+    try:
+        with fitz.open(stream=content, filetype="pdf") as doc:
+            for page_idx, page in enumerate(doc):
+                img = _render_pdf_page_png(page, zoom=zoom)
+                page_text = await _ocr_sync(client, img, "image", model=model)
+                if page_text.strip():
+                    parts.append(page_text.strip())
+    except Exception as exc:
+        log_event("ocr_pdf_pages", error=str(exc))
+        return await _ocr_async(client, content, "application/pdf", model=model)
+
+    if not parts:
+        return await _ocr_async(client, content, "application/pdf", model=model)
+    return "\n\n".join(parts)
+
+
+def _needs_page_ocr(file_name: str, content: bytes) -> bool:
+    """Скан/PDF без текстового слоя — лучше постраничный OCR."""
+    ext = Path(file_name).suffix.lower()
+    if ext != ".pdf":
+        return False
+    sample = extract_pdf_local(content)[:8000]
+    if not sample.strip():
+        return True
+    # Мало текста на страницу — вероятно скан со встроенным шумом
+    pages = max(pdf_page_count(content), 1)
+    return len(sample.strip()) / pages < 120
+
+
 async def ocr_file(file_name: str, content: bytes) -> str:
     """Извлечь текст/Markdown из PDF или изображения."""
     from mkg_core.runtime_config import get_ocr_model
@@ -340,6 +392,11 @@ async def ocr_file(file_name: str, content: bytes) -> str:
         ocr_reason = f"настройки → {configured}"
     else:
         ocr_model, ocr_reason = detect_ocr_model(file_name, content)
+    quality = _ocr_quality()
+    if quality == "high" and Path(file_name).suffix.lower() == ".pdf":
+        if _needs_page_ocr(file_name, content) and ocr_model not in ("table", "handwritten"):
+            ocr_model = "markdown"
+            ocr_reason = f"{ocr_reason} · high → markdown постранично"
     settings = get_settings()
     log_event(
         "ocr_start",
@@ -350,6 +407,7 @@ async def ocr_file(file_name: str, content: bytes) -> str:
             "mime": mime,
             "bytes": len(content),
             "auth": "Api-Key + x-folder-id",
+            "quality": quality,
         },
     )
 
@@ -363,8 +421,15 @@ async def ocr_file(file_name: str, content: bytes) -> str:
 
     async with httpx.AsyncClient(timeout=180.0) as client:
         try:
-            if ext == ".pdf" and pdf_page_count(content) > 1:
-                text = await _ocr_async(client, content, "application/pdf", model=ocr_model)
+            if ext == ".pdf":
+                pages = pdf_page_count(content)
+                use_page_ocr = quality == "high" and (pages > 1 or _needs_page_ocr(file_name, content))
+                if use_page_ocr:
+                    text = await _ocr_pdf_pages(client, content, model=ocr_model)
+                elif pages > 1:
+                    text = await _ocr_async(client, content, "application/pdf", model=ocr_model)
+                else:
+                    text = await _ocr_sync(client, content, mime, model=ocr_model)
             else:
                 text = await _ocr_sync(client, content, mime, model=ocr_model)
             if text.strip():

@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from mkg_core.text_sanitize import sanitize_user_facing_text
+
 from app.client import GatewayClient
 from app.config import AgentSettings
 from app.llm import AgentLLM
 from app.state import MKGAgentState
-from app.utils import add_trace, add_warning, compact_text, normalize_dict, normalize_list, remaining_seconds, text_from_props
+from app.utils import add_trace, add_warning, compact_text, format_history_context, normalize_dict, normalize_list, remaining_seconds, text_from_props
 
 _VALID_MODES = {
     "audit_mode",
@@ -33,6 +35,13 @@ _PLANNER_PROMPT = """
 Если mode уже задан во входе, сохрани его. Не выдумывай факты.
 """.strip()
 
+_ANSWER_STYLE = (
+    "Текст summary для пользователя — связный русский язык без document_id, neo4j_node_id, node_id, "
+    "кодов L1–L6 и внутреннего жаргона (Qdrant, Neo4j, LangGraph). "
+    "Опирайся на evidence естественно. "
+    "Если ответ неполный — в конце summary задай один уместный уточняющий вопрос или предложи следующий шаг."
+)
+
 _ANALYZER_PROMPT = """
 Ты Evidence Analyzer Agent. Анализируешь только переданные evidence из графа.
 Верни только JSON object:
@@ -57,15 +66,16 @@ _ANALYZER_PROMPT = """
   "related_labs": [],
   "warnings": []
 }
-Для каждого элемента указывай doc_id/node_id, если он есть во входе. Если данных мало, явно добавь knowledge_gaps.
+Для каждого элемента указывай doc_id/node_id, если он есть во входе (это внутренние поля JSON, не для пользователя). Если данных мало, явно добавь knowledge_gaps.
 Если evidence недостаточно для ответа, поставь needs_more_evidence=true и дай refined_search_query.
 """.strip()
 
-_BUILDER_PROMPT = """
+_BUILDER_PROMPT = (
+    """
 Ты Report Builder Agent. Сформируй результат строго для выбранного режима.
 Верни только JSON object:
 {
-  "summary": "короткий вывод на русском",
+  "summary": "развёрнутый вывод на русском для пользователя",
   "issues": [],
   "hypotheses": [],
   "recommendations": [],
@@ -73,6 +83,9 @@ _BUILDER_PROMPT = """
   "literature_review": {},
   "warnings": []
 }
+"""
+    + _ANSWER_STYLE
+    + """
 Для audit_mode заполни issues.
 Для hypothesis_mode заполни hypotheses: hypothesis, basis, supporting_evidence, contradictions, novelty, feasibility, confidence, next_experiments, rank.
 Для anomaly_mode заполни anomalies: node_id, doc_id, label, text, anomaly_reason, explanation, severity, related_neighbors, suggested_action.
@@ -80,7 +93,8 @@ _BUILDER_PROMPT = """
 Для recommendation_mode заполни recommendations: similar_cases, adjacent_solutions, related_experts, related_labs, deep_dive_topics, reason.
 Не добавляй утверждения без опоры на evidence; если данных мало, напиши это в summary и warnings.
 Если во входе есть builder_feedback, исправь результат с учётом замечаний Critic Agent.
-""".strip()
+"""
+).strip()
 
 
 def _fatal(state: MKGAgentState, node: str, message: str) -> MKGAgentState:
@@ -122,6 +136,7 @@ async def llm_scope_planner(
         "query": new_state.get("query"),
         "requested_mode": new_state.get("requested_mode"),
         "user_role": new_state.get("user_role"),
+        "conversation_history": format_history_context(new_state.get("history") or []),
     }
     try:
         scope = await llm.generate_json(
@@ -282,6 +297,73 @@ async def retrieval_search(
         query=search_query,
         doc_count=len(doc_ids),
         hit_count=len(new_state["search_hits"]),
+    )
+    return new_state
+
+
+async def sequential_graph_walk(state: MKGAgentState, settings: AgentSettings) -> MKGAgentState:
+    """Последовательный обход графа для sidebar — только пройденные связи."""
+    if _should_stop(state):
+        return state
+    new_state = dict(state)
+    from mkg_core.graph_traversal import discover_new_connections, walk_for_chat
+
+    walk_hits: list[dict[str, Any]] = []
+    for hit in new_state.get("search_hits") or []:
+        doc_id = str(hit.get("doc_id") or hit.get("document_id") or "")
+        node_id = str(hit.get("node_id") or "")
+        if not node_id:
+            continue
+        walk_hits.append(
+            {
+                "document_id": doc_id,
+                "doc_id": doc_id,
+                "node_id": node_id,
+                "neo4j_node_id": node_id,
+                "score": hit.get("score"),
+                "label": hit.get("label"),
+                "text": hit.get("text"),
+            }
+        )
+    doc_ids = list(new_state.get("candidate_doc_ids") or new_state.get("doc_ids") or [])
+    query = str(new_state.get("query") or "")
+    try:
+        walked = await walk_for_chat(
+            walk_hits,
+            query,
+            document_ids=doc_ids or None,
+            max_nodes=min(settings.max_context_nodes + 6, 20),
+        )
+        if not walk_hits and walked.get("seed_hits"):
+            walk_hits = list(walked.get("seed_hits") or [])
+            if not new_state.get("search_hits"):
+                new_state["search_hits"] = walk_hits
+        if walked.get("nodes"):
+            walked = await discover_new_connections(
+                walked,
+                query,
+                document_ids=doc_ids or None,
+                max_paths=8,
+            )
+    except Exception as exc:
+        add_warning(new_state, f"sequential graph walk: {exc}")
+        walked = {"nodes": [], "relationships": [], "graph_walk_steps": [], "walk_path": []}
+    new_state["walk_graph"] = walked
+    traverse_count = sum(
+        1 for s in (walked.get("graph_walk_steps") or []) if s.get("action") == "traverse"
+    )
+    discovery_counts = walked.get("discovery_counts") or {}
+    add_trace(
+        new_state,
+        "graph_sequential_walk",
+        node_count=len(walked.get("nodes") or []),
+        rel_count=len(walked.get("relationships") or []),
+        walk_step_count=traverse_count,
+        source=walked.get("source"),
+        fallback=bool(walked.get("fallback")),
+        cross_layer=discovery_counts.get("cross_layer", 0),
+        cross_document=discovery_counts.get("cross_document", 0),
+        new_connections=discovery_counts.get("total", 0),
     )
     return new_state
 
@@ -949,6 +1031,18 @@ async def final_report_builder(state: MKGAgentState) -> MKGAgentState:
             summary = "Нет достаточных данных из графа для аналитического ответа."
         else:
             summary = "Анализ завершён частично."
+    summary = sanitize_user_facing_text(str(summary or "").strip())
+    walked = normalize_dict(new_state.get("walk_graph"))
+    graph_payload: dict[str, Any] | None = None
+    if walked.get("nodes") is not None:
+        graph_payload = {
+            "nodes": walked.get("nodes") or [],
+            "relationships": walked.get("relationships") or [],
+            "seed_count": int(walked.get("seed_count") or 0),
+            "document_ids": list(walked.get("document_ids") or []),
+            "graph_walk_steps": list(walked.get("graph_walk_steps") or []),
+            "walk_path": list(walked.get("walk_path") or []),
+        }
     new_state["final_response"] = {
         "mode": new_state.get("mode") or new_state.get("requested_mode") or "hypothesis_mode",
         "query": new_state.get("query", ""),
@@ -959,6 +1053,7 @@ async def final_report_builder(state: MKGAgentState) -> MKGAgentState:
         "anomalies": normalize_list(result.get("anomalies")) or normalize_list(analysis.get("anomalies")),
         "literature_review": normalize_dict(result.get("literature_review")),
         "evidence": normalize_list(new_state.get("evidence")),
+        "graph": graph_payload,
         "trace": normalize_list(new_state.get("trace")),
         "warnings": warnings,
     }

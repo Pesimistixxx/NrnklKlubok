@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=44" />
+  <link rel="stylesheet" href="/static/css/app.css?v=83" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
@@ -13,6 +13,7 @@
         <button class="page-nav-link active" data-page="chats" type="button">Чат</button>
         <button class="page-nav-link" data-page="docs" type="button">Документы</button>
         <button class="page-nav-link" data-page="qdrant" type="button">Qdrant</button>
+        <button class="page-nav-link" data-page="guide" type="button">Документация</button>
         <button class="page-nav-link" data-page="settings" type="button">Настройки</button>
       </nav>
 
@@ -26,11 +27,7 @@
             <div class="chat-role-header hidden" id="chatRoleHeader">
               <span class="user-role-badge" id="chatRoleBadge"></span>
               <span class="chat-role-capability muted" id="chatRoleCapability"></span>
-            </div>
-            <div class="chat-toolbar-row">
-              <span class="chat-toolbar-label">AI</span>
-              <div class="chip-row" id="chatAgentModes"></div>
-              <span class="chat-toolbar-hint muted" id="chatAgentStatus"></span>
+              <a href="#" class="chat-agents-doc-link muted small" id="chatAgentsDocLink">Как устроены агенты</a>
             </div>
             <p class="chat-notice hidden" id="chatIdentityStatus"></p>
             <details class="role-prompt-panel hidden" id="rolePromptPanel">
@@ -60,29 +57,41 @@
             <section class="chats-main">
               <h2 class="chats-main-title" id="chatActiveTitle">Диалог</h2>
               <div class="chats-messages" id="chatMessages">
-                <p class="chat-empty-hint">Выберите роль и напишите сообщение — AI ответит в режиме «Диалог».</p>
+                <p class="chat-empty-hint">Выберите роль и напишите сообщение — агенты L1–L6 ответят автоматически.</p>
               </div>
               <div class="chat-typing hidden" id="chatTyping" aria-live="polite">
-                <div class="agent-trace-live" id="chatTraceLive"></div>
-                <span class="chat-typing-dots"><i></i><i></i><i></i></span>
-                MKG AI печатает…
+                <div class="chat-agent-viz">
+                  <div class="chat-agent-viz-head">Работа агентов</div>
+                  <div class="agent-trace-live" id="chatTraceLive"></div>
+                  <div class="chat-agent-questions" id="chatAgentQuestions" aria-live="polite"></div>
+                </div>
+                <div class="chat-typing-footer">
+                  <span class="chat-typing-dots"><i></i><i></i><i></i></span>
+                  <span>MKG AI печатает…</span>
+                </div>
               </div>
               <p class="chat-upload-error hidden" id="chatUploadError" role="alert"></p>
+              <div class="chat-pending-attachments hidden" id="chatPendingAttachments" aria-live="polite"></div>
               <div class="chats-compose" id="chatsCompose">
                 <input type="file" id="chatFileInput" class="visually-hidden" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp,.tif,.tiff" />
-                <button type="button" class="btn btn-ghost btn-icon chat-attach-btn" id="chatAttachBtn" title="Прикрепить файл или фото" aria-label="Прикрепить файл">📎</button>
+                <button type="button" class="btn btn-ghost btn-icon chat-attach-btn" id="chatAttachBtn" title="Прикрепить файл или фото" aria-label="Прикрепить файл"><svg class="icon-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
                 <textarea id="chatMessageInput" rows="2" placeholder="Вопрос или сообщение…"></textarea>
                 <button class="btn btn-primary" id="chatSendBtn" type="button">Отправить</button>
               </div>
-              <p class="muted small chat-upload-hint" id="chatUploadHint">Файл в чате → OCR → MD → граф → Neo4j → Qdrant → L4 HDBSCAN · источники и «Сохранить как MD»</p>
+              <p class="muted small chat-upload-hint" id="chatUploadHint">Файл в чате → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация · источники и «Сохранить как MD»</p>
             </section>
+            <div class="chat-graph-split-handle" id="chatGraphResizeHandle" title="Потяните для изменения ширины графа" aria-hidden="true"></div>
             <aside class="chat-graph-panel" id="chatGraphPanel">
               <header class="chat-graph-head">
                 <div class="chat-graph-head-text">
                   <h3>Граф контекста</h3>
                   <span class="chat-graph-stats muted" id="chatGraphStats">0 узлов</span>
                 </div>
-                <button type="button" class="btn-icon chat-graph-toggle" id="chatGraphToggle" title="Свернуть панель" aria-label="Свернуть">›</button>
+                <div class="chat-graph-head-actions">
+                  <button type="button" class="btn-icon chat-graph-replay" id="chatGraphReplay" title="Пройти по графу заново" aria-label="Пройти по графу заново" disabled>↻</button>
+                  <button type="button" class="btn-icon chat-graph-expand" id="chatGraphExpand" title="Развернуть граф" aria-label="Развернуть">⛶</button>
+                  <button type="button" class="btn-icon chat-graph-toggle" id="chatGraphToggle" title="Свернуть панель" aria-label="Свернуть">›</button>
+                </div>
               </header>
               <div class="chat-graph-building hidden" id="chatGraphBuilding">
                 <div class="chat-graph-pulse"></div>
@@ -91,7 +100,7 @@
               <div class="chat-graph-canvas-wrap">
                 <div class="chat-graph-canvas" id="chatGraphCanvas"></div>
                 <div class="chat-graph-empty" id="chatGraphEmpty">
-                  <p class="muted small">Нет данных MKG для этого запроса.</p>
+                  <p class="muted small" id="chatGraphEmptyMsg">Нет данных MKG для этого запроса.</p>
                   <p class="muted small">Загрузите документы во вкладке «Документы» — пайплайн до графа и Qdrant запустится автоматически.</p>
                 </div>
               </div>
@@ -103,28 +112,34 @@
       <section class="page page-docs hidden" id="pageDocs">
         <div class="docs-layout">
           <aside class="docs-sidebar">
-            <div class="upload-panel upload-panel-compact" id="homeTabUpload">
-              <h2>Загрузить документ</h2>
-              <p class="muted small upload-pipeline-hint">Upload → OCR → MD → граф → Neo4j → Qdrant → L4 HDBSCAN — автоматически после загрузки</p>
+            <div class="upload-panel upload-panel-prominent" id="homeTabUpload">
+              <div class="upload-panel-head">
+                <span class="upload-panel-icon" aria-hidden="true"><svg class="icon-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>
+                <h2>Загрузить документ</h2>
+              </div>
+              <p class="muted small upload-pipeline-hint">Upload → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация — автоматически после загрузки</p>
               <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
               <input type="hidden" id="classification" value="открытый" />
-              <div class="drop drop-compact" id="drop" role="button" tabindex="0">
-                <div id="dropText">Перетащите файл или нажмите</div>
+              <div class="drop" id="drop" role="button" tabindex="0" aria-label="Зона загрузки файлов">
+                <div id="dropText">Перетащите файл сюда</div>
+                <div class="drop-hint muted small">или нажмите для выбора</div>
               </div>
-              <div class="upload-actions upload-actions-compact">
+              <div class="upload-actions">
                 <button class="btn btn-ghost btn-small" id="pickBtn" type="button">Выбрать</button>
                 <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled>Загрузить и обработать</button>
               </div>
               <p class="muted small" id="formatsHint">…</p>
               <div class="error-box" id="uploadError"></div>
             </div>
-            <div class="docs-sidebar-head">
-              <h2>Документы</h2>
-              <input type="search" class="doc-list-filter" id="docListFilter" placeholder="Фильтр по имени…" autocomplete="off" />
-            </div>
-            <div class="docs-page-list doc-nav" id="docs"><div class="muted">Загрузка…</div></div>
-            <div class="docs-sidebar-footer">
-              <button class="btn btn-ghost btn-small" id="viewAllGraphBtn" type="button">Полный граф всех документов</button>
+            <div class="docs-sidebar-scroll">
+              <div class="docs-sidebar-head">
+                <h2>Документы</h2>
+                <input type="search" class="doc-list-filter" id="docListFilter" placeholder="Фильтр по имени…" autocomplete="off" />
+              </div>
+              <div class="docs-page-list doc-nav" id="docs"><div class="muted">Загрузка…</div></div>
+              <div class="docs-sidebar-footer">
+                <button class="btn btn-ghost btn-small" id="viewAllGraphBtn" type="button">Полный граф всех документов</button>
+              </div>
             </div>
           </aside>
         </div>
@@ -160,12 +175,14 @@
             <div class="md-panel-actions">
               <button type="button" class="btn btn-ghost btn-small" id="docMdDownloadBtn" title="Скачать текущий вид как .md">Скачать .md</button>
               <div class="md-view-toggle">
-                <button type="button" class="view-btn active" id="mdViewRenderBtn">Без разметки</button>
-                <button type="button" class="view-btn" id="mdViewSourceBtn">С разметкой</button>
+                <button type="button" class="view-btn active" id="mdViewCleanBtn">Очищенный</button>
+                <button type="button" class="view-btn" id="mdViewRawBtn">Сырой OCR</button>
+                <button type="button" class="view-btn" id="mdViewMarkedBtn">С разметкой</button>
               </div>
             </div>
           </div>
           <div class="preview md-panel doc-md-panel md-render-view empty" id="previewMdRender">—</div>
+          <div class="preview md-panel doc-md-panel md-raw-view hidden empty" id="previewMdRaw">—</div>
           <div class="preview md-panel doc-md-panel md-source-view hidden empty" id="previewMdSource">—</div>
         </div>
         <div class="doc-page-panel hidden" id="docLogsPanel">
@@ -180,6 +197,9 @@
             <h2 class="doc-work-title" id="docWorkTitle">Документ</h2>
             <span class="badge s-uploaded" id="docWorkBadge">—</span>
             <span class="muted doc-work-meta" id="docWorkMeta"></span>
+            <div class="doc-upload-fallback hidden" id="docUploadFallback">
+              <button class="btn btn-primary btn-small btn-with-icon" id="docUploadFallbackBtn" type="button" title="Загрузить документ"><svg class="icon-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span>Загрузить</span></button>
+            </div>
           </div>
           <nav class="doc-work-tabs" role="tablist" aria-label="Просмотр документа">
             <button type="button" class="doc-work-tab active" data-tab="journey" id="docWorkTabJourney">Пайплайн</button>
@@ -189,7 +209,7 @@
         </header>
         <div class="page-head graph-page-head" id="graphPageHead">
           <h1 id="graphPageTitle">Граф знаний</h1>
-          <p class="muted page-lead" id="graphPageLead">Компактный режим. Перетаскивайте узлы; панель сверху, тяните нижний край графа для изменения высоты.</p>
+          <p class="muted page-lead" id="graphPageLead">Компактный режим. Перетаскивайте узлы; тяните нижний край графа или разделитель списка узлов для изменения высоты.</p>
         </div>
         <div class="doc-work-body">
           <div class="doc-work-pane active" id="docJourneyPane" data-pane="journey">
@@ -199,21 +219,28 @@
           </div>
           <div class="doc-work-pane" id="docMdPane" data-pane="md">
             <div class="md-panel-head md-inline-head">
-              <p class="muted small md-inline-hint">После OCR: «Без разметки» — рендер текста; «С разметкой» — L3-маркеры и узлы L1–L6 после extraction. Скачать текущий вид — «Скачать .md».</p>
+              <p class="muted small md-inline-hint">После OCR: «Очищенный» — нормализованный текст; «Сырой OCR» — вывод распознавания; «С разметкой» — L3-маркеры после extraction.</p>
               <div class="md-panel-actions">
                 <button type="button" class="btn btn-ghost btn-small" id="docMdInlineDownloadBtn" title="Скачать текущий вид как .md">Скачать .md</button>
                 <div class="md-view-toggle">
-                  <button type="button" class="view-btn active" id="mdInlineCleanBtn">Без разметки</button>
+                  <button type="button" class="view-btn active" id="mdInlineCleanBtn">Очищенный</button>
+                  <button type="button" class="view-btn" id="mdInlineRawBtn">Сырой OCR</button>
                   <button type="button" class="view-btn" id="mdInlineMarkedBtn">С разметкой</button>
                 </div>
               </div>
             </div>
             <div class="preview md-panel doc-md-inline md-clean-view" id="docMdInlineClean">—</div>
+            <div class="preview md-panel doc-md-inline md-raw-view hidden" id="docMdInlineRaw">—</div>
             <div class="preview md-panel doc-md-inline md-marked-view hidden" id="docMdInlineMarked">—</div>
           </div>
           <div class="doc-work-pane" id="docGraphPane" data-pane="graph">
         <div class="graphs-empty hidden" id="graphsEmpty">
-          <p class="muted">Нет графа. Выберите документ во вкладке «Документы» и нажмите «Построить граф».</p>
+          <div class="graph-empty-cta" id="graphEmptyCta">
+            <p class="graph-empty-title" id="graphEmptyTitle">Граф ещё не построен</p>
+            <p class="muted graph-empty-desc" id="graphEmptyDesc">Выберите документ слева или загрузите файл — пайплайн запустится автоматически.</p>
+            <ul class="graph-empty-steps" id="graphEmptySteps"></ul>
+            <button type="button" class="btn btn-primary btn-small hidden" id="graphEmptyActionBtn">Построить полный граф</button>
+          </div>
         </div>
         <div class="graphs-workspace hidden" id="graphsWorkspace">
           <div class="live-extract hidden" id="liveExtract">
@@ -244,21 +271,25 @@
                     </div>
                   </div>
                 </div>
+                <div class="graph-toolbar-legend hidden" id="graphClusterLegend" aria-label="L4-кластеры на графе"></div>
                 <div class="graph-toolbar-filters" id="graphToolbarFilters">
                   <div class="layer-filters-scroll">
                     <div class="layer-filters" id="layerFilters"></div>
                   </div>
                   <div class="graph-toolbar-filter-actions">
-                    <button type="button" class="layer-chip cross-layer-toggle" id="crossLayerToggle">Межслойные</button>
+                    <button type="button" class="layer-chip cross-layer-toggle" id="crossLayerToggle" title="Подсветить межслойные связи">Межслойные</button>
+                    <button type="button" class="layer-chip connection-formation-toggle" id="connectionFormationBtn" title="Пошаговое появление слоёв L1→L6">Как формируются связи</button>
                     <button type="button" class="layer-chip" id="toggleNodeListBtn">Список узлов</button>
                   </div>
+                  <div class="connection-formation-timeline hidden" id="connectionFormationTimeline" aria-live="polite"></div>
                 </div>
               </div>
             </div>
             <div class="graph-canvas-wrap" id="graphCanvasWrap">
               <div id="graphCanvas" class="graph-canvas"></div>
-              <div class="graph-resize-handle" id="graphResizeHandle" title="Потяните для изменения высоты"></div>
+              <div class="graph-resize-handle" id="graphResizeHandle" title="Потяните для изменения высоты графа"></div>
             </div>
+            <div class="graph-node-panel-resize-handle hidden" id="graphNodePanelResizeHandle" title="Потяните для изменения высоты списка узлов"></div>
             <div class="graph-map-view graph-node-list-hidden" id="graphMapView">
               <div class="graph-node-list" id="graphNodeList"></div>
             </div>
@@ -275,16 +306,12 @@
       <section class="page page-qdrant hidden" id="pageQdrant">
         <div class="page-head">
           <h1>Qdrant</h1>
-          <p class="muted page-lead">L3: эмбеддинг-поиск (mkg_chunks). L4: HDBSCAN-кластеры (mkg_claims). AI-поиск использует оба фактора.</p>
-        </div>
-        <div class="qdrant-doc-picker">
-          <label class="small" for="qdrantDocFilter">Документ</label>
-          <select id="qdrantDocFilter"></select>
+          <p class="muted page-lead">L3: эмбеддинг-поиск (mkg_chunks, без кластеров). L4: глобальные HDBSCAN-кластеры (mkg_claims). AI-поиск использует оба слоя.</p>
         </div>
         <section class="l3-section qdrant-search-section">
           <h3>Семантический поиск</h3>
           <form class="search-form" id="qdrantSearchForm">
-            <input type="search" id="qdrantSearchQuery" placeholder="Запрос по документу…" autocomplete="off" />
+            <input type="search" id="qdrantSearchQuery" placeholder="Запрос по всему корпусу…" autocomplete="off" />
             <button class="btn btn-primary btn-small" type="submit">Найти</button>
           </form>
           <p class="muted search-meta" id="qdrantSearchMeta"></p>
@@ -298,20 +325,36 @@
             <div class="l3-actions">
               <button class="btn btn-primary btn-small" id="l3IndexBtn" type="button">Индекс L3 (Qdrant)</button>
               <button class="btn btn-ghost btn-small" id="l3IndexAllBtn" type="button">Все документы</button>
-              <button class="btn btn-ghost btn-small" id="l4ClusterBtn" type="button">HDBSCAN L4</button>
+              <button class="btn btn-ghost btn-small" id="l4ClusterBtn" type="button">Глобальная кластеризация L4</button>
             </div>
             <div class="qdrant-index-log" id="qdrantIndexLog"></div>
           </section>
-          <section class="l3-section">
-            <h3>Карта L4-кластеров <span class="muted" id="qdrantClusterCount">(0)</span></h3>
-            <div class="qdrant-cluster-map" id="qdrantClusterMap">
-              <p class="muted">Проиндексируйте L3/L4 и запустите HDBSCAN — кластеры L4 появятся здесь.</p>
+          <section class="l3-section l3-viz-section">
+            <h3>Карта кластеров L4 <span class="muted" id="qdrantClusterCount">(0)</span></h3>
+            <p class="muted small qdrant-viz-meta" id="qdrantVizMeta">2D PCA · только L4 (mkg_claims) · HDBSCAN-области · клик — описание и связи</p>
+            <p class="muted small qdrant-l3-note">L3 (mkg_chunks) индексируется отдельно — используется в поиске выше, не на этой карте.</p>
+            <div class="qdrant-viz-legend" id="qdrantVizLegend"></div>
+            <div class="qdrant-viz-wrap" id="qdrantClusterMap">
+              <canvas id="qdrantVizCanvas" aria-label="Карта кластеров L4"></canvas>
+              <div class="qdrant-viz-empty-state hidden" id="qdrantVizEmptyState"></div>
+              <p class="muted qdrant-viz-placeholder" id="qdrantVizPlaceholder">Загрузка карты…</p>
             </div>
+            <div class="qdrant-cluster-cards" id="qdrantClusterCards"></div>
+            <div class="qdrant-toast hidden" id="qdrantToast" role="status" aria-live="polite"></div>
+            <details class="qdrant-anomaly-help">
+              <summary>Что такое аномалии?</summary>
+              <div class="qdrant-anomaly-help-body muted small">
+                <p><strong>Аномалии</strong> — L4-факты из <code>mkg_claims</code>, которые HDBSCAN не включил ни в плотный кластер (<code>cluster_id = -1</code>, <code>is_anomaly = true</code>). На карте — <strong>красные точки</strong>; клик открывает панель справа: текст слева, связи Neo4j справа.</p>
+                <p><strong>Кластеры</strong> — цветные области и карточки ниже. Клик по области или карточке — описание темы и связи между фактами кластера.</p>
+                <p>Если все точки красные (0 кластеров): мало L4-данных или эмбеддинги слишком разные. Уменьшите <code>HDBSCAN_MIN_CLUSTER_SIZE</code> в <code>.env</code>, перезапустите gateway и нажмите «Перекластеризовать».</p>
+                <p>Подробнее: <a href="/static/docs/24_layer_agents.md#l4-аномалии-hdbscan-и-anomaly_mode" target="_blank" rel="noopener">L4-аномалии и anomaly_mode</a> · <a href="/static/docs/21_pipeline_and_layers.md" target="_blank" rel="noopener">пайплайн L4</a></p>
+              </div>
+            </details>
           </section>
           <section class="l3-section">
-            <h3>Точки документа <span class="muted" id="qdrantPointsCount">(0)</span></h3>
+            <h3><span id="qdrantPointsTitle">Точки корпуса</span> <span class="muted" id="qdrantPointsCount">(0)</span></h3>
             <div class="qdrant-points-list" id="qdrantPointsList">
-              <p class="muted">Проиндексируйте документ — точки появятся здесь.</p>
+              <p class="muted">Проиндексируйте документы — точки появятся здесь.</p>
             </div>
           </section>
           <details class="settings-advanced qdrant-advanced">
@@ -320,6 +363,24 @@
             <div class="diag-list" id="diagList"></div>
             <button class="btn btn-danger btn-small" id="clearDbBtn" type="button">Очистить базу</button>
           </details>
+        </div>
+      </section>
+
+      <section class="page page-guide hidden" id="pageGuide">
+        <div class="doc-guide-shell">
+          <header class="doc-guide-header">
+            <h1 class="doc-guide-title">Документация MKG</h1>
+            <p class="muted doc-guide-lead">Архитектура пайплайна, агентов и ролей — в приложении, без внешних ссылок.</p>
+          </header>
+          <nav class="doc-section-tabs" id="docSectionTabs" role="tablist" aria-label="Разделы документации"></nav>
+          <article class="doc-content-panel md-render-view" id="guideContent" aria-live="polite">
+            <div class="doc-loading-skeleton" aria-busy="true" aria-label="Загрузка документации">
+              <div class="doc-skeleton-bar wide"></div>
+              <div class="doc-skeleton-bar"></div>
+              <div class="doc-skeleton-bar medium"></div>
+              <div class="doc-skeleton-bar short"></div>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -363,7 +424,7 @@
 
     <aside class="detail-panel hidden" id="detailPanel">
       <div class="detail-head">
-        <h3>Узел</h3>
+        <h3 id="detailTitle">Узел</h3>
         <button class="btn-icon" id="closeDetailBtn" type="button" aria-label="Закрыть">×</button>
       </div>
       <div class="detail-body" id="detailBody"></div>
@@ -376,19 +437,42 @@
       <h3 id="chatUploadModalTitle">Как обработать файл?</h3>
       <p class="muted small" id="chatUploadModalFiles"></p>
       <div class="mkg-modal-actions">
-        <button type="button" class="btn btn-primary" id="chatUploadModeFull">Загрузить и обработать</button>
-        <button type="button" class="btn btn-ghost" id="chatUploadModeAnswers">Только для ответов</button>
+        <button type="button" class="btn btn-primary" id="chatUploadModeFull">Прикрепить · полный пайплайн</button>
+        <button type="button" class="btn btn-ghost" id="chatUploadModeAnswers">Прикрепить · только для ответов</button>
         <button type="button" class="btn btn-ghost btn-small" id="chatUploadModalCancel">Отмена</button>
       </div>
-      <p class="muted small mkg-modal-hint">Полный путь: OCR → MD → граф L1–L6 → Neo4j → Qdrant → L4 HDBSCAN. Лёгкий: OCR → MD → Qdrant для поиска в чате (без графа и L4).</p>
+      <p class="muted small mkg-modal-hint">Файл будет загружен и отправлен вместе с текстом при нажатии «Отправить». Полный путь: OCR → MD → граф → Neo4j → Qdrant. Лёгкий: OCR → MD → Qdrant (без графа).</p>
     </div>
   </div>
 
+  <div class="graph-fullscreen-modal hidden" id="graphFullscreenModal" role="dialog" aria-modal="true" aria-label="Граф на весь экран">
+    <div class="graph-fullscreen-backdrop" id="graphFullscreenBackdrop"></div>
+    <div class="graph-fullscreen-shell">
+      <header class="graph-fullscreen-head">
+        <div>
+          <h2>Граф MKG</h2>
+          <span class="muted small" id="graphFullscreenStats">0 узлов</span>
+        </div>
+        <button type="button" class="btn-icon graph-fullscreen-close" id="graphFullscreenClose" title="Закрыть" aria-label="Закрыть">✕</button>
+      </header>
+      <div class="graph-fullscreen-body">
+        <aside class="graph-fullscreen-trace" id="graphFullscreenTrace">
+          <h3>Цепочка рассуждений</h3>
+          <div class="graph-fullscreen-trace-body" id="graphFullscreenTraceBody"></div>
+        </aside>
+        <div class="graph-fullscreen-canvas" id="graphFullscreenCanvas"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/graph-mini.js?v=44"></script>
-  <script src="/static/js/app.js?v=44"></script>
-  <script src="/static/js/chats.js?v=44"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+  <script src="/static/js/icons.js?v=83"></script>
+  <script src="/static/js/graph-mini.js?v=83"></script>
+  <script src="/static/js/app.js?v=83"></script>
+  <script src="/static/js/chats.js?v=83"></script>
 </body>
 </html>

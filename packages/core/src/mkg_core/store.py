@@ -21,9 +21,11 @@ class DocumentRepository:
         self.base = Path(base_dir or settings.storage_dir)
         self.files = self.base / "files"
         self.md = self.base / "md"
+        self.md_raw = self.base / "md_raw"
         self.graph = self.base / "graph"
         self.files.mkdir(parents=True, exist_ok=True)
         self.md.mkdir(parents=True, exist_ok=True)
+        self.md_raw.mkdir(parents=True, exist_ok=True)
         self.graph.mkdir(parents=True, exist_ok=True)
         self._registry = self.base / "registry.json"
         self._lock = threading.Lock()
@@ -123,8 +125,14 @@ class DocumentRepository:
     def marked_markdown_relative_path(self, doc_id: str) -> str:
         return f"md_marked/{self.markdown_filename(doc_id)}"
 
+    def raw_markdown_relative_path(self, doc_id: str) -> str:
+        return f"md_raw/{self.markdown_filename(doc_id)}"
+
     def save_markdown(self, doc_id: str, markdown: str) -> None:
         (self.md / self.markdown_filename(doc_id)).write_text(markdown, encoding="utf-8")
+
+    def save_raw_markdown(self, doc_id: str, markdown: str) -> None:
+        (self.md_raw / self.markdown_filename(doc_id)).write_text(markdown, encoding="utf-8")
 
     def save_marked_markdown(self, doc_id: str, markdown: str) -> None:
         marked_dir = self.base / "md_marked"
@@ -137,6 +145,10 @@ class DocumentRepository:
 
     def read_markdown(self, doc_id: str) -> str | None:
         path = self.md / self.markdown_filename(doc_id)
+        return path.read_text(encoding="utf-8") if path.exists() else None
+
+    def read_raw_markdown(self, doc_id: str) -> str | None:
+        path = self.md_raw / self.markdown_filename(doc_id)
         return path.read_text(encoding="utf-8") if path.exists() else None
 
     def read_source(self, doc_id: str) -> bytes | None:
@@ -158,7 +170,7 @@ class DocumentRepository:
 
     def clear_all(self) -> dict[str, int]:
         """Удалить все документы, markdown, графы и логи с диска."""
-        counts = {"files": 0, "markdown": 0, "marked_markdown": 0, "graphs": 0, "logs": 0}
+        counts = {"files": 0, "markdown": 0, "raw_markdown": 0, "marked_markdown": 0, "graphs": 0, "logs": 0}
         with self._lock:
             for path in self.files.iterdir():
                 if path.is_file():
@@ -168,6 +180,11 @@ class DocumentRepository:
                 if path.is_file():
                     path.unlink(missing_ok=True)
                     counts["markdown"] += 1
+            if self.md_raw.exists():
+                for path in self.md_raw.iterdir():
+                    if path.is_file():
+                        path.unlink(missing_ok=True)
+                        counts["raw_markdown"] += 1
             marked_dir = self.base / "md_marked"
             if marked_dir.exists():
                 for path in marked_dir.iterdir():

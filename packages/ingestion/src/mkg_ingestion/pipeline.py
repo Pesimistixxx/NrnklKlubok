@@ -14,6 +14,7 @@ from mkg_core.api_errors import format_api_error, is_fatal_api_error
 from mkg_core.runtime_config import get_llm_model
 
 from mkg_ingestion.formats import detect_route
+from mkg_ingestion.ocr_postprocess import clean_ocr_markdown
 from mkg_ingestion.parsers import extract_from_bytes
 
 try:
@@ -47,6 +48,7 @@ class IngestResult:
     doc_type: str | None = None
     lang: str | None = None
     markdown: str = ""
+    raw_markdown: str = ""
     chunks: list[Chunk] = field(default_factory=list)
 
 
@@ -169,9 +171,15 @@ def assemble_markdown(title: str, chunks: list[Chunk]) -> str:
 
 async def process(doc_id: str, file_name: str, content: bytes) -> IngestResult:
     doc_type = detect_type(file_name)
-    raw = await extract_raw(file_name, content)
-    if not raw.strip():
+    raw_ocr = await extract_raw(file_name, content)
+    if not raw_ocr.strip():
         raise ValueError("Не удалось извлечь текст из файла")
+    raw_markdown = ""
+    if doc_type == "ocr":
+        raw_markdown = raw_ocr
+        raw = clean_ocr_markdown(raw_ocr)
+    else:
+        raw = raw_ocr
     raw = repair_encoding(raw)
     chunks = chunk_markdown(raw)
     for c in chunks:
@@ -184,7 +192,12 @@ async def process(doc_id: str, file_name: str, content: bytes) -> IngestResult:
     doc_lang = detect_lang(raw)
     md = assemble_markdown(file_name, chunks)
     return IngestResult(
-        doc_id=doc_id, doc_type=doc_type, lang=doc_lang, markdown=md, chunks=chunks
+        doc_id=doc_id,
+        doc_type=doc_type,
+        lang=doc_lang,
+        markdown=md,
+        raw_markdown=raw_markdown,
+        chunks=chunks,
     )
 
 

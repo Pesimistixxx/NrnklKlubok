@@ -11,11 +11,14 @@ from fastapi import HTTPException
 
 from mkg_core.config import get_settings
 from mkg_core.embeddings import search_chat_retrieval
-from mkg_core.graph_traversal import expand_for_chat, has_graph_data
+from mkg_core.graph_traversal import discover_new_connections, has_graph_data, walk_for_chat
+from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
 from mkg_core.llm import YandexLLMClient
+from mkg_core.ontology import LABEL_LAYER
+from mkg_core.text_sanitize import sanitize_user_facing_text
 
 from app.collab_db import get_role_prompt
-from app.role_prompts import default_prompt
+from app.role_prompts import CHAT_OUTPUT_RULES, default_prompt
 from app.roles import get_role
 from app.schemas import ChatArtifact, ChatCompleteOut, ContextGraphOut, GraphNode, GraphRelationship, ChatSourceOut
 from app.storage import get_repo
@@ -26,17 +29,119 @@ _CHART_HINTS = re.compile(
     re.IGNORECASE,
 )
 
+_LAYER_AGENT_QUESTIONS: dict[str, str] = {
+    "L1": "Какие материалы, процессы и оборудование связаны с запросом?",
+    "L2": "Кто и где упоминается в контексте документов?",
+    "L3": "Какие текстовые фрагменты релевантны вопросу?",
+    "L4": "Какие факты, утверждения и аномалии связаны с темой?",
+    "L5": "Как классифицированы и верифицированы найденные данные?",
+    "L6": "Какие технологические и экономические показатели затронуты?",
+}
+
+_LAYER_SITUATION: dict[str, str] = {
+    "L1": "Material/Entity: материалы, процессы, оборудование",
+    "L2": "Context: документы, эксперты, организации",
+    "L3": "Text: текстовые фрагменты и контекст",
+    "L4": "Facts: утверждения, кластеры, аномалии",
+    "L5": "Classification: верификация и грифы",
+    "L6": "TEP: технологические и экономические показатели",
+}
+
+
+def _format_user_prompt_with_history(
+    message: str,
+    history: list[dict[str, str]] | None,
+) -> tuple[str, dict[str, Any]]:
+    """Собрать промпт с историей диалога; при длинной нити — сжать середину."""
+    turns = list(history or [])
+    memory_meta: dict[str, Any] = {"turn_count": len(turns), "truncated": False}
+    if len(turns) > 10:
+        memory_meta["truncated"] = True
+        turns = turns[:2] + turns[-8:]
+    lines: list[str] = []
+    if memory_meta["truncated"]:
+        lines.append("(Ранние реплики сокращены — сохранён контекст последних сообщений.)")
+    for turn in turns:
+        label = "Пользователь" if turn.get("role") == "user" else "Ассистент"
+        content = str(turn.get("content") or "").strip()
+        if content:
+            lines.append(f"{label}: {content[:2000]}")
+    lines.append(f"Пользователь: {message.strip()}")
+    return "\n\n".join(lines), memory_meta
+
+
+def _append_layer_situation_trace(
+    trace: list[dict[str, Any]],
+    walked: dict[str, Any],
+    *,
+    t0: float,
+) -> list[dict[str, Any]]:
+    """L1–L6 оценка ситуации по узлам обхода графа (для UI «Агенты по слоям»)."""
+    layer_nodes: dict[str, int] = {f"L{i}": 0 for i in range(1, 7)}
+    layer_rels: dict[str, int] = {f"L{i}": 0 for i in range(1, 7)}
+    for node in walked.get("nodes") or []:
+        layer = LABEL_LAYER.get(str(node.get("label") or ""), "")
+        if layer in layer_nodes:
+            layer_nodes[layer] += 1
+    node_layer_by_id = {
+        str(n.get("id") or ""): LABEL_LAYER.get(str(n.get("label") or ""), "")
+        for n in walked.get("nodes") or []
+    }
+    for rel in walked.get("relationships") or []:
+        from_layer = node_layer_by_id.get(str(rel.get("from") or ""), "")
+        to_layer = node_layer_by_id.get(str(rel.get("to") or ""), "")
+        for layer in {from_layer, to_layer}:
+            if layer in layer_rels:
+                layer_rels[layer] += 1
+    for loop_index, layer in enumerate(("L1", "L2", "L3", "L4", "L5", "L6"), start=1):
+        n_count = layer_nodes[layer]
+        r_count = layer_rels[layer]
+        if n_count == 0 and r_count == 0:
+            situation = f"Слой {layer}: данных в обходе nет — {_LAYER_SITUATION.get(layer, layer)}"
+            skipped = True
+        else:
+            situation = (
+                f"Слой {layer}: {n_count} узл., {r_count} св. — "
+                f"{_LAYER_SITUATION.get(layer, layer)}"
+            )
+            skipped = False
+        trace.append(
+            {
+                "step": f"{layer.lower()}_agent",
+                "layer": layer,
+                "loop_index": loop_index,
+                "loop_total": 6,
+                "loop_phase": "dialog_trace",
+                "round": 0,
+                "max_rounds": 1,
+                "node_count": n_count,
+                "rel_count": r_count,
+                "situation_evaluation": situation,
+                "reasoning": situation,
+                "agent_question": _LAYER_AGENT_QUESTIONS.get(layer, f"Что даст слой {layer}?"),
+                "skipped": skipped,
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+            }
+        )
+    return trace
+
 
 def _expanded_to_context_graph(expanded: dict[str, Any]) -> ContextGraphOut:
     if not expanded.get("nodes"):
         return ContextGraphOut(nodes=[], relationships=[], seed_count=0, document_ids=[])
+    deduped = dedupe_graph_payload(
+        GraphPayload(
+            nodes=list(expanded.get("nodes") or []),
+            relationships=list(expanded.get("relationships") or []),
+        )
+    )
     nodes_out = [
         GraphNode(
             id=str(n["id"]),
             label=str(n.get("label") or ""),
             props=dict(n.get("props") or {}),
         )
-        for n in expanded["nodes"]
+        for n in deduped.nodes
     ]
     rels_out = [
         GraphRelationship(
@@ -45,13 +150,15 @@ def _expanded_to_context_graph(expanded: dict[str, Any]) -> ContextGraphOut:
             to=str(r.get("to") or ""),
             props=dict(r.get("props") or {}),
         )
-        for r in expanded.get("relationships") or []
+        for r in deduped.relationships
     ]
     return ContextGraphOut(
         nodes=nodes_out,
         relationships=rels_out,
         seed_count=int(expanded.get("seed_count") or 0),
         document_ids=list(expanded.get("document_ids") or []),
+        graph_walk_steps=list(expanded.get("graph_walk_steps") or []),
+        walk_path=list(expanded.get("walk_path") or []),
     )
 
 
@@ -86,7 +193,25 @@ def _hits_context_block(hits: list[dict[str, Any]], *, limit: int = 8) -> str:
 def _graph_context_block(graph: ContextGraphOut) -> str:
     if not graph.nodes:
         return ""
-    lines = ["Узлы графа MKG (Neo4j обход):"]
+    lines = ["Узлы графа MKG (последовательный обход):"]
+    walk_steps = graph.graph_walk_steps or []
+    if walk_steps:
+        lines.append("Цепочка обхода:")
+        for ws in walk_steps[:30]:
+            order = ws.get("order", "?")
+            action = ws.get("action", "")
+            label = ws.get("label") or "?"
+            nid = ws.get("node_id") or "?"
+            rel = ws.get("rel_type") or ""
+            snippet = ws.get("snippet") or ""
+            if action == "seed_load":
+                lines.append(f"  {order}. ★ SEED [{label} · {nid}] {snippet[:200]}")
+            else:
+                from_id = ws.get("from_id") or "?"
+                lines.append(
+                    f"  {order}. hop{ws.get('hop', '?')} [{from_id}] -[{rel}]-> [{label} · {nid}] {snippet[:160]}"
+                )
+        lines.append("")
     for i, node in enumerate(graph.nodes[:24], 1):
         props = node.props or {}
         text = (
@@ -100,9 +225,18 @@ def _graph_context_block(graph: ContextGraphOut) -> str:
         seed = " ★" if props.get("_seed") else ""
         nid = props.get("neo4j_node_id") or node.id
         lines.append(f"{i}. [{node.label} · {nid}{seed}] {str(text)[:320]}")
-    if graph.relationships:
-        lines.append("\nСвязи графа:")
-        for rel in graph.relationships[:18]:
+    traverse_steps = [
+        s for s in (graph.graph_walk_steps or []) if str(s.get("action") or "") == "traverse"
+    ]
+    if traverse_steps:
+        lines.append("\nШаги обхода:")
+        for s in traverse_steps[:12]:
+            lines.append(
+                f"  {s.get('order', '?')}. ({s.get('from_id')}) -[{s.get('rel_type')}]-> ({s.get('to_id')})"
+            )
+    elif graph.relationships:
+        lines.append("\nСвязи обхода:")
+        for rel in graph.relationships[:12]:
             lines.append(f"  ({rel.from_}) -[{rel.type}]-> ({rel.to})")
     return "\n".join(lines)
 
@@ -226,6 +360,159 @@ def enrich_search_hits(hits: list[dict[str, Any]]) -> list[ChatSourceOut]:
     return out
 
 
+def _evidence_to_sources(
+    evidence: list[dict[str, Any]] | None,
+    layer_results: list[dict[str, Any]] | None,
+) -> list[ChatSourceOut]:
+    """Источники из evidence / layer_results agents service."""
+    repo = get_repo()
+    out: list[ChatSourceOut] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _push(
+        *,
+        doc_id: str,
+        node_id: str = "",
+        file_name: str = "",
+        label: str = "",
+        layer: str = "",
+        score: float = 0,
+        text: str = "",
+    ) -> None:
+        doc_id = doc_id.strip()
+        if not doc_id:
+            return
+        key = (doc_id, node_id or text[:80])
+        if key in seen:
+            return
+        seen.add(key)
+        rec = repo.get(doc_id) or {}
+        md_file = repo.markdown_relative_path(doc_id)
+        out.append(
+            ChatSourceOut(
+                document_id=doc_id,
+                file_name=file_name or str(rec.get("file_name") or doc_id),
+                node_id=node_id,
+                label=label,
+                layer=layer,
+                score=score,
+                text=text[:500],
+                md_file=md_file,
+                md_url=f"/api/v1/documents/{doc_id}/markdown",
+            )
+        )
+
+    for ev in evidence or []:
+        _push(
+            doc_id=str(ev.get("doc_id") or ev.get("document_id") or ""),
+            node_id=str(ev.get("node_id") or ""),
+            file_name=str(ev.get("file_name") or ""),
+            label=str(ev.get("label") or ""),
+            layer=str(ev.get("layer") or ""),
+            score=float(ev.get("score") or 0),
+            text=str(ev.get("text") or ev.get("quote") or ""),
+        )
+    for lr in layer_results or []:
+        for node in lr.get("nodes_found") or []:
+            props = node.get("props") or {}
+            _push(
+                doc_id=str(props.get("_doc_id") or props.get("document_id") or props.get("source_doc_id") or ""),
+                node_id=str(node.get("id") or ""),
+                label=str(node.get("label") or ""),
+                layer=str(lr.get("layer") or props.get("layer") or ""),
+                text=str(props.get("quote") or props.get("raw_text_ru") or props.get("name_ru") or props.get("text") or ""),
+            )
+    return out[:8]
+
+
+def _format_agent_summary(result: dict[str, Any]) -> str:
+    """Собрать пользовательский текст из ответа LangGraph."""
+    parts: list[str] = []
+    summary = sanitize_user_facing_text(str(result.get("summary") or "").strip())
+    if summary:
+        parts.append(summary)
+    hypotheses = result.get("hypotheses") or []
+    if hypotheses:
+        lines = [
+            f"{i + 1}. {h.get('title') or h.get('text') or json.dumps(h, ensure_ascii=False)}"
+            for i, h in enumerate(hypotheses)
+        ]
+        parts.append("Гипотезы:\n" + "\n".join(lines))
+    recommendations = result.get("recommendations") or []
+    if recommendations:
+        lines = [
+            f"{i + 1}. {x.get('title') or x.get('text') or json.dumps(x, ensure_ascii=False)}"
+            for i, x in enumerate(recommendations)
+        ]
+        parts.append("Рекомендации:\n" + "\n".join(lines))
+    anomalies = result.get("anomalies") or []
+    if anomalies:
+        lines = []
+        for i, a in enumerate(anomalies):
+            title = a.get("text") or a.get("node_id") or a.get("label") or "узел"
+            reason = a.get("explanation") or a.get("anomaly_reason") or ""
+            lines.append(f"{i + 1}. {title}" + (f" — {reason}" if reason else ""))
+        parts.append("Аномалии:\n" + "\n".join(lines))
+    return "\n\n".join(parts).strip()
+
+
+def _agent_result_to_chat_out(
+    result: dict[str, Any],
+    *,
+    include_graph: bool,
+    t0: float,
+) -> ChatCompleteOut:
+    trace = list(result.get("trace") or [])
+    trace.insert(0, {"step": "chat_role", "pipeline": "orchestrator_mode", "elapsed_ms": 0})
+    graph_raw = result.get("graph")
+    graph = ContextGraphOut(**graph_raw) if include_graph and graph_raw else None
+    layer_results = result.get("layer_results") or None
+    reply = _format_agent_summary(result)
+    if not reply:
+        reply = sanitize_user_facing_text(str(result.get("query") or "").strip())
+    timing_ms = int(result.get("elapsed_ms") or int((time.perf_counter() - t0) * 1000))
+    return ChatCompleteOut(
+        reply=reply,
+        trace=trace,
+        graph=graph,
+        artifacts=[],
+        sources=_evidence_to_sources(result.get("evidence"), layer_results),
+        layer_results=layer_results,
+        timing_ms=timing_ms,
+    )
+
+
+async def _try_orchestrator_chat(
+    message: str,
+    role_id: str,
+    *,
+    history: list[dict[str, str]] | None,
+    include_graph: bool,
+    search_limit: int,
+    document_ids: list[str] | None,
+    t0: float,
+) -> ChatCompleteOut | None:
+    """Внутренний L1–L6 оркестратор для ролей с can_run_agents."""
+    role = get_role(role_id)
+    if not role or not role.get("can_run_agents"):
+        return None
+    try:
+        from app.agents_proxy import proxy_agents_run
+        from app.roles import agents_user_role
+
+        result = await proxy_agents_run(
+            query=message.strip(),
+            mode="orchestrator_mode",
+            doc_ids=[d for d in (document_ids or []) if d] or None,
+            user_role=agents_user_role(role_id),
+            limit=search_limit,
+            history=history,
+        )
+        return _agent_result_to_chat_out(result, include_graph=include_graph, t0=t0)
+    except Exception:
+        return None
+
+
 async def run_chat_query(
     message: str,
     role_id: str,
@@ -237,7 +524,7 @@ async def run_chat_query(
     search_limit: int = 5,
     document_ids: list[str] | None = None,
 ) -> ChatCompleteOut:
-    """Единая точка: Qdrant L3 + L4 cluster → Neo4j walk → LLM → артефакты."""
+    """Единая точка чата: оркестратор L1–L6 (внутренне) или RAG-диалог."""
     role = get_role(role_id)
     if not role:
         raise HTTPException(status_code=400, detail="Неизвестная роль")
@@ -248,8 +535,23 @@ async def run_chat_query(
             detail="LLM не настроен: задайте YANDEX_API_KEY и YANDEX_FOLDER_ID",
         )
 
+    t0 = time.perf_counter()
+    orchestrated = await _try_orchestrator_chat(
+        message,
+        role_id,
+        history=history,
+        include_graph=include_graph,
+        search_limit=search_limit,
+        document_ids=document_ids,
+        t0=t0,
+    )
+    if orchestrated is not None:
+        return orchestrated
+
     custom = await get_role_prompt(role_id)
     system = (system_prompt or custom or default_prompt(role_id)).strip()
+    if CHAT_OUTPUT_RULES not in system:
+        system += f"\n\n{CHAT_OUTPUT_RULES}"
     if include_artifacts:
         system += (
             "\n\nЕсли уместно показать график или диаграмму, добавь в конец ответа блок:\n"
@@ -260,10 +562,19 @@ async def run_chat_query(
             "Не добавляй блок, если визуализация не нужна."
         )
 
-    t0 = time.perf_counter()
     trace: list[dict[str, Any]] = [
-        {"step": "chat_role", "role_id": role_id, "name_ru": role["name_ru"], "elapsed_ms": 0},
+        {"step": "chat_role", "role_id": role_id, "name_ru": role["name_ru"], "pipeline": "dialog", "elapsed_ms": 0},
     ]
+    user_prompt_base, memory_meta = _format_user_prompt_with_history(message, history)
+    if memory_meta.get("turn_count"):
+        trace.append(
+            {
+                "step": "chat_memory",
+                "turn_count": memory_meta["turn_count"],
+                "truncated": memory_meta.get("truncated", False),
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+            }
+        )
     scoped_docs = [d for d in (document_ids or []) if d]
     hits: list[dict[str, Any]] = []
     graph = ContextGraphOut(nodes=[], relationships=[], seed_count=0, document_ids=[])
@@ -352,32 +663,82 @@ async def run_chat_query(
             timing_ms=timing_ms,
         )
 
-    expanded: dict[str, Any] = {"nodes": [], "relationships": [], "source": "empty", "fallback": False}
+    walked: dict[str, Any] = {
+        "nodes": [],
+        "relationships": [],
+        "source": "empty",
+        "fallback": False,
+        "graph_walk_steps": [],
+    }
     if include_graph:
         try:
-            expanded = await expand_for_chat(
+            walk_steps_collected: list[dict[str, Any]] = []
+
+            def _on_walk_step(step: dict[str, Any]) -> None:
+                walk_steps_collected.append(step)
+                trace.append(
+                    {
+                        "step": "graph_walk_step",
+                        "order": step.get("order"),
+                        "action": step.get("action"),
+                        "hop": step.get("hop"),
+                        "node_id": step.get("node_id"),
+                        "label": step.get("label"),
+                        "rel_type": step.get("rel_type"),
+                        "from_id": step.get("from_id"),
+                        "to_id": step.get("to_id"),
+                        "snippet": step.get("snippet"),
+                        "source": step.get("source"),
+                        "agent_question": step.get("agent_question"),
+                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                    }
+                )
+
+            walked = await walk_for_chat(
                 hits,
                 message.strip(),
                 document_ids=scoped_docs or None,
-                max_hops=settings.graph_traversal_max_hops,
-                max_nodes=48,
+                max_hops=settings.graph_walk_max_hops,
+                max_nodes=min(settings.graph_walk_max_nodes, 12),
+                max_seeds=settings.graph_walk_max_seeds,
+                on_step=_on_walk_step,
             )
-            graph = _expanded_to_context_graph(expanded)
-            seed_hits = expanded.get("seed_hits") or []
+            seed_hits = walked.get("seed_hits") or []
             if not hits and seed_hits:
                 hits = list(seed_hits)
+            if walked.get("nodes"):
+                walked = await discover_new_connections(
+                    walked,
+                    message.strip(),
+                    document_ids=scoped_docs or None,
+                    max_paths=8,
+                )
+                trace.append(
+                    {
+                        "step": "discover_new_connections",
+                        "node_count": len(walked.get("nodes") or []),
+                        "rel_count": len(walked.get("relationships") or []),
+                        "cross_layer": (walked.get("discovery_counts") or {}).get("cross_layer", 0),
+                        "cross_document": (walked.get("discovery_counts") or {}).get("cross_document", 0),
+                        "total_discoveries": (walked.get("discovery_counts") or {}).get("total", 0),
+                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                    }
+                )
+            graph = _expanded_to_context_graph(walked)
             trace.append(
                 {
                     "step": "graph_traversal",
                     "node_count": len(graph.nodes),
                     "rel_count": len(graph.relationships),
+                    "walk_step_count": len(walk_steps_collected),
                     "doc_count": len(graph.document_ids),
                     "seed_count": graph.seed_count,
-                    "source": expanded.get("source") or "unknown",
-                    "fallback": bool(expanded.get("fallback")),
+                    "source": walked.get("source") or "unknown",
+                    "fallback": bool(walked.get("fallback")),
                     "elapsed_ms": int((time.perf_counter() - t0) * 1000),
                 }
             )
+            _append_layer_situation_trace(trace, walked, t0=t0)
         except Exception as exc:
             trace.append(
                 {
@@ -385,10 +746,20 @@ async def run_chat_query(
                     "node_count": 0,
                     "rel_count": 0,
                     "skipped": True,
-                    "error": str(exc)[:160],
+                    "error": "graph_build_failed",
+                    "error_detail": str(exc)[:160],
                     "elapsed_ms": int((time.perf_counter() - t0) * 1000),
                 }
             )
+
+    if not any(str(t.get("step") or "") == "l1_agent" for t in trace):
+        hit_nodes = [
+            {"id": h.get("node_id"), "label": h.get("label")}
+            for h in hits
+            if h.get("node_id")
+        ]
+        if hit_nodes:
+            _append_layer_situation_trace(trace, {"nodes": hit_nodes, "relationships": []}, t0=t0)
 
     context_parts: list[str] = []
     qdrant_block = _hits_context_block(hits, limit=search_limit + 3)
@@ -399,12 +770,7 @@ async def run_chat_query(
         context_parts.append(graph_block)
     context_block = "\n\n---\n\n".join(context_parts)
 
-    lines: list[str] = []
-    for turn in (history or [])[-12:]:
-        label = "Пользователь" if turn.get("role") == "user" else "Ассистент"
-        lines.append(f"{label}: {turn.get('content', '').strip()}")
-    lines.append(f"Пользователь: {message.strip()}")
-    user_prompt = "\n\n".join(lines)
+    user_prompt = user_prompt_base
     if context_block:
         user_prompt = f"{context_block}\n\n---\n\n{user_prompt}"
 
@@ -414,7 +780,7 @@ async def run_chat_query(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Ошибка LLM: {exc}") from exc
 
-    text = (reply or "").strip()
+    text = sanitize_user_facing_text((reply or "").strip())
     if not text:
         raise HTTPException(status_code=502, detail="LLM вернул пустой ответ")
 

@@ -3,9 +3,9 @@
 Клиент эмбеддингов: ``YandexLLMClient.embed()`` (text-search-doc / text-search-query).
 Коллекции Qdrant: ``mkg_chunks`` (L3 абзацы), ``mkg_claims`` (L4 утверждения).
 
-Пайплайн extraction пока не пишет в Qdrant автоматически — индексация по запросу
-(POST /agents/documents/{id}/search с index_if_missing=true) или явный вызов
-``index_document_graph``.
+После extraction worker вызывает ``index_document_graph`` (L3 TextParagraph →
+``mkg_chunks``, все L4-метки → ``mkg_claims``). Режим ``answers_only`` индексирует
+только MD-чанки в ``mkg_chunks``.
 """
 from __future__ import annotations
 
@@ -270,15 +270,15 @@ async def index_document_markdown(document_id: str, markdown: str | None = None)
 
 
 async def index_document_graph(document_id: str, graph: dict[str, Any] | None) -> dict[str, int]:
-    """Эмбеддит TextParagraph и Claim из графа и upsert в Qdrant."""
+    """Эмбеддит TextParagraph (L3) и все L4-узлы графа в Qdrant."""
     settings = get_settings()
     if not settings.yandex_api_key or not settings.yandex_folder_id:
-        return {"indexed": 0, "skipped": 0, "error": "YANDEX_API_KEY или YANDEX_FOLDER_ID не заданы"}
+        return {"indexed": 0, "indexed_l3": 0, "indexed_l4": 0, "skipped": 0, "error": "YANDEX_API_KEY или YANDEX_FOLDER_ID не заданы"}
 
     nodes = (graph or {}).get("nodes") or []
     indexable = [n for n in nodes if str(n.get("label")) in _indexable_labels() and _node_text(n)]
     if not indexable:
-        return {"indexed": 0, "skipped": 0}
+        return {"indexed": 0, "indexed_l3": 0, "indexed_l4": 0, "skipped": 0}
 
     await ensure_qdrant_collections()
     llm = YandexLLMClient.instance()
@@ -286,6 +286,8 @@ async def index_document_graph(document_id: str, graph: dict[str, Any] | None) -
 
     by_collection: dict[str, list[PointStruct]] = {}
     indexed = 0
+    indexed_l3 = 0
+    indexed_l4 = 0
     skipped = 0
 
     for node in indexable:
@@ -302,6 +304,7 @@ async def index_document_graph(document_id: str, graph: dict[str, Any] | None) -
             skipped += 1
             continue
         collection = _collection_for_label(label)
+        layer = _node_layer(node)
         repo = get_repo()
         point = PointStruct(
             id=_point_id(node_id),
@@ -311,20 +314,33 @@ async def index_document_graph(document_id: str, graph: dict[str, Any] | None) -
                 "node_id": node_id,
                 "neo4j_node_id": node_id,
                 "label": label,
-                "layer": _node_layer(node),
+                "layer": layer,
                 "text": text[:2000],
                 "md_file": repo.markdown_relative_path(document_id),
             },
         )
         by_collection.setdefault(collection, []).append(point)
         indexed += 1
+        if label in L4_LABELS:
+            indexed_l4 += 1
+        else:
+            indexed_l3 += 1
 
     for collection, points in by_collection.items():
         batch_size = 32
         for i in range(0, len(points), batch_size):
             await qdrant.upsert(collection_name=collection, points=points[i : i + batch_size])
 
-    return {"indexed": indexed, "skipped": skipped}
+    return {
+        "indexed": indexed,
+        "indexed_l3": indexed_l3,
+        "indexed_l4": indexed_l4,
+        "skipped": skipped,
+        "collections": {
+            settings.qdrant_collection_chunks: indexed_l3,
+            settings.qdrant_collection_claims: indexed_l4,
+        },
+    }
 
 
 async def list_indexed_points(
@@ -370,6 +386,7 @@ async def list_indexed_points(
                         "layer": payload.get("layer"),
                         "text": (payload.get("text") or "")[:300],
                         "cluster_id": payload.get("cluster_id"),
+                        "cluster_name": payload.get("cluster_name"),
                         "is_anomaly": payload.get("is_anomaly"),
                         "anomaly_score": payload.get("anomaly_score"),
                     }
@@ -832,14 +849,34 @@ async def embedding_status(document_id: str | None = None) -> dict[str, Any]:
 
     settings = get_settings()
     counts = await count_indexed_points(document_id=document_id)
+    total_points = sum(counts.values())
+    qdrant_ok = False
+    try:
+        qdrant = QdrantClientSingleton.instance().client
+        await qdrant.get_collections()
+        qdrant_ok = True
+    except Exception as exc:
+        log.warning("qdrant health check: %s", exc)
+
+    async def _model(getter) -> str:
+        try:
+            return await getter()
+        except Exception as exc:
+            log.warning("runtime config %s: %s", getter.__name__, exc)
+            return ""
+
     return {
         "provider": "yandex",
-        "embed_doc_model": await get_emb_doc_model(),
-        "embed_query_model": await get_emb_query_model(),
-        "llm_model": await get_llm_model(),
-        "ocr_model": await get_ocr_model(),
+        "embed_doc_model": await _model(get_emb_doc_model) or settings.yandex_emb_doc or "text-search-doc/latest",
+        "embed_query_model": await _model(get_emb_query_model) or settings.yandex_emb_query or "text-search-query/latest",
+        "llm_model": await _model(get_llm_model),
+        "ocr_model": await _model(get_ocr_model),
         "embed_client": "packages/core/src/mkg_core/llm.py::YandexLLMClient.embed",
         "qdrant_url": settings.qdrant_url,
+        "qdrant_ok": qdrant_ok,
+        "total_points": total_points,
+        "l3_points": counts.get(settings.qdrant_collection_chunks, 0),
+        "l4_points": counts.get(settings.qdrant_collection_claims, 0),
         "document_id": document_id,
         "collections": {
             settings.qdrant_collection_chunks: {
@@ -860,4 +897,208 @@ async def embedding_status(document_id: str | None = None) -> dict[str, Any]:
             "L3: семантический поиск по mkg_chunks. "
             "L4: HDBSCAN-кластеризация по mkg_claims; поиск объединяет оба фактора."
         ),
+    }
+
+
+def _pca_to_2d(vectors: list[list[float]]) -> list[tuple[float, float]]:
+    """Проекция N×D векторов в 2D (PCA через SVD, без sklearn)."""
+    import numpy as np
+
+    n = len(vectors)
+    if n == 0:
+        return []
+    if n == 1:
+        return [(0.0, 0.0)]
+    x = np.asarray(vectors, dtype=np.float64)
+    x = x - x.mean(axis=0)
+    if np.allclose(x, 0):
+        return [(0.0, 0.0)] * n
+    try:
+        _, _, vt = np.linalg.svd(x, full_matrices=False)
+        components = vt[: min(2, vt.shape[0])].T
+        if components.shape[1] == 1:
+            components = np.hstack([components, np.zeros((components.shape[0], 1))])
+        coords = x @ components
+    except np.linalg.LinAlgError:
+        coords = np.zeros((n, 2))
+    return [(float(coords[i, 0]), float(coords[i, 1])) for i in range(n)]
+
+
+async def fetch_points_with_vectors(
+    document_id: str | None = None,
+    *,
+    limit: int = 500,
+    layer: str | None = None,
+) -> list[dict[str, Any]]:
+    """Scroll Qdrant — точки с векторами для 2D-визуализации."""
+    settings = get_settings()
+    qdrant = QdrantClientSingleton.instance().client
+    if layer == "L4":
+        names = [settings.qdrant_collection_claims]
+    elif layer == "L3":
+        names = [settings.qdrant_collection_chunks]
+    else:
+        names = [settings.qdrant_collection_chunks, settings.qdrant_collection_claims]
+    filt: Filter | None = None
+    if document_id is not None:
+        filt = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
+    out: list[dict[str, Any]] = []
+    for name in names:
+        try:
+            offset = None
+            while len(out) < limit:
+                batch_limit = min(64, limit - len(out))
+                records, offset = await qdrant.scroll(
+                    collection_name=name,
+                    scroll_filter=filt,
+                    limit=batch_limit,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+                for rec in records:
+                    payload = dict(rec.payload or {})
+                    vector = rec.vector
+                    if vector is None:
+                        continue
+                    if isinstance(vector, dict):
+                        vector = next(iter(vector.values()), None)
+                    if not vector:
+                        continue
+                    out.append(
+                        {
+                            "id": str(rec.id),
+                            "collection": name,
+                            "point_id": str(rec.id),
+                            "node_id": payload.get("node_id"),
+                            "neo4j_node_id": payload.get("neo4j_node_id") or payload.get("node_id"),
+                            "document_id": payload.get("document_id"),
+                            "label": payload.get("label"),
+                            "layer": payload.get("layer"),
+                            "text": (payload.get("text") or "")[:300],
+                            "cluster_id": payload.get("cluster_id"),
+                            "cluster_name": payload.get("cluster_name"),
+                            "cluster_description": payload.get("cluster_description"),
+                            "is_anomaly": payload.get("is_anomaly"),
+                            "anomaly_reason": payload.get("anomaly_reason"),
+                            "anomaly_score": payload.get("anomaly_score"),
+                            "vector": list(vector),
+                        }
+                    )
+                if offset is None or not records:
+                    break
+        except Exception as exc:
+            log.warning("qdrant scroll vectors %s doc=%s: %s", name, document_id, exc)
+    return out[:limit]
+
+
+async def compute_embedding_viz(
+    document_id: str | None = None,
+    *,
+    limit: int = 500,
+    layer: str | None = "L4",
+) -> dict[str, Any]:
+    """PCA-проекция эмбеддингов Qdrant в 2D для UI scatter plot (по умолчанию только L4)."""
+    from mkg_core.l4_clustering import get_l4_clustering_context
+
+    raw = await fetch_points_with_vectors(document_id, limit=limit, layer=layer)
+    ctx = await get_l4_clustering_context(document_id=document_id)
+    empty = {
+        "document_id": document_id,
+        "total": 0,
+        "l4_total": 0,
+        "cluster_count": 0,
+        "anomaly_count": 0,
+        "has_clusters": False,
+        "has_named_clusters": False,
+        "method": "pca",
+        "layer_filter": layer,
+        "clusters": [],
+        "points": [],
+        "clustering_context": ctx,
+    }
+    if not raw:
+        return empty
+    vectors = [p["vector"] for p in raw]
+    coords = _pca_to_2d(vectors)
+    has_clusters = any(
+        p.get("layer") == "L4" and p.get("cluster_id") is not None
+        for p in raw
+    )
+    has_named_clusters = any(
+        p.get("layer") == "L4"
+        and p.get("cluster_id") is not None
+        and int(p["cluster_id"]) >= 0
+        for p in raw
+    )
+    cluster_meta: dict[int, dict[str, Any]] = {}
+    points: list[dict[str, Any]] = []
+    anomaly_count = 0
+    for p, (x, y) in zip(raw, coords):
+        cid = p.get("cluster_id")
+        cname = p.get("cluster_name")
+        cdesc = p.get("cluster_description")
+        is_l4 = p.get("layer") == "L4"
+        is_anomaly = bool(p.get("is_anomaly")) or (is_l4 and cid is not None and int(cid) < 0)
+        if is_l4 and is_anomaly:
+            anomaly_count += 1
+        if is_l4 and cid is not None and int(cid) >= 0:
+            cid_int = int(cid)
+            bucket = cluster_meta.setdefault(
+                cid_int,
+                {"id": cid_int, "name": cname or f"Кластер {cid_int}", "count": 0, "description": cdesc},
+            )
+            if cname:
+                bucket["name"] = cname
+            if cdesc:
+                bucket["description"] = cdesc
+            bucket["count"] += 1
+        points.append(
+            {
+                "id": p["id"],
+                "x": round(x, 6),
+                "y": round(y, 6),
+                "layer": p.get("layer"),
+                "cluster_id": cid,
+                "cluster_name": cname,
+                "cluster_description": cdesc,
+                "is_anomaly": is_anomaly if is_l4 else p.get("is_anomaly"),
+                "anomaly_reason": p.get("anomaly_reason"),
+                "anomaly_score": p.get("anomaly_score"),
+                "label": p.get("label"),
+                "node_id": p.get("node_id"),
+                "neo4j_node_id": p.get("neo4j_node_id"),
+                "text": p.get("text"),
+                "document_id": p.get("document_id"),
+                "collection": p.get("collection"),
+            }
+        )
+    palette = [
+        "#ef6c00", "#7b1fa2", "#1565c0", "#2e7d32", "#00838f",
+        "#6a1b9a", "#558b2f", "#ad1457", "#4527a0", "#fb8c00",
+    ]
+    clusters_out = []
+    for cid in sorted(cluster_meta):
+        info = cluster_meta[cid]
+        clusters_out.append({
+            "id": info["id"],
+            "name": info["name"] or f"Кластер {info['id']}",
+            "count": info["count"],
+            "color": palette[abs(cid) % len(palette)],
+            "description": info.get("description"),
+        })
+    l4_total = sum(1 for p in raw if p.get("layer") == "L4")
+    return {
+        "document_id": document_id,
+        "total": len(points),
+        "l4_total": l4_total,
+        "cluster_count": len(clusters_out),
+        "anomaly_count": anomaly_count,
+        "has_clusters": has_clusters,
+        "has_named_clusters": has_named_clusters,
+        "method": "pca",
+        "layer_filter": layer,
+        "clusters": clusters_out,
+        "points": points,
+        "clustering_context": ctx,
     }

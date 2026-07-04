@@ -108,6 +108,8 @@ async def run_ingestion(ctx: dict[str, Any], document_id: str) -> dict[str, Any]
         result = await process(document_id, file_name, content)
 
         repo.save_markdown(document_id, result.markdown)
+        if result.raw_markdown:
+            repo.save_raw_markdown(document_id, result.raw_markdown)
         repo.save_marked_markdown(
             document_id,
             build_marked_markdown(document_id, result.markdown, None),
@@ -425,6 +427,7 @@ async def run_extraction(ctx: dict[str, Any], document_id: str) -> dict[str, Any
 
 
     l4_stats: dict[str, Any] = {}
+    index_stats: dict[str, Any] = {}
 
     if node_count > 0:
 
@@ -442,9 +445,15 @@ async def run_extraction(ctx: dict[str, Any], document_id: str) -> dict[str, Any
 
             from mkg_core.embeddings import index_document_graph
 
-            await index_document_graph(document_id, payload)
+            index_stats = await index_document_graph(document_id, payload)
 
-            log.info("qdrant indexed doc_id=%s", document_id)
+            log.info(
+                "qdrant indexed doc_id=%s l3=%s l4=%s total=%s",
+                document_id,
+                index_stats.get("indexed_l3", 0),
+                index_stats.get("indexed_l4", 0),
+                index_stats.get("indexed", 0),
+            )
 
         except Exception as exc:
 
@@ -480,6 +489,8 @@ async def run_extraction(ctx: dict[str, Any], document_id: str) -> dict[str, Any
         "synced_relationships": sync["relationships"],
 
         "neo4j_error": neo4j_error,
+
+        "index": index_stats,
 
         "l4": l4_stats,
 

@@ -12,11 +12,12 @@ COPY services/gateway/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/gateway/app ./app
+COPY Docs ./Docs
 
 # Исходники monorepo важнее site-packages — иначе pip-кэш и agent_api расходятся.
 ENV PYTHONPATH=/app/packages/core/src:/app/packages/ingestion/src:/app/packages/prompts/src:/app
 
-RUN python -c "from mkg_core.embeddings import embedding_status, index_document_graph, list_indexed_points, search_document"
+RUN python -c "from mkg_core.embeddings import compute_embedding_viz, embedding_status, index_document_graph, list_indexed_points, search_document; import numpy"
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

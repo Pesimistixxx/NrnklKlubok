@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from mkg_core.annotated_md import _LABEL_LAYER, _LAYER_TITLES, inject_l3_markers
 from mkg_core.embeddings import (
+    compute_embedding_viz,
     embedding_status,
     index_document_graph,
     list_indexed_points,
@@ -19,7 +20,7 @@ from mkg_core.embeddings import (
     search_global,
 )
 from mkg_core.graph_traversal import expand_from_search_hits
-from mkg_core.l4_clustering import run_l4_clustering
+from mkg_core.l4_clustering import apply_global_l4_cluster
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
 from mkg_core.layer_pipeline import LAYER_ORDER, L5_LABELS, build_layer_pipeline
 from mkg_core.ontology import ALL_REL_TYPES
@@ -40,6 +41,9 @@ from app.schemas import (
     AgentParagraphsOut,
     AgentQdrantPointOut,
     AgentQdrantPointsOut,
+    AgentQdrantVizOut,
+    AgentQdrantVizPointOut,
+    L4ClusteringContextOut,
     AgentRelationshipsOut,
     AgentSearchOut,
     AgentSearchRequest,
@@ -64,7 +68,16 @@ def _node_layer(node: dict[str, Any]) -> str:
     return _LABEL_LAYER.get(label, "L?")
 
 
+def _normalize_doc_id(doc_id: str) -> str:
+    """doc_c745… → doc:c745… (UI/файлы иногда без двоеточия)."""
+    doc_id = (doc_id or "").strip()
+    if doc_id.startswith("doc_") and ":" not in doc_id:
+        return f"doc:{doc_id[4:]}"
+    return doc_id
+
+
 def _require_doc(doc_id: str) -> dict[str, Any]:
+    doc_id = _normalize_doc_id(doc_id)
     rec = get_repo().get(doc_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
@@ -653,6 +666,7 @@ async def get_document_qdrant_points(
     limit: int = Query(100, ge=1, le=500),
 ) -> AgentQdrantPointsOut:
     """Список проиндексированных точек — аналог просмотра узлов Neo4j."""
+    doc_id = _normalize_doc_id(doc_id)
     _require_doc(doc_id)
     raw = await list_indexed_points(doc_id, collection=collection, limit=limit)
     points = [AgentQdrantPointOut(**p) for p in raw]
@@ -672,19 +686,58 @@ async def get_all_qdrant_points(
     return AgentQdrantPointsOut(document_id="__all__", total=len(points), points=points)
 
 
+@router.get(
+    "/embeddings/points/viz",
+    response_model=AgentQdrantVizOut,
+    summary="2D-карта точек Qdrant (PCA проекция эмбеддингов)",
+)
+async def get_qdrant_points_viz(
+    document_id: str | None = Query(None, description="Фильтр по документу"),
+    limit: int = Query(500, ge=1, le=2000),
+    layer: str | None = Query("L4", description="Слой точек: L4 (кластеры), L3 или null — все"),
+) -> AgentQdrantVizOut:
+    """Вектора из Qdrant → PCA → координаты для scatter plot в UI."""
+    if document_id:
+        document_id = _normalize_doc_id(document_id)
+        _require_doc(document_id)
+    layer_filter = layer.strip().upper() if layer and layer.strip() else None
+    if layer_filter and layer_filter not in ("L3", "L4"):
+        raise HTTPException(status_code=400, detail="layer must be L3, L4 or empty")
+    try:
+        raw = await compute_embedding_viz(document_id, limit=limit, layer=layer_filter)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Qdrant viz: {exc}") from exc
+    points = [AgentQdrantVizPointOut(**p) for p in raw["points"]]
+    from app.schemas import AgentClusterInfoOut
+    clusters = [AgentClusterInfoOut(**c) for c in raw.get("clusters") or []]
+    ctx_raw = raw.get("clustering_context")
+    clustering_context = L4ClusteringContextOut(**ctx_raw) if ctx_raw else None
+    return AgentQdrantVizOut(
+        document_id=raw.get("document_id"),
+        total=raw["total"],
+        l4_total=raw.get("l4_total", 0),
+        cluster_count=raw.get("cluster_count", 0),
+        anomaly_count=raw.get("anomaly_count", 0),
+        has_clusters=raw["has_clusters"],
+        has_named_clusters=raw.get("has_named_clusters", False),
+        method=raw["method"],
+        layer_filter=raw.get("layer_filter"),
+        clusters=clusters,
+        points=points,
+        clustering_context=clustering_context,
+    )
+
+
 @router.post(
     "/analytics/l4-cluster",
-    summary="HDBSCAN-кластеризация L4-точек Qdrant",
+    summary="Глобальная HDBSCAN-кластеризация L4-точек Qdrant",
 )
 async def cluster_l4_layer(
-    document_id: str | None = Query(None, description="Ограничить одним документом"),
+    document_id: str | None = Query(None, description="Триггер после индексации документа"),
     min_cluster_size: int | None = Query(None, ge=2, le=50),
 ) -> dict[str, Any]:
-    """Кластеризует L4-вектора из Qdrant, пишет cluster_id/anomaly в Neo4j и JSON-граф."""
-    return await run_l4_clustering(
-        document_id=document_id,
-        min_cluster_size=min_cluster_size,
-    )
+    """Кластеризует все L4-вектора из Qdrant, пишет cluster_id/cluster_name/anomaly в Neo4j и граф."""
+    return await apply_global_l4_cluster(document_id, force=True, min_cluster_size=min_cluster_size)
 
 
 @router.get(
@@ -772,13 +825,16 @@ async def get_agent_capabilities() -> AgentCapabilitiesOut:
             ],
         ),
         AgentCapabilityOut(
-            id="anomaly_hunter",
-            name_ru="Агент аномалий L4",
+            id="l4_anomalies",
+            name_ru="Агент L4-аномалий",
             layer_scope="L4 + Qdrant + Neo4j",
-            implementation="LangGraph anomaly_mode + HDBSCAN clustering",
+            implementation="LangGraph anomaly_mode + глобальный HDBSCAN",
             endpoints=[
+                AgentEndpointOut(method="GET", path="/api/v1/graph/l4/cluster/{id}/detail", summary="Описание кластера L4 + связи", status="ready"),
+                AgentEndpointOut(method="GET", path="/api/v1/graph/documents/{id}/relationship", summary="Детали связи графа документа", status="ready"),
+                AgentEndpointOut(method="GET", path="/api/v1/graph/l4/point/{node_id}/detail", summary="Детали L4-точки / аномалии", status="ready"),
                 AgentEndpointOut(method="GET", path="/api/v1/graph/anomalies", summary="Список L4-аномалий", status="ready"),
-                AgentEndpointOut(method="POST", path="/api/v1/graph/l4/cluster", summary="HDBSCAN кластеризация L4", status="ready"),
+                AgentEndpointOut(method="POST", path="/api/v1/graph/l4/cluster", summary="Глобальная кластеризация L4", status="ready"),
                 AgentEndpointOut(method="POST", path="/api/v1/agents-service/run", summary="Режим anomaly_mode", status="ready"),
             ],
         ),

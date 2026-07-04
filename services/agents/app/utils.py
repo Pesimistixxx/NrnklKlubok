@@ -42,6 +42,23 @@ def compact_text(text: str, limit: int = 420) -> str:
     return clean[: limit - 1].rstrip() + "…"
 
 
+def format_history_context(history: list[dict[str, str]] | None, *, limit: int = 12) -> str:
+    """Форматировать историю чата для LLM-контекста."""
+    turns = list(history or [])[-limit:]
+    if len(turns) > 10:
+        turns = turns[:2] + turns[-8:]
+    lines: list[str] = []
+    if len(history or []) > 10:
+        lines.append("(Ранние реплики сокращены.)")
+    for turn in turns:
+        role = turn.get("role") or "user"
+        label = "Пользователь" if role == "user" else "Ассистент"
+        content = str(turn.get("content") or "").strip()
+        if content:
+            lines.append(f"{label}: {content[:2000]}")
+    return "\n".join(lines)
+
+
 def normalize_list(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item if isinstance(item, dict) else {"value": item} for item in value]

@@ -11,6 +11,7 @@ from app.client import GatewayClient
 from app.config import get_agent_settings
 from app.graph import build_agent_graph
 from app.llm import AgentLLM
+from app.orchestrator_graph import build_orchestrator_graph
 from app.schemas import AgentMode, AgentRunOut, AgentRunRequest, HealthOut, ModeInfo, ModesOut
 from app.state import MKGAgentState
 from app.utils import elapsed_ms
@@ -71,6 +72,11 @@ async def modes() -> ModesOut:
                 title="Anomaly mode",
                 description="Обход L4-аномалий графа: HDBSCAN noise, соседи Neo4j, Qdrant, объяснение причин.",
             ),
+            ModeInfo(
+                id=AgentMode.orchestrator,
+                title="Orchestrator mode",
+                description="Оркестратор L1–L6: последовательные layer agents, cross-layer/cross-doc связи, синтез.",
+            ),
         ]
     )
 
@@ -90,6 +96,7 @@ async def run_agents(body: AgentRunRequest) -> AgentRunOut:
     initial_state: MKGAgentState = {
         "start_ts": start_ts,
         "query": body.query,
+        "history": [{"role": t.get("role", "user"), "content": t.get("content", "")} for t in (body.history or [])],
         "requested_mode": body.mode.value if body.mode else None,
         "mode": body.mode.value if body.mode else "hypothesis_mode",
         "doc_ids": body.doc_ids,
@@ -105,12 +112,33 @@ async def run_agents(body: AgentRunRequest) -> AgentRunOut:
         "trace": [],
         "warnings": [],
     }
+    is_orchestrator = body.mode == AgentMode.orchestrator if body.mode else False
+    run_timeout = settings.timeout_seconds + 0.5
+    if is_orchestrator:
+        run_timeout = max(run_timeout, settings.timeout_seconds * 1.2)
+    orch_initial: dict[str, Any] = {
+        "start_ts": start_ts,
+        "query": body.query,
+        "history": [{"role": t.get("role", "user"), "content": t.get("content", "")} for t in (body.history or [])],
+        "doc_ids": body.doc_ids,
+        "user_role": body.user_role,
+        "limit": body.limit,
+        "trace": [],
+        "warnings": [],
+    }
     try:
-        graph = build_agent_graph(settings, gateway, llm)
-        state: dict[str, Any] = await asyncio.wait_for(
-            graph.ainvoke(initial_state),
-            timeout=settings.timeout_seconds + 0.5,
-        )
+        if is_orchestrator:
+            graph = build_orchestrator_graph(settings, gateway, llm)
+            state = await asyncio.wait_for(
+                graph.ainvoke(orch_initial),
+                timeout=run_timeout,
+            )
+        else:
+            graph = build_agent_graph(settings, gateway, llm)
+            state = await asyncio.wait_for(
+                graph.ainvoke(initial_state),
+                timeout=run_timeout,
+            )
     except asyncio.TimeoutError:
         state = {
             **initial_state,

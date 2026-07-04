@@ -140,6 +140,40 @@ REL_RULES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
 
 ALL_REL_TYPES = frozenset(REL_RULES)
 
+REL_TYPE_DESCRIPTIONS: dict[str, str] = {
+    "STRUCTURING": "Заголовок раздела структурирует абзац текста (иерархия документа L3).",
+    "TAGGED_WITH": "Абзац помечен языковым или типографским контекстом.",
+    "NEXT_PARAGRAPH": "Последовательный переход к следующему абзацу в тексте.",
+    "HAS_PARAGRAPH": "Документ содержит абзац текста.",
+    "HAS_TABLE": "Документ содержит таблицу.",
+    "HAS_HEADER": "Документ содержит заголовок раздела.",
+    "HAS_LANG": "Документ связан с языковым контекстом.",
+    "CONTEXT_FOR": "Текст или таблица даёт контекст для сущности другого слоя.",
+    "DATA_SOURCE_FOR": "Фрагмент текста — источник данных для факта или измерения.",
+    "ABOUT": "Фрагмент текста описывает технологическое решение (L6).",
+    "WRITES_LOG": "Статус верификации фиксируется в журнале аудита (L5).",
+    "GOVERNED_BY": "Документ регулируется ролью безопасности.",
+    "USES_MAT": "Стадия или опыт использует материал.",
+    "PRODUCED_MEASURE": "Стадия или опыт породил измерение.",
+    "SHOWED_EFFECT": "Эксперимент или стадия показала эффект.",
+    "DERIVED_FROM": "Утверждение (Claim) выведено из источника.",
+    "ASSERTED_BY": "Утверждение сделано экспертом, документом или организацией.",
+}
+
+
+def describe_relationship_type(rel_type: str) -> str:
+    """Краткое описание типа связи для UI."""
+    rt = (rel_type or "").strip().upper()
+    if rt in REL_TYPE_DESCRIPTIONS:
+        return REL_TYPE_DESCRIPTIONS[rt]
+    rules = REL_RULES.get(rt)
+    if rules:
+        from_labels = ", ".join(sorted(rules[0]))
+        to_labels = ", ".join(sorted(rules[1]))
+        return f"Связь {rt}: {from_labels} → {to_labels}"
+    return f"Связь типа {rt or '?'}"
+
+
 # Синонимы типов связей, которые LLM выдаёт вместо канонических.
 _REL_ALIASES: dict[str, str] = {
     "DESCRIBES_PROC": "DESCRIBES_SOLUTION",
@@ -359,6 +393,164 @@ NODE_PROP_HINTS: dict[str, tuple[str, ...]] = {
     "EnvironmentalIndicator": ("name", "value", "unit") + _COMMON_LLM_PROPS,
 }
 
+# Поля, обязательные для UI-счётчика «заполнено X/Y» (остальные — подсказки/enrichment).
+NODE_PROP_UI_REQUIRED: dict[str, tuple[str, ...]] = {
+    "Expert": ("full_name",),
+    "Organization": ("legal_name",),
+    "Location": ("city", "country", "region", "industrial_site"),
+    "Event": ("event_name", "name"),
+    "Facility": ("name",),
+    "Timeline": ("name", "period_start", "period_end"),
+}
+
+# Поля enrichment — показываем в UI, но не считаем «ожидается» для L2-контекста.
+_L2_ENRICHMENT_OPTIONAL = frozenset({"quote", "source_quote", "extraction_confidence", "organization", "role"})
+
+
+def short_name_from_full_name(full_name: str) -> str:
+    """Краткая форма ФИО: «Фамилия И.О.» из «Фамилия Имя Отчество»."""
+    parts = [p for p in full_name.strip().split() if p]
+    if len(parts) >= 3:
+        initials = ".".join(f"{p[0].upper()}." for p in parts[1:3])
+        return f"{parts[0]} {initials}"
+    if len(parts) == 2:
+        return f"{parts[0]} {parts[1][0].upper()}."
+    return full_name.strip()
+
+
+def _copy_quote_fields_inplace(props: dict[str, Any]) -> None:
+    quote = props.get("quote")
+    if isinstance(quote, str) and quote.strip() and not props.get("source_quote"):
+        props["source_quote"] = quote.strip()
+
+
+def _build_l2_normalize_context(
+    nodes: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Контекст для нормализации L2: role из AUTHORED, organization из BELONGS_TO."""
+    org_names: dict[str, str] = {}
+    doc_org: str | None = None
+    for node in nodes:
+        label = str(node.get("label") or "")
+        node_id = str(node.get("id") or "")
+        props = node.get("props") if isinstance(node.get("props"), dict) else {}
+        if label == "Organization" and node_id:
+            org_name = str(props.get("legal_name") or props.get("name") or "").strip()
+            if org_name:
+                org_names[node_id] = org_name
+    for rel in relationships:
+        rel_type = str(rel.get("type") or "")
+        props = rel.get("props") if isinstance(rel.get("props"), dict) else {}
+        if rel_type == "BELONGS_TO":
+            org_id = str(rel.get("to") or "")
+            if org_id in org_names and doc_org is None:
+                doc_org = org_names[org_id]
+    expert_ctx: dict[str, dict[str, Any]] = {}
+    for rel in relationships:
+        rel_type = str(rel.get("type") or "")
+        props = rel.get("props") if isinstance(rel.get("props"), dict) else {}
+        if rel_type == "AUTHORED":
+            expert_id = str(rel.get("from") or "")
+            if not expert_id:
+                continue
+            ctx = expert_ctx.setdefault(expert_id, {})
+            role = props.get("role")
+            if isinstance(role, str) and role.strip():
+                ctx["role"] = role.strip()
+            if doc_org and "organization" not in ctx:
+                ctx["organization"] = doc_org
+    return expert_ctx
+
+
+def normalize_entity_props(
+    label: str,
+    props: dict[str, Any],
+    *,
+    rel_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Дополняет пропущенные поля L2/L1 из уже извлечённых props (in-place + return)."""
+    rel_context = rel_context or {}
+    _copy_quote_fields_inplace(props)
+
+    if label == "Expert":
+        full_name = str(props.get("full_name") or "").strip()
+        name = str(props.get("name") or "").strip()
+        if full_name and not name:
+            props["name"] = short_name_from_full_name(full_name)
+        elif name and not full_name:
+            props["full_name"] = name
+        if not props.get("quote") and full_name:
+            props["quote"] = full_name
+            props["source_quote"] = full_name
+        for key in ("role", "organization"):
+            val = rel_context.get(key)
+            if isinstance(val, str) and val.strip() and not props.get(key):
+                props[key] = val.strip()
+        if props.get("extraction_confidence") is None:
+            filled = sum(
+                1 for k in ("full_name", "name", "organization", "role", "source_quote") if props.get(k)
+            )
+            props["extraction_confidence"] = min(0.9, 0.5 + filled * 0.08)
+    elif label == "Organization":
+        legal = str(props.get("legal_name") or "").strip()
+        name = str(props.get("name") or "").strip()
+        if legal and not name:
+            props["name"] = legal
+        elif name and not legal:
+            props["legal_name"] = name
+        if props.get("extraction_confidence") is None and (legal or name):
+            props["extraction_confidence"] = 0.75
+    elif label == "Location":
+        for key in ("city", "country", "region", "industrial_site"):
+            val = props.get(key)
+            if isinstance(val, str) and val.strip():
+                if props.get("extraction_confidence") is None:
+                    props["extraction_confidence"] = 0.7
+                break
+    elif label == "Event":
+        event_name = str(props.get("event_name") or "").strip()
+        if event_name and not props.get("name"):
+            props["name"] = event_name
+    elif label == "Facility":
+        if props.get("extraction_confidence") is None and props.get("name"):
+            props["extraction_confidence"] = 0.7
+
+    return props
+
+
+def ui_required_fields(label: str, props: dict[str, Any] | None = None) -> tuple[str, ...]:
+    """Поля, обязательные для счётчика заполненности в UI."""
+    props = props or {}
+    required = NODE_PROP_UI_REQUIRED.get(label)
+    if required:
+        return required
+    hints = NODE_PROP_HINTS.get(label, ())
+    if label in L2_LABELS and props:
+        return tuple(k for k in hints if k not in _L2_ENRICHMENT_OPTIONAL and k != "name")
+    return hints
+
+
+def is_ui_expected_field(label: str, key: str, props: dict[str, Any] | None = None) -> bool:
+    """Нужно ли показывать поле как «ожидается» в UI."""
+    props = props or {}
+    hints = NODE_PROP_HINTS.get(label, ())
+    if key not in hints or key == "id":
+        return False
+    if label == "Expert" and key == "name" and _has_value(props, ("full_name",)):
+        return False
+    if label == "Organization" and key == "name" and _has_value(props, ("legal_name",)):
+        return False
+    if label in L2_LABELS and key in _L2_ENRICHMENT_OPTIONAL:
+        return False
+    required = ui_required_fields(label, props)
+    if required and key in required:
+        return True
+    if label in L2_LABELS:
+        return key in required
+    return key in hints
+
+
 # Узлы, требующие числового значения (без числа — это не факт, а мусор).
 _NUMERIC_REQUIRED: dict[str, tuple[str, ...]] = {
     "Measurement": ("numeric_value",),
@@ -409,6 +601,10 @@ def sanitize_graph_payload(payload: GraphPayload) -> GraphPayload:
     - типы связей нормализуются к каноническим; неизвестные — отбрасываются;
     - связи с несуществующими концами или недопустимыми (from→to) метками — отбрасываются.
     """
+    l2_ctx = _build_l2_normalize_context(
+        list(payload.nodes),
+        list(payload.relationships),
+    )
     clean_nodes: list[dict[str, Any]] = []
     label_by_id: dict[str, str] = {}
     for node in payload.nodes:
@@ -416,7 +612,10 @@ def sanitize_graph_payload(payload: GraphPayload) -> GraphPayload:
         label = str(node.get("label") or "").strip()
         if not node_id or label not in ALL_LABELS:
             continue
-        props = clean_props(node.get("props") if isinstance(node.get("props"), dict) else {}, node_id)
+        raw_props = dict(node.get("props") if isinstance(node.get("props"), dict) else {})
+        if label in L2_LABELS:
+            normalize_entity_props(label, raw_props, rel_context=l2_ctx.get(node_id))
+        props = clean_props(raw_props, node_id)
         if not is_informative(label, props):
             continue
         clean_nodes.append({"id": node_id, "label": label, "props": props})

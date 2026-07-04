@@ -12,13 +12,14 @@ class _AgentEnv(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     gateway_url: str = Field(default="http://localhost:8000", alias="GATEWAY_URL")
-    timeout_seconds: float = Field(default=5.0, alias="AGENTS_TIMEOUT_SECONDS")
+    timeout_seconds: float = Field(default=45.0, alias="AGENTS_TIMEOUT_SECONDS")
     llm_model: str = Field(default="", alias="AGENTS_LLM_MODEL")
     llm_max_output_tokens: int = Field(default=1200, alias="AGENTS_LLM_MAX_OUTPUT_TOKENS")
     max_docs: int = Field(default=5, alias="AGENTS_MAX_DOCS")
     search_limit: int = Field(default=6, alias="AGENTS_SEARCH_LIMIT")
     max_context_nodes: int = Field(default=10, alias="AGENTS_MAX_CONTEXT_NODES")
     max_agent_loops: int = Field(default=1, alias="AGENTS_MAX_AGENT_LOOPS")
+    agent_loop_max_rounds: int = Field(default=4, alias="AGENT_LOOP_MAX_ROUNDS")
     max_hypothesis_refinements: int = Field(default=1, alias="AGENTS_MAX_HYPOTHESIS_REFINEMENTS")
     planner_timeout: float = Field(default=1.2, alias="AGENTS_LLM_PLANNER_TIMEOUT")
     analyzer_timeout: float = Field(default=1.8, alias="AGENTS_LLM_ANALYZER_TIMEOUT")
@@ -55,6 +56,7 @@ class AgentSettings:
     search_limit: int
     max_context_nodes: int
     max_agent_loops: int
+    agent_loop_max_rounds: int
     max_hypothesis_refinements: int
     planner_timeout: float
     analyzer_timeout: float
@@ -79,6 +81,7 @@ def get_agent_settings() -> AgentSettings:
         search_limit=_int_env("AGENTS_SEARCH_LIMIT", env.search_limit),
         max_context_nodes=_int_env("AGENTS_MAX_CONTEXT_NODES", env.max_context_nodes),
         max_agent_loops=_int_env("AGENTS_MAX_AGENT_LOOPS", env.max_agent_loops),
+        agent_loop_max_rounds=_int_env("AGENT_LOOP_MAX_ROUNDS", env.agent_loop_max_rounds),
         max_hypothesis_refinements=_int_env("AGENTS_MAX_HYPOTHESIS_REFINEMENTS", env.max_hypothesis_refinements),
         planner_timeout=_float_env("AGENTS_LLM_PLANNER_TIMEOUT", env.planner_timeout),
         analyzer_timeout=_float_env("AGENTS_LLM_ANALYZER_TIMEOUT", env.analyzer_timeout),

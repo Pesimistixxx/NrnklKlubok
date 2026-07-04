@@ -20,6 +20,7 @@ class Settings(BaseSettings):
         default="https://ocr.api.cloud.yandex.net/ocr/v1/recognizeText",
         alias="YANDEX_OCR_URL",
     )
+    ocr_quality: str = Field(default="high", alias="OCR_QUALITY")
     yandex_model_pro: str = Field(default="yandexgpt-5.1", alias="YANDEX_MODEL_PRO")
     yandex_model_lite: str = Field(default="yandexgpt-5-lite", alias="YANDEX_MODEL_LITE")
     yandex_emb_doc: str = Field(default="text-search-doc/latest", alias="YANDEX_EMB_DOC")
@@ -69,7 +70,10 @@ class Settings(BaseSettings):
 
     # Graph traversal & L4 clustering
     graph_traversal_max_hops: int = Field(default=2, alias="GRAPH_TRAVERSAL_MAX_HOPS")
-    hdbscan_min_cluster_size: int = Field(default=3, alias="HDBSCAN_MIN_CLUSTER_SIZE")
+    graph_walk_max_hops: int = Field(default=5, alias="GRAPH_WALK_MAX_HOPS")
+    graph_walk_max_nodes: int = Field(default=20, alias="GRAPH_WALK_MAX_NODES")
+    graph_walk_max_seeds: int = Field(default=5, alias="GRAPH_WALK_MAX_SEEDS")
+    hdbscan_min_cluster_size: int = Field(default=2, alias="HDBSCAN_MIN_CLUSTER_SIZE")
     hdbscan_min_samples: int | None = Field(default=None, alias="HDBSCAN_MIN_SAMPLES")
 
     # helpers ------------------------------------------------------------

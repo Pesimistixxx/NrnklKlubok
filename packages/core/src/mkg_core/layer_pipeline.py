@@ -119,10 +119,13 @@ def build_layer_pipeline(
         end_node = node_by_id.get(end)
         recent.append(
             {
+                "from": start,
                 "from_short": _short_node(start_node, start),
                 "type": rtype,
+                "to": end,
                 "to_short": _short_node(end_node, end),
                 "layer": _node_layer(start_node) if start_node else "L?",
+                "props": dict(rel.get("props") or {}),
             }
         )
         if len(recent) >= 12:

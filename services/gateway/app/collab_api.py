@@ -249,6 +249,7 @@ async def query_test(body: QueryTestIn) -> QueryTestOut:
                 doc_ids=[],
                 user_role=body.role_id,
                 limit=5,
+                history=history,
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

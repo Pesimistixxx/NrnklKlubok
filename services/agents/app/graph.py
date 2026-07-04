@@ -31,6 +31,7 @@ from app.nodes import (
     ranking_agent,
     retrieval_search,
     route_by_mode,
+    sequential_graph_walk,
     technology_coverage_analyzer,
 )
 from app.state import MKGAgentState
@@ -68,6 +69,9 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     async def _retrieval_search(state: MKGAgentState) -> MKGAgentState:
         return await retrieval_search(state, gateway, settings)
 
+    async def _sequential_graph_walk(state: MKGAgentState) -> MKGAgentState:
+        return await sequential_graph_walk(state, settings)
+
     async def _graph_context_loader(state: MKGAgentState) -> MKGAgentState:
         return await graph_context_loader(state, gateway, settings)
 
@@ -90,6 +94,7 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     graph.add_node("anomaly_graph_walker", _anomaly_graph_walker)
     graph.add_node("anomaly_qdrant_refine", _anomaly_qdrant_refine)
     graph.add_node("retrieval_search", _retrieval_search)
+    graph.add_node("sequential_graph_walk", _sequential_graph_walk)
     graph.add_node("graph_context_loader", _graph_context_loader)
     graph.add_node("evidence_collector", evidence_collector)
     graph.add_node("llm_evidence_analyzer", _llm_evidence_analyzer)
@@ -130,8 +135,9 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     )
     graph.add_edge("anomaly_seed_loader", "anomaly_graph_walker")
     graph.add_edge("anomaly_graph_walker", "anomaly_qdrant_refine")
-    graph.add_edge("anomaly_qdrant_refine", "graph_context_loader")
-    graph.add_edge("retrieval_search", "graph_context_loader")
+    graph.add_edge("anomaly_qdrant_refine", "sequential_graph_walk")
+    graph.add_edge("retrieval_search", "sequential_graph_walk")
+    graph.add_edge("sequential_graph_walk", "graph_context_loader")
     graph.add_edge("graph_context_loader", "evidence_collector")
     graph.add_edge("evidence_collector", "llm_evidence_analyzer")
     graph.add_conditional_edges(

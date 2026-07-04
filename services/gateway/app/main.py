@@ -5,6 +5,7 @@ REST: /api/v1/documents, /graph, /chat, /query, /agents, /agents-service.
 from __future__ import annotations
 
 import time
+import re
 from pathlib import Path
 from typing import Any
 
@@ -35,11 +36,12 @@ from mkg_core.llm_cache import LLMResponseCache
 from mkg_ingestion.formats import formats_public, is_binary
 from mkg_ingestion import process as run_ingestion_process
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
-from mkg_core.ontology import NODE_PROP_HINTS
+from mkg_core.ontology import LABEL_LAYER, NODE_PROP_HINTS, NODE_PROP_UI_REQUIRED, describe_relationship_type, sanitize_graph_payload
 
 from app.agent_api import router as agent_router
 from app.agents_proxy import router as agents_proxy_router
 from app.collab_api import router as collab_router
+from app.docs_api import router as docs_router
 from app.graph_anomalies import router as graph_anomalies_router
 from app.schemas import (
     BatchUploadItem,
@@ -52,6 +54,7 @@ from app.schemas import (
     GraphNode,
     GraphOut,
     GraphRelationship,
+    GraphRelationshipDetailOut,
     LayerPipelineOut,
     PipelineLogOut,
     ClearDatabaseOut,
@@ -75,6 +78,7 @@ app = FastAPI(
     ),
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(docs_router, prefix=API)
 app.include_router(agent_router, prefix=API)
 app.include_router(collab_router, prefix=API)
 app.include_router(agents_proxy_router, prefix=API)
@@ -187,6 +191,8 @@ async def _run_ingestion_inline(doc_id: str) -> None:
     try:
         result = await run_ingestion_process(doc_id, rec["file_name"], content)
         repo.save_markdown(doc_id, result.markdown)
+        if result.raw_markdown:
+            repo.save_raw_markdown(doc_id, result.raw_markdown)
         repo.save_marked_markdown(
             doc_id,
             build_marked_markdown(doc_id, result.markdown, None),
@@ -299,9 +305,15 @@ async def get_formats() -> FormatsOut:
 
 
 @app.get(f"{API}/ontology/node-fields")
-async def get_node_field_hints() -> dict[str, list[str]]:
+async def get_node_field_hints() -> dict[str, Any]:
     """Ожидаемые props по метке узла — для UI и проверки extraction."""
-    return {label: list(fields) for label, fields in NODE_PROP_HINTS.items()}
+    return {
+        label: {
+            "fields": list(fields),
+            "required": list(NODE_PROP_UI_REQUIRED.get(label, fields)),
+        }
+        for label, fields in NODE_PROP_HINTS.items()
+    }
 
 
 @app.post(f"{API}/documents", response_model=DocumentOut)
@@ -359,13 +371,63 @@ async def upload_documents_batch(
 
 @app.post(f"{API}/documents/{{doc_id}}/reprocess")
 async def reprocess_document(doc_id: str, background: BackgroundTasks) -> dict[str, str]:
+    """Повтор OCR → Markdown. Всегда переводит документ в полный пайплайн (не answers_only)."""
     if not get_repo().get(doc_id):
         raise HTTPException(status_code=404, detail="Документ не найден")
-    get_repo().set_status(doc_id, DocStatus.uploaded.value, error=None, step="reprocess")
+    get_repo().set_status(
+        doc_id,
+        DocStatus.uploaded.value,
+        error=None,
+        step="reprocess",
+        processing_mode="full",
+    )
     job_id = await enqueue("run_ingestion", doc_id)
     if job_id is None:
         background.add_task(_run_ingestion_inline, doc_id)
-    return {"document_id": doc_id, "status": DocStatus.processing.value}
+    return {"document_id": doc_id, "status": DocStatus.processing.value, "processing_mode": "full"}
+
+
+@app.post(f"{API}/documents/{{doc_id}}/reprocess-full")
+async def reprocess_full_pipeline(doc_id: str, background: BackgroundTasks) -> dict[str, str]:
+    """Полный пайплайн для документа «только для чата»: L1–L6 → граф → Neo4j → Qdrant → L4."""
+    rec = get_repo().get(doc_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    get_repo().set_status(doc_id, rec.get("status", DocStatus.uploaded.value), processing_mode="full")
+    md = get_repo().read_markdown(doc_id)
+    st = rec.get("status", "")
+    if md and st in (DocStatus.md_ready.value, DocStatus.loaded.value, DocStatus.failed.value):
+        get_repo().clear_cancel_extraction(doc_id)
+        job_id = await enqueue("run_extraction", doc_id)
+        get_repo().set_status(
+            doc_id,
+            DocStatus.extracting.value,
+            step="extraction",
+            extraction_job_id=job_id,
+            cancel_requested=False,
+            processing_mode="full",
+        )
+        try:
+            await update_document_status(doc_id, DocStatus.extracting.value, step="extraction")
+        except Exception:
+            pass
+        return {
+            "document_id": doc_id,
+            "status": DocStatus.extracting.value,
+            "processing_mode": "full",
+            "job_id": job_id or "",
+        }
+    get_repo().set_status(
+        doc_id,
+        DocStatus.uploaded.value,
+        error=None,
+        step="reprocess_full",
+        processing_mode="full",
+    )
+    job_id = await enqueue("run_ingestion", doc_id)
+    if job_id is None:
+        background.add_task(_run_ingestion_inline, doc_id)
+    return {"document_id": doc_id, "status": DocStatus.processing.value, "processing_mode": "full"}
 
 
 @app.post(f"{API}/documents/{{doc_id}}/neo4j-sync")
@@ -454,7 +516,7 @@ async def get_document(doc_id: str) -> DocumentOut:
 @app.get(f"{API}/documents/{{doc_id}}/markdown")
 async def get_markdown(
     doc_id: str,
-    variant: str = Query(default="clean", pattern="^(clean|marked)$"),
+    variant: str = Query(default="clean", pattern="^(clean|raw|marked)$"),
     download: bool = Query(default=False),
 ) -> Response:
     repo = get_repo()
@@ -465,13 +527,19 @@ async def get_markdown(
             if clean is None:
                 raise HTTPException(status_code=404, detail="Markdown ещё не готов")
             md = build_marked_markdown(doc_id, clean, repo.read_graph(doc_id))
+    elif variant == "raw":
+        md = repo.read_raw_markdown(doc_id)
+        if md is None:
+            md = repo.read_markdown(doc_id)
+        if md is None:
+            raise HTTPException(status_code=404, detail="Markdown ещё не готов")
     else:
         md = repo.read_markdown(doc_id)
         if md is None:
             raise HTTPException(status_code=404, detail="Markdown ещё не готов")
     rec = repo.get(doc_id) or {}
     file_stem = Path(rec.get("file_name") or doc_id).stem
-    suffix = "marked" if variant == "marked" else "clean"
+    suffix = {"marked": "marked", "raw": "raw", "clean": "clean"}.get(variant, "clean")
     filename = f"{file_stem}_{suffix}.md"
     headers: dict[str, str] = {}
     if download:
@@ -499,6 +567,8 @@ async def submit_document(doc_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="Документ не найден")
     if rec.get("status") not in (DocStatus.md_ready.value, DocStatus.loaded.value, DocStatus.failed.value):
         raise HTTPException(status_code=409, detail="Дождитесь md_ready")
+    if (rec.get("processing_mode") or "full") == "answers_only":
+        get_repo().set_status(doc_id, rec.get("status"), processing_mode="full")
     get_repo().clear_cancel_extraction(doc_id)
     job_id = await enqueue("run_extraction", doc_id)
     get_repo().set_status(
@@ -547,6 +617,7 @@ async def get_preview(doc_id: str) -> dict:
         source_kind = "text"
         source_text = raw.decode("utf-8", errors="replace")[:20000]
     clean_md = get_repo().read_markdown(doc_id) or ""
+    raw_md = get_repo().read_raw_markdown(doc_id) or ""
     repo = get_repo()
     return {
         "document_id": doc_id,
@@ -564,8 +635,10 @@ async def get_preview(doc_id: str) -> dict:
         "source_kind": source_kind,
         "source_text": source_text,
         "markdown": clean_md,
+        "markdown_raw": raw_md or None,
         "markdown_marked": build_marked_markdown(doc_id, clean_md, get_repo().read_graph(doc_id)),
         "md_file": repo.markdown_relative_path(doc_id) if clean_md else None,
+        "md_raw_file": repo.raw_markdown_relative_path(doc_id) if raw_md else None,
         "md_marked_file": repo.marked_markdown_relative_path(doc_id) if clean_md else None,
         "markdown_url": f"{API}/documents/{doc_id}/markdown",
         "error": rec.get("error") or rec.get("neo4j_error"),
@@ -616,7 +689,7 @@ async def get_document_graph(doc_id: str) -> GraphOut:
     payload = get_repo().read_graph(doc_id)
     if not payload:
         raise HTTPException(status_code=404, detail="Граф ещё не сформирован")
-    cleaned = dedupe_graph_payload(
+    cleaned = sanitize_graph_payload(
         GraphPayload(
             nodes=list(payload.get("nodes") or []),
             relationships=list(payload.get("relationships") or []),
@@ -633,6 +706,135 @@ async def get_document_graph(doc_id: str) -> GraphOut:
         for r in cleaned.get("relationships", [])
     ]
     return GraphOut(document_id=doc_id, nodes=nodes, relationships=relationships)
+
+
+def _node_layer_label(node: dict[str, Any] | None) -> str:
+    if not node:
+        return "L?"
+    label = str(node.get("label") or "?")
+    return LABEL_LAYER.get(label, "L?")
+
+
+@app.get(
+    f"{API}/graph/documents/{{doc_id}}/relationship",
+    response_model=GraphRelationshipDetailOut,
+)
+async def get_document_relationship(
+    doc_id: str,
+    from_: str = Query(alias="from"),
+    to: str = Query(),
+    type: str = Query(),
+) -> GraphRelationshipDetailOut:
+    if not get_repo().get(doc_id):
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    if not from_ or not to or not type:
+        raise HTTPException(status_code=400, detail="Параметры from, to и type обязательны")
+    payload = get_repo().read_graph(doc_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Граф ещё не сформирован")
+    cleaned = dedupe_graph_payload(
+        GraphPayload(
+            nodes=list(payload.get("nodes") or []),
+            relationships=list(payload.get("relationships") or []),
+        )
+    ).as_dict()
+    nodes = cleaned.get("nodes") or []
+    rels = cleaned.get("relationships") or []
+    node_by_id = {str(n.get("id")): n for n in nodes if n.get("id")}
+    match = None
+    for rel in rels:
+        start = str(rel.get("from") or rel.get("from_") or "")
+        end = str(rel.get("to") or "")
+        rtype = str(rel.get("type") or "")
+        if start == from_ and end == to and rtype == type:
+            match = rel
+            break
+    if not match:
+        raise HTTPException(status_code=404, detail="Связь не найдена в графе документа")
+    source_raw = node_by_id.get(from_)
+    target_raw = node_by_id.get(to)
+    source_node = GraphNode(**source_raw) if source_raw else None
+    target_node = GraphNode(**target_raw) if target_raw else None
+    related: list[GraphRelationship] = []
+    seen: set[tuple[str, str, str]] = {(from_, type, to)}
+    for rel in rels:
+        start = str(rel.get("from") or rel.get("from_") or "")
+        end = str(rel.get("to") or "")
+        rtype = str(rel.get("type") or "")
+        key = (start, rtype, end)
+        if key in seen:
+            continue
+        if start in {from_, to} or end in {from_, to}:
+            seen.add(key)
+            related.append(
+                GraphRelationship(
+                    type=rtype,
+                    from_=start,
+                    to=end,
+                    props=rel.get("props") or {},
+                )
+            )
+        if len(related) >= 12:
+            break
+    return GraphRelationshipDetailOut(
+        document_id=doc_id,
+        type=type,
+        from_=from_,
+        to=to,
+        props=match.get("props") or {},
+        layer=_node_layer_label(source_raw),
+        description=describe_relationship_type(type),
+        source_node=source_node,
+        target_node=target_node,
+        related_edges=related,
+    )
+
+
+_ENTITY_LABELS = frozenset({
+    "Material", "Process", "Equipment", "ChemicalReagent",
+    "Organization", "Person", "Expert", "Facility",
+})
+
+
+def _canonical_entity_key(node: dict[str, Any]) -> str | None:
+    label = str(node.get("label") or "")
+    if label not in _ENTITY_LABELS:
+        return None
+    props = dict(node.get("props") or {})
+    nid = str(node.get("id") or "")
+    base = nid
+    if ":" in nid:
+        prefix, rest = nid.split(":", 1)
+        if len(prefix) >= 8 or prefix.startswith("doc_"):
+            base = rest
+    name = props.get("name_en") or props.get("name_ru") or props.get("title_ru") or ""
+    if name:
+        slug = re.sub(r"[^a-zA-Zа-яА-ЯёЁ0-9]+", "-", str(name).strip().lower())[:48].strip("-")
+        return f"{label}:{slug}"
+    return f"{label}:{base}"
+
+
+def _annotate_multi_doc_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_key: dict[str, set[str]] = {}
+    for n in nodes:
+        key = _canonical_entity_key(n)
+        if not key:
+            continue
+        doc = str((n.get("props") or {}).get("source_doc_id") or "")
+        if doc:
+            by_key.setdefault(key, set()).add(doc)
+    out: list[dict[str, Any]] = []
+    for n in nodes:
+        key = _canonical_entity_key(n)
+        docs = by_key.get(key or "", set())
+        if key and len(docs) >= 2:
+            props = dict(n.get("props") or {})
+            props["multi_doc_count"] = len(docs)
+            props["multi_doc_ids"] = sorted(docs)
+            out.append({**n, "props": props})
+        else:
+            out.append(n)
+    return out
 
 
 @app.get(f"{API}/graph/all", response_model=GraphOut)
@@ -674,7 +876,8 @@ async def get_merged_graph() -> GraphOut:
     cleaned = dedupe_graph_payload(
         GraphPayload(nodes=merged_nodes, relationships=merged_rels)
     ).as_dict()
-    nodes = [GraphNode(**n) for n in cleaned.get("nodes", [])]
+    annotated_nodes = _annotate_multi_doc_nodes(cleaned.get("nodes", []))
+    nodes = [GraphNode(**n) for n in annotated_nodes]
     relationships = [
         GraphRelationship(
             type=r.get("type", ""),

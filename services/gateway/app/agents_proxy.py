@@ -21,6 +21,7 @@ async def proxy_agents_run(
     doc_ids: list[str] | None = None,
     user_role: str = "researcher",
     limit: int = 5,
+    history: list[dict[str, str]] | None = None,
 ) -> dict:
     """Вызов LangGraph agents service, возвращает сырой JSON."""
     url = f"{_agents_base()}/api/v1/agents/run"
@@ -29,6 +30,8 @@ async def proxy_agents_run(
         payload["mode"] = mode
     if doc_ids:
         payload["doc_ids"] = doc_ids
+    if history:
+        payload["history"] = history
     timeout = get_settings().agents_timeout_seconds + 2.0
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(url, json=payload)
@@ -77,6 +80,7 @@ async def agents_run(body: AgentServiceRunIn) -> AgentServiceRunOut:
             doc_ids=body.doc_ids or None,
             user_role=body.user_role,
             limit=body.limit,
+            history=[{"role": t.role, "content": t.content} for t in body.history],
         )
         return AgentServiceRunOut(**data)
     except HTTPException:

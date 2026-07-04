@@ -6,24 +6,24 @@
 
 - **Роль пользователя** — права и системный промпт (8 ролей). Это *стиль ответа*, не слой графа.
 - **Автоматический пайплайн агентов** — оркестратор L1–L6 + RAG + обход графа (без выбора «режима» в UI).
-- **Межслойные агенты L1–L6** — оценка вопроса по слоям графа; см. [`24_layer_agents.md`](24_layer_agents.md).
+- **Межслойные агенты L1–L6** — оценка вопроса по слоям графа; см. **Межслойные агенты (L1–L6)**.
 - **Загрузку файлов** (кнопка прикрепления) с выбором полного пайплайна или «только для ответов».
 - **Trace** — цепочка reasoning: поиск → граф → LLM / шаги агента.
 - **Источники** и **Сохранить как MD** — экспорт ответа с ссылками на документы.
 
-UI cache: `?v=78` (при странном поведении — **Ctrl+F5**).
+UI cache: `?v=76` (при странном поведении — **Ctrl+F5**).
 
 ## Межслойные агенты в чате
 
-**Межслойный агент** (`l1_agent` … `l6_agent`) — не роль. Это узел, который оценивает вопрос **с точки зрения одного слоя** MKG. В оркестраторе они работают **гибким циклом с JSON-шиной** — см. [`24_layer_agents.md`](24_layer_agents.md).
+**Межслойный агент** (`l1_agent` … `l6_agent`) — не роль. Это узел, который оценивает вопрос **с точки зрения одного слоя** MKG (материалы L1, текст L3, факты L4…). В оркестраторе они работают **циклом L1→L6** с накоплением контекста — см. раздел **«Цикл межслойных агентов»** в **Межслойные агенты (L1–L6)**.
 
 | Где видны | Что происходит |
 |-----------|----------------|
-| Ответ в чате (роли с `can_run_agents`) | Оркестратор: гибкий цикл + шина (`orchestrator_graph.py`) |
+| Ответ в чате (роли с `can_run_agents`) | Оркестратор L1→L6 последовательно (`orchestrator_graph.py`) |
 | Роли без агентов (engineer, viewer…) | Облегчённый layer trace в `chat_engine.py` |
-| Trace в ответе | `agent_question`, `situation_evaluation`, `round`, `bus_messages` |
+| Trace в ответе | `agent_question`, `situation_evaluation`, `node_count`, `loop_index` (1…6) |
 
-Подробнее: [`24_layer_agents.md`](24_layer_agents.md) · иерархия — [`23_agent_hierarchy.md`](23_agent_hierarchy.md).
+Подробнее: **Межслойные агенты (L1–L6)** · иерархия — **Иерархия агентов**.
 
 ## Роли пользователя
 
@@ -52,7 +52,7 @@ UI cache: `?v=78` (при странном поведении — **Ctrl+F5**).
 
 | Mode ID | Назначение |
 |---------|------------|
-| `orchestrator_mode` | Координатор → гибкий цикл L1–L6 + шина → синтез (**по умолчанию в чате**) |
+| `orchestrator_mode` | Координатор → L1→L6 → синтез (**по умолчанию в чате**, внутренне) |
 | `hypothesis_mode` | Гипотезы и связи между фактами |
 | `audit_mode` | Противоречия, issue/severity |
 | `anomaly_mode` | L4-выбросы HDBSCAN — **внутренний**, не UI |
@@ -77,15 +77,15 @@ UI cache: `?v=78` (при странном поведении — **Ctrl+F5**).
 }
 ```
 
-**Роли с `can_run_agents`:** gateway вызывает `orchestrator_mode` (гибкий цикл, JSON-шина, discover, synthesize). При недоступности agents — fallback на RAG-диалог.
+**Роли с `can_run_agents`:** gateway вызывает `orchestrator_mode` в agents service (L1→L6, discover, synthesize). При недоступности agents — fallback на RAG-диалог.
 
 **Роли без агентов:** Qdrant L3+L4 → Neo4j walk → layer trace → LLM.
 
 Trace steps (оркестратор):
 
-1. `orchestrator_init` → `orchestrator_plan` → `agent_loop_start`
-2. **Цикл:** `orchestrator_router` ↔ `l*_agent` (раунды, `bus_messages`)
-3. `discover_new_connections` → `connection_gap_analyzer` → `orchestrator_synthesize`
+1. `orchestrator_init` → `orchestrator_plan` → `layer_loop_start`
+2. **Цикл L1…L6:** `l1_agent` … `l6_agent` (каждый шаг с `loop_index`, контекст передаётся дальше)
+3. `discover_new_connections` → `connection_gap_analyzer` (опциональный refinement) → `orchestrator_synthesize`
 
 Trace steps (fallback-диалог):
 
@@ -112,7 +112,7 @@ Trace steps (fallback-диалог):
 
 ## Trace и reasoning chain
 
-- **Оркестратор** — `orchestrator_init` → `agent_loop_start` → router ↔ agents → discover → gap → synthesize.
+- **Оркестратор** — `orchestrator_init` → `layer_loop_start` → `l1_agent` … `l6_agent` → discover → gap → synthesize.
 - **Диалог (fallback)** — `qdrant_l3`, `graph_traversal`, layer trace, `llm_compose`.
 - **anomaly_mode** (только API) — список `anomalies` с `node_id`, `severity`, `related_neighbors`.
 
@@ -142,4 +142,4 @@ Trace steps (fallback-диалог):
 | GET | `/api/v1/graph/anomalies` | L4-аномалии |
 | POST | `/api/v1/graph/l4/cluster` | HDBSCAN L4 |
 
-См. также: [`24_layer_agents.md`](24_layer_agents.md), [`23_agent_hierarchy.md`](23_agent_hierarchy.md), [`21_pipeline_and_layers.md`](21_pipeline_and_layers.md).
+См. также: **Межслойные агенты (L1–L6)**, **Иерархия агентов**, **Пайплайн и слои L1–L6**.

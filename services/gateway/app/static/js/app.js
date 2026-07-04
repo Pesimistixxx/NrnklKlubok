@@ -21,7 +21,10 @@ const els = {
   graphPanel: $("graphPanel"),
   pageQdrant: $("pageQdrant"),
   pageChats: $("pageChats"),
+  pageGuide: $("pageGuide"),
   pageSettings: $("pageSettings"),
+  docSectionTabs: $("docSectionTabs"),
+  guideContent: $("guideContent"),
   projectStageLine: null,
   viewAllGraphBtn: $("viewAllGraphBtn"),
   docPageBar: $("docPageBar"),
@@ -41,9 +44,11 @@ const els = {
   docMdPanel: $("docMdPanel"),
   docLogsPanel: $("docLogsPanel"),
   previewMdRender: $("previewMdRender"),
+  previewMdRaw: $("previewMdRaw"),
   previewMdSource: $("previewMdSource"),
-  mdViewRenderBtn: $("mdViewRenderBtn"),
-  mdViewSourceBtn: $("mdViewSourceBtn"),
+  mdViewCleanBtn: $("mdViewCleanBtn"),
+  mdViewRawBtn: $("mdViewRawBtn"),
+  mdViewMarkedBtn: $("mdViewMarkedBtn"),
   previewLogs: $("previewLogs"),
   logsPreview: $("previewLogs"),
   docListFilter: $("docListFilter"),
@@ -52,7 +57,6 @@ const els = {
   graphPageLead: $("graphPageLead"),
   graphsEmpty: $("graphsEmpty"),
   graphsWorkspace: $("graphsWorkspace"),
-  qdrantDocFilter: $("qdrantDocFilter"),
   qdrantSearchForm: $("qdrantSearchForm"),
   qdrantSearchQuery: $("qdrantSearchQuery"),
   qdrantSearchResults: $("qdrantSearchResults"),
@@ -61,6 +65,13 @@ const els = {
   qdrantPointsCount: $("qdrantPointsCount"),
   qdrantClusterMap: $("qdrantClusterMap"),
   qdrantClusterCount: $("qdrantClusterCount"),
+  qdrantVizCanvas: $("qdrantVizCanvas"),
+  qdrantVizLegend: $("qdrantVizLegend"),
+  qdrantVizMeta: $("qdrantVizMeta"),
+  qdrantVizPlaceholder: $("qdrantVizPlaceholder"),
+  qdrantVizEmptyState: $("qdrantVizEmptyState"),
+  qdrantClusterCards: $("qdrantClusterCards"),
+  qdrantToast: $("qdrantToast"),
   qdrantIndexLog: $("qdrantIndexLog"),
   graphCanvas: $("graphCanvas"),
   graphCanvasWrap: $("graphCanvasWrap"),
@@ -74,6 +85,8 @@ const els = {
   graphRelsCount: $("graphRelsCount"),
   layerFilters: $("layerFilters"),
   crossLayerToggle: $("crossLayerToggle"),
+  connectionFormationBtn: $("connectionFormationBtn"),
+  connectionFormationTimeline: $("connectionFormationTimeline"),
   toggleNodeListBtn: $("toggleNodeListBtn"),
   viewMapBtn: $("viewMapBtn"),
   viewRelsBtn: $("viewRelsBtn"),
@@ -85,6 +98,7 @@ const els = {
   l3IndexBtn: $("l3IndexBtn"),
   l3IndexAllBtn: $("l3IndexAllBtn"),
   l4ClusterBtn: $("l4ClusterBtn"),
+  graphClusterLegend: $("graphClusterLegend"),
   graphCompactBtn: $("graphCompactBtn"),
   graphFullBtn: $("graphFullBtn"),
   llmModel: $("llmModel"),
@@ -106,15 +120,20 @@ const els = {
   docWorkTabJourney: $("docWorkTabJourney"),
   docWorkTabMd: $("docWorkTabMd"),
   docWorkTabGraph: $("docWorkTabGraph"),
+  docUploadFallback: $("docUploadFallback"),
+  docUploadFallbackBtn: $("docUploadFallbackBtn"),
   docJourneyPane: $("docJourneyPane"),
   docJourneyContent: $("docJourneyContent"),
   docMdPane: $("docMdPane"),
   docGraphPane: $("docGraphPane"),
   docMdInlineClean: $("docMdInlineClean"),
+  docMdInlineRaw: $("docMdInlineRaw"),
   docMdInlineMarked: $("docMdInlineMarked"),
   mdInlineCleanBtn: $("mdInlineCleanBtn"),
+  mdInlineRawBtn: $("mdInlineRawBtn"),
   mdInlineMarkedBtn: $("mdInlineMarkedBtn"),
   detailPanel: $("detailPanel"),
+  detailTitle: $("detailTitle"),
   detailBody: $("detailBody"),
   closeDetailBtn: $("closeDetailBtn"),
 };
@@ -136,8 +155,186 @@ const LAYER_COLOR = {
   L1: "#0288d1", L2: "#7b1fa2", L3: "#546e7a", L4: "#ef6c00", L5: "#c62828", L6: "#2e7d32", "L?": "#78909c",
 };
 
+const QDRANT_VIZ_L3_COLOR = "#0288d1";
+const QDRANT_VIZ_L4_COLOR = "#ef6c00";
+const QDRANT_VIZ_ANOMALY_COLOR = "#c62828";
+const QDRANT_CLUSTER_PALETTE = [
+  "#ef6c00", "#7b1fa2", "#1565c0", "#2e7d32", "#00838f",
+  "#6a1b9a", "#558b2f", "#ad1457", "#4527a0", "#fb8c00",
+  "#5d4037", "#00695c", "#c2185b", "#283593", "#827717",
+];
+
+/** @type {import("chart.js").Chart|null} */
+let qdrantVizChart = null;
+/** @type {Array<Record<string, unknown>>} */
+let qdrantVizPoints = [];
+/** @type {Array<{id:number,name:string,color:string,count:number}>} */
+let qdrantVizClusters = [];
+/** @type {Array<object>} */
+let qdrantVizRegions = [];
+/** @type {object|null} */
+let qdrantClusteringContext = null;
+/** @type {boolean} */
+let qdrantClusterAutoPending = false;
+/** @type {boolean} */
+let qdrantClusterAutoDone = false;
+
+function clusterColor(clusterId) {
+  return QDRANT_CLUSTER_PALETTE[Math.abs(Number(clusterId)) % QDRANT_CLUSTER_PALETTE.length];
+}
+
+function convexHull2D(points) {
+  if (points.length < 3) return points.slice();
+  const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i -= 1) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  upper.pop();
+  lower.pop();
+  return lower.concat(upper);
+}
+
+function buildQdrantClusterRegions(points, clusterMeta) {
+  const byCluster = new Map();
+  points.forEach((p) => {
+    if (p.layer !== "L4" || p.cluster_id == null || Number(p.cluster_id) < 0) return;
+    const cid = Number(p.cluster_id);
+    if (!byCluster.has(cid)) byCluster.set(cid, []);
+    byCluster.get(cid).push({ x: p.x, y: p.y });
+  });
+  const metaById = new Map((clusterMeta || []).map((c) => [Number(c.id), c]));
+  const regions = [];
+  byCluster.forEach((coords, cid) => {
+    if (!coords.length) return;
+    const color = metaById.get(cid)?.color || clusterColor(cid);
+    const label = metaById.get(cid)?.name || `Кластер ${cid}`;
+    if (coords.length >= 3) {
+      regions.push({
+        type: "hull",
+        clusterId: cid,
+        points: convexHull2D(coords),
+        fill: `${color}33`,
+        stroke: color,
+        label,
+      });
+      return;
+    }
+    const cx = coords.reduce((s, p) => s + p.x, 0) / coords.length;
+    const cy = coords.reduce((s, p) => s + p.y, 0) / coords.length;
+    let rx = 0.06;
+    let ry = 0.04;
+    if (coords.length === 2) {
+      const dx = coords[1].x - coords[0].x;
+      const dy = coords[1].y - coords[0].y;
+      const dist = Math.hypot(dx, dy);
+      rx = Math.max(dist / 2 + 0.04, 0.05);
+      ry = Math.max(dist * 0.35, 0.04);
+    }
+    regions.push({
+      type: "ellipse",
+      clusterId: cid,
+      cx,
+      cy,
+      rx,
+      ry,
+      fill: `${color}33`,
+      stroke: color,
+      label,
+    });
+  });
+  return regions;
+}
+
+/** @deprecated use buildQdrantClusterRegions */
+function buildQdrantClusterHulls(points, clusterMeta) {
+  return buildQdrantClusterRegions(points, clusterMeta);
+}
+
+const qdrantHullPlugin = {
+  id: "qdrantClusterHulls",
+  afterDatasetsDraw(chart, _args, opts) {
+    const regions = opts?.hulls || opts?.regions;
+    if (!regions?.length) return;
+    const { ctx } = chart;
+    const xScale = chart.scales.x;
+    const yScale = chart.scales.y;
+    const drawLabel = (label, cx, cy, stroke) => {
+      if (!label) return;
+      const px = xScale.getPixelForValue(cx);
+      const py = yScale.getPixelForValue(cy);
+      ctx.font = "600 11px Inter, system-ui, sans-serif";
+      ctx.fillStyle = stroke;
+      ctx.strokeStyle = "rgba(255,255,255,0.92)";
+      ctx.lineWidth = 3;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const txt = label.length > 36 ? `${label.slice(0, 34)}…` : label;
+      ctx.strokeText(txt, px, py);
+      ctx.fillText(txt, px, py);
+    };
+    ctx.save();
+    regions.forEach((region) => {
+      ctx.fillStyle = region.fill;
+      ctx.strokeStyle = region.stroke;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.88;
+      if (region.type === "ellipse") {
+        const px = xScale.getPixelForValue(region.cx);
+        const py = yScale.getPixelForValue(region.cy);
+        const rx = Math.abs(xScale.getPixelForValue(region.cx + region.rx) - px);
+        const ry = Math.abs(yScale.getPixelForValue(region.cy + region.ry) - py);
+        ctx.beginPath();
+        ctx.ellipse(px, py, Math.max(rx, 8), Math.max(ry, 8), 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        drawLabel(region.label, region.cx, region.cy, region.stroke);
+      } else {
+        const pts = region.points;
+        if (!pts || pts.length < 3) return;
+        ctx.beginPath();
+        ctx.moveTo(xScale.getPixelForValue(pts[0].x), yScale.getPixelForValue(pts[0].y));
+        for (let i = 1; i < pts.length; i += 1) {
+          ctx.lineTo(xScale.getPixelForValue(pts[i].x), yScale.getPixelForValue(pts[i].y));
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+        const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+        drawLabel(region.label, cx, cy, region.stroke);
+      }
+      ctx.globalAlpha = 1;
+    });
+    ctx.restore();
+  },
+};
+
+if (typeof Chart !== "undefined" && Chart.register) {
+  Chart.register(qdrantHullPlugin);
+}
+
 const CROSS_LAYER_REL_TYPES = new Set(["DATA_SOURCE_FOR", "CONTEXT_FOR", "ABOUT"]);
 const CROSS_LAYER_EDGE_COLOR = { color: "#ff9800", highlight: "#e65100" };
+const ENTITY_LABELS = new Set(["Material", "Process", "Equipment", "ChemicalReagent", "Organization", "Person", "Expert", "Facility"]);
+const FORMATION_LAYERS = ["L1", "L2", "L3", "L4", "L5", "L6"];
+const FORMATION_LAYER_LABELS = {
+  L1: "Сущности L1",
+  L2: "Контекст L2",
+  L3: "Текст L3",
+  L4: "Факты L4",
+  L5: "Доступ L5",
+  L6: "Решения L6",
+};
+const FORMATION_STEP_MS = 1400;
 const L3_INTERNAL_REL_TYPES = new Set(["NEXT_PARAGRAPH", "TAGGED_WITH", "HAS_PARAGRAPH", "STRUCTURING"]);
 const COMPACT_DOC_TEXT_ID = "__compact_doc_text__";
 const MAX_COMPACT_PARAGRAPHS = 15;
@@ -152,8 +349,8 @@ const DOC_PIPELINE = [
   { id: "md", label: "Markdown", short: "MD" },
   { id: "graph", label: "Extraction / граф", short: "Граф" },
   { id: "neo4j", label: "Neo4j", short: "Neo4j" },
-  { id: "qdrant", label: "Индекс эмбеддингов L3 (Qdrant)", short: "L3" },
-  { id: "l4", label: "HDBSCAN кластеризация L4", short: "L4" },
+  { id: "qdrant", label: "L3+L4 индекс (Qdrant)", short: "L3+L4" },
+  { id: "l4", label: "Глобальная кластеризация L4", short: "L4" },
 ];
 
 const JOURNEY_STAGES = [
@@ -163,8 +360,8 @@ const JOURNEY_STAGES = [
   { id: "layers", title: "Извлечение слоёв L1–L6", hint: "LLM извлекает сущности, абзацы, факты, роли доступа…", isLayers: true },
   { id: "graph", title: "Граф знаний", hint: "Узлы и связи сохранены локально" },
   { id: "neo4j", title: "Neo4j", hint: "Синхронизация в графовую базу данных" },
-  { id: "qdrant", title: "L3: индекс эмбеддингов (Qdrant)", hint: "TextParagraph → mkg_chunks, только семантический поиск (без HDBSCAN)" },
-  { id: "l4", title: "L4: HDBSCAN кластеризация", hint: "Claim/Measurement → mkg_claims, cluster_id и is_anomaly для AI-поиска" },
+  { id: "qdrant", title: "L3+L4: индекс эмбеддингов (Qdrant)", hint: "TextParagraph → mkg_chunks; Claim/Measurement/… → mkg_claims" },
+  { id: "l4", title: "L4: глобальная HDBSCAN-кластеризация", hint: "Claim/Measurement → mkg_claims, cluster_id и is_anomaly по всему корпусу" },
 ];
 
 /** Кнопки ↺ Перезапустить по этапам пайплайна */
@@ -175,18 +372,155 @@ const STAGE_RETRY = {
   graph: { action: "extract", label: "↺ Извлечение", showOn: ["failed", "done"] },
   neo4j: { action: "neo4j", label: "↺ Neo4j", showOn: ["failed", "done"] },
   qdrant: { action: "index", label: "↺ Индекс", showOn: ["failed", "done"] },
-  l4: { action: "l4_cluster", label: "↺ HDBSCAN L4", showOn: ["failed", "done"] },
+  l4: { action: "l4_cluster", label: "↺ Глоб. L4", showOn: ["failed", "done"] },
 };
 
 function isAnswersOnlyMode(doc) {
   return (doc?.processing_mode || "full") === "answers_only";
 }
 
+function isDocPipelineBusy(doc) {
+  return doc && ["uploaded", "processing", "extracting"].includes(doc.status);
+}
+
+function needsFullGraphBuild(doc) {
+  if (!doc || graphScope === "all") return false;
+  return (doc.graph_nodes || 0) === 0 && !isDocPipelineBusy(doc);
+}
+
+const FULL_PIPELINE_STEPS = [
+  { id: "ocr", label: "OCR и Markdown" },
+  { id: "layers", label: "Извлечение слоёв L1–L6" },
+  { id: "graph", label: "Граф знаний (узлы и связи)" },
+  { id: "neo4j", label: "Синхронизация Neo4j" },
+  { id: "qdrant", label: "Индекс L3+L4 в Qdrant" },
+  { id: "l4", label: "Глобальная кластеризация L4" },
+];
+
+function renderFullPipelineStepsHtml(doc) {
+  if (!doc) return "";
+  const states = getDocPipelineStates(doc);
+  const layersState = getLayersJourneyState(doc, null);
+  return FULL_PIPELINE_STEPS.map((s) => {
+    let state = states[s.id] || "pending";
+    if (s.id === "layers") state = layersState;
+    if (isAnswersOnlyMode(doc) && ["layers", "graph", "neo4j", "l4"].includes(s.id)) state = "skipped";
+    return `<li class="${state}">${esc(s.label)}</li>`;
+  }).join("");
+}
+
+function renderAnswersOnlyBanner(doc) {
+  if (!doc || !isAnswersOnlyMode(doc) || isDocPipelineBusy(doc)) return "";
+  const docId = doc.id || doc.document_id;
+  const busy = doc.status === "extracting";
+  return `<div class="pipeline-answers-banner">
+    <p><strong>Документ загружен только для чата</strong> — слои L1–L6, граф и Neo4j не строились. Для карты знаний запустите полный пайплайн.</p>
+    <button type="button" class="btn btn-primary btn-small" data-full-pipeline-doc="${esc(docId)}" ${busy ? "disabled" : ""}>↺ Построить полный граф</button>
+  </div>`;
+}
+
+function updateGraphEmptyState(doc) {
+  if (!els.graphsEmpty) return;
+  const showArea = !els.graphsEmpty.classList.contains("hidden");
+  if (!showArea) return;
+
+  const data = doc || (graphScope === "doc" && selectedDoc
+    ? docsListCache.find((d) => d.id === selectedDoc)
+    : null);
+
+  if (graphScope === "all") {
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Нет документов с графом";
+    if (els.graphEmptyDesc) {
+      els.graphEmptyDesc.textContent = "Загрузите файл на вкладке «Документы» — полный пайплайн (OCR → граф → Neo4j → Qdrant) запустится автоматически.";
+    }
+    if (els.graphEmptySteps) els.graphEmptySteps.innerHTML = "";
+    els.graphEmptyActionBtn?.classList.add("hidden");
+    return;
+  }
+
+  if (!data) {
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Граф ещё не построен";
+    if (els.graphEmptyDesc) {
+      els.graphEmptyDesc.textContent = "Выберите документ слева или загрузите файл.";
+    }
+    if (els.graphEmptySteps) els.graphEmptySteps.innerHTML = "";
+    els.graphEmptyActionBtn?.classList.add("hidden");
+    return;
+  }
+
+  const busy = isDocPipelineBusy(data);
+  const answersOnly = isAnswersOnlyMode(data);
+
+  if (answersOnly && needsFullGraphBuild(data)) {
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Граф не построен";
+    if (els.graphEmptyDesc) {
+      els.graphEmptyDesc.textContent = "Документ загружен в режиме «только для ответов» — слои и Neo4j не строились. Нажмите кнопку ниже для полной обработки.";
+    }
+  } else if (needsFullGraphBuild(data)) {
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Граф ещё не построен";
+    if (els.graphEmptyDesc) {
+      els.graphEmptyDesc.textContent = busy
+        ? "Идёт обработка — граф появится после извлечения слоёв L1–L6."
+        : "Markdown готов. Запустите извлечение, чтобы построить граф знаний.";
+    }
+  } else if (busy) {
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Граф строится…";
+    if (els.graphEmptyDesc) els.graphEmptyDesc.textContent = "Дождитесь завершения текущего этапа пайплайна.";
+  }
+
+  if (els.graphEmptySteps) {
+    els.graphEmptySteps.innerHTML = renderFullPipelineStepsHtml(data);
+  }
+
+  const showAction = needsFullGraphBuild(data) && !busy;
+  if (els.graphEmptyActionBtn) {
+    els.graphEmptyActionBtn.classList.toggle("hidden", !showAction);
+    els.graphEmptyActionBtn.textContent = answersOnly ? "↺ Построить полный граф" : "Построить граф";
+    els.graphEmptyActionBtn.disabled = busy;
+    els.graphEmptyActionBtn.dataset.docId = data.id || data.document_id || "";
+  }
+}
+
+async function startFullPipeline(docId, btn) {
+  if (!docId) return;
+  const prev = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "Запуск…"; }
+  try {
+    const r = await fetch(`${API}/documents/${encodeURIComponent(docId)}/reprocess-full`, { method: "POST" });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.detail || "Ошибка запуска");
+    }
+    pipelineQueue.add(docId);
+    if (docId === selectedDoc) await openDoc(docId, { keepPage: true });
+    else await renderDocsList();
+  } catch (e) {
+    if (btn) btn.title = e.message || "Ошибка";
+    showBox(els.uploadError, e.message || "Не удалось запустить полный пайплайн");
+  } finally {
+    if (btn) { btn.disabled = false; if (prev) btn.textContent = prev; }
+  }
+}
+
+function bindFullPipelineButtons(root = document) {
+  root.querySelectorAll("[data-full-pipeline-doc]").forEach((btn) => {
+    if (btn.dataset.fullPipelineBound) return;
+    btn.dataset.fullPipelineBound = "1";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startFullPipeline(btn.dataset.fullPipelineDoc, btn);
+    });
+  });
+}
+
 function shouldShowStageRetry(stageId, state, doc) {
-  if (!doc || state === "active" || state === "pending" || state === "skipped") return false;
+  if (!doc || state === "active" || state === "pending") return false;
+  if (isAnswersOnlyMode(doc) && stageId === "graph" && state === "skipped") return true;
+  if (state === "skipped") return false;
   const cfg = STAGE_RETRY[stageId];
   if (!cfg || !cfg.showOn.includes(state)) return false;
-  if (isAnswersOnlyMode(doc) && ["layers", "graph", "neo4j", "l4"].includes(stageId)) return false;
+  if (isAnswersOnlyMode(doc) && ["layers", "neo4j", "l4"].includes(stageId)) return false;
   if (stageId === "md" && state !== "done") return false;
   if (stageId === "layers" && state === "done" && (doc.graph_nodes || 0) === 0) return false;
   if (stageId === "l4" && (doc.graph_nodes || 0) === 0) return false;
@@ -194,6 +528,9 @@ function shouldShowStageRetry(stageId, state, doc) {
 }
 
 function renderStageRetryBtn(docId, stageId, state, doc) {
+  if (isAnswersOnlyMode(doc) && stageId === "graph" && state === "skipped") {
+    return `<button type="button" class="btn btn-ghost btn-small journey-retry-btn" data-retry-doc="${esc(docId)}" data-retry-action="full" data-retry-stage="${esc(stageId)}" title="Полный пайплайн">↺ Полная обработка</button>`;
+  }
   if (!shouldShowStageRetry(stageId, state, doc)) return "";
   const cfg = STAGE_RETRY[stageId];
   return `<button type="button" class="btn btn-ghost btn-small journey-retry-btn" data-retry-doc="${esc(docId)}" data-retry-action="${esc(cfg.action)}" data-retry-stage="${esc(stageId)}" title="Перезапустить этап">${esc(cfg.label)}</button>`;
@@ -328,8 +665,13 @@ function renderDocPipelineHtml(doc, { compact = true, showRetry = true } = {}) {
     const label = compact ? s.short : s.label;
     const stepHint = doc.step && state === "active" ? (STEP_RU[doc.step] || doc.step) : "";
     const title = stepHint ? `${s.label} · ${stepHint}` : s.label;
-    const retry = showRetry && docId && shouldShowStageRetry(s.id, state, doc)
-      ? `<button type="button" class="doc-pipe-retry" data-retry-doc="${esc(docId)}" data-retry-action="${esc(STAGE_RETRY[s.id]?.action || "")}" data-retry-stage="${esc(s.id)}" title="Перезапустить">${esc(STAGE_RETRY[s.id]?.label || "↺")}</button>`
+    const retryAction = (isAnswersOnlyMode(doc) && s.id === "graph" && state === "skipped")
+      ? "full"
+      : (STAGE_RETRY[s.id]?.action || "");
+    const retryLabel = retryAction === "full" ? "↺" : (STAGE_RETRY[s.id]?.label || "↺");
+    const showGraphFull = isAnswersOnlyMode(doc) && s.id === "graph" && state === "skipped";
+    const retry = showRetry && docId && (shouldShowStageRetry(s.id, state, doc) || showGraphFull)
+      ? `<button type="button" class="doc-pipe-retry" data-retry-doc="${esc(docId)}" data-retry-action="${esc(retryAction)}" data-retry-stage="${esc(s.id)}" title="${showGraphFull ? "Полная обработка" : "Перезапустить"}">${esc(retryLabel)}</button>`
       : "";
     return `<span class="doc-pipe-step ${state}" title="${esc(title)}">${esc(label)}${retry}</span>`;
   });
@@ -376,11 +718,21 @@ function renderJourneyLayerGrid(layers) {
     </div>`).join("")}</div>`;
 }
 
-function renderJourneyRecentRels(rels) {
+function renderRelChip(rel, { docId = null } = {}) {
+  const layer = rel.layer || "L?";
+  const from = rel.from || rel.from_ || "";
+  const to = rel.to || "";
+  const clickable = !!(from && to && rel.type);
+  const docAttr = docId ? ` data-doc-id="${esc(docId)}"` : "";
+  const clickCls = clickable ? " rel-chip-clickable" : "";
+  const tag = clickable ? "button" : "span";
+  const typeAttr = clickable ? ' type="button"' : "";
+  return `<${tag}${typeAttr} class="rel-chip rel-chip-${esc(layer)}${clickCls}"${docAttr}${clickable ? ` data-from="${esc(from)}" data-to="${esc(to)}" data-type="${esc(rel.type)}"` : ""} title="${esc(rel.type)}"><span class="rel-from">${esc(rel.from_short)}</span><b>${esc(rel.type)}</b><span class="rel-to">${esc(rel.to_short)}</span></${tag}>`;
+}
+
+function renderJourneyRecentRels(rels, docId = null) {
   if (!rels?.length) return "";
-  const chips = rels.slice(-8).map((rel) =>
-    `<span class="rel-chip rel-chip-${esc(rel.layer || "L?")}" title="${esc(rel.type)}"><span class="rel-from">${esc(rel.from_short)}</span><b>${esc(rel.type)}</b><span class="rel-to">${esc(rel.to_short)}</span></span>`,
-  ).join("");
+  const chips = rels.slice(-8).map((rel) => renderRelChip(rel, { docId })).join("");
   return `<div class="journey-recent-rels"><h6>Последние связи</h6>${chips}</div>`;
 }
 
@@ -426,7 +778,7 @@ function renderDocJourneyHtml(doc, layerPayload) {
     }
 
     const layerBlock = stage.isLayers && showLayerBlock
-      ? `<div class="journey-layer-block"><h5>Слои L1–L6</h5>${renderJourneyLayerGrid(layers)}${doc.status === "extracting" ? renderJourneyRecentRels(layerPayload?.recent_relationships) : ""}</div>`
+      ? `<div class="journey-layer-block"><h5>Слои L1–L6</h5>${renderJourneyLayerGrid(layers)}${doc.status === "extracting" ? renderJourneyRecentRels(layerPayload?.recent_relationships, docId) : ""}</div>`
       : "";
 
     return `
@@ -444,7 +796,7 @@ function renderDocJourneyHtml(doc, layerPayload) {
       </div>`;
   });
 
-  return `<div class="doc-journey-timeline">${steps.join("")}</div>`;
+  return `<div class="doc-journey-timeline">${renderAnswersOnlyBanner(doc)}${steps.join("")}</div>`;
 }
 
 let docWorkTab = "journey";
@@ -474,22 +826,43 @@ async function refreshDocJourney(docId) {
 }
 
 function updateDocWorkHeader(doc) {
-  const show = isInlineGraphPage() && graphScope === "doc" && doc;
-  els.docWorkHeader?.classList.toggle("hidden", !show);
-  if (!show || !doc) return;
-  const label = statusLabel(doc);
-  if (els.docWorkTitle) els.docWorkTitle.textContent = doc.file_name || doc.document_id || doc.id;
-  if (els.docWorkBadge) {
-    els.docWorkBadge.textContent = label.text;
-    els.docWorkBadge.className = `badge ${label.cls}`;
-  }
-  if (els.docWorkMeta) {
-    const step = doc.step ? stepLabel(doc.step) : "";
-    els.docWorkMeta.textContent = step ? `Шаг: ${step}` : "";
-  }
   const isAll = graphScope === "all";
+  const show = isInlineGraphPage() && (isAll || (graphScope === "doc" && doc));
+  els.docWorkHeader?.classList.toggle("hidden", !show);
+  if (!show) {
+    window.MKGAuth?.syncDocsUploadFallback?.();
+    return;
+  }
+  if (isAll) {
+    if (els.docWorkTitle) els.docWorkTitle.textContent = "Все документы";
+    if (els.docWorkBadge) {
+      els.docWorkBadge.textContent = "граф";
+      els.docWorkBadge.className = "badge s-search-ready";
+    }
+    if (els.docWorkMeta) {
+      const n = docsWithGraph().length;
+      els.docWorkMeta.textContent = n ? `${n} док. с графом` : "";
+    }
+  } else if (doc) {
+    const label = statusLabel(doc);
+    if (els.docWorkTitle) {
+      const modeBadge = isAnswersOnlyMode(doc)
+        ? ' <span class="doc-mode-badge">только чат</span>'
+        : "";
+      els.docWorkTitle.innerHTML = `${esc(doc.file_name || doc.document_id || doc.id)}${modeBadge}`;
+    }
+    if (els.docWorkBadge) {
+      els.docWorkBadge.textContent = label.text;
+      els.docWorkBadge.className = `badge ${label.cls}`;
+    }
+    if (els.docWorkMeta) {
+      const step = doc.step ? stepLabel(doc.step) : "";
+      els.docWorkMeta.textContent = step ? `Шаг: ${step}` : "";
+    }
+  }
   els.docWorkTabJourney?.classList.toggle("hidden", isAll);
   els.docWorkTabMd?.classList.toggle("hidden", isAll);
+  window.MKGAuth?.syncDocsUploadFallback?.();
 }
 
 function syncDocWorkTabUI(tab) {
@@ -502,13 +875,13 @@ function syncDocWorkTabUI(tab) {
   els.docGraphPane?.classList.toggle("active", tab === "graph");
 }
 
-function setDocWorkTab(tab, { manual = false } = {}) {
+function setDocWorkTab(tab, { manual = false, skipGraphLoad = false } = {}) {
   if (!["journey", "md", "graph"].includes(tab)) tab = "journey";
   if (manual) docWorkTabManual = true;
   docWorkTab = tab;
   syncDocWorkTabUI(tab);
-  if (tab === "graph") {
-    refreshGraphViewport();
+  if (tab === "graph" && !skipGraphLoad) {
+    refreshGraphViewport({ fit: true, force: true });
     const docId = graphScope === "all" ? GRAPH_ALL_ID : (graphViewDocId || selectedDoc || pickGraphDocId());
     if (docId && isGraphHostPage()) loadGraph(docId);
   }
@@ -549,6 +922,8 @@ async function updateDocWorkArea(doc, previewData) {
   if (els.docJourneyContent) {
     els.docJourneyContent.innerHTML = renderDocJourneyHtml(data, layerPayload);
     bindRetryButtons(els.docJourneyContent);
+    bindFullPipelineButtons(els.docJourneyContent);
+    bindRelChipClicks(els.docJourneyContent, docId);
   }
   syncDocWorkTabUI(docWorkTab);
 }
@@ -572,8 +947,8 @@ const STEP_RU = {
   ingestion_failed: "ошибка ingestion",
   index_failed: "ошибка индексации",
   answers_indexed: "индекс для чата",
-  qdrant_index: "индекс эмбеддингов L3",
-  l4_cluster: "HDBSCAN L4",
+  qdrant_index: "индекс L3+L4 в Qdrant",
+  l4_cluster: "глобальная кластеризация L4",
   l4_done: "кластеризация L4 готова",
   l4_failed: "ошибка L4",
   cancelling: "остановка",
@@ -598,13 +973,18 @@ let docListFilterText = "";
 let graphNodeListVisible = false;
 let lastQdrantIndexLog = "";
 let markdownClean = "";
+let markdownRaw = "";
 let markdownMarked = "";
 let mdViewMode = "clean";
 const ACTIVE_DOC_STATUSES = new Set(["uploaded", "processing", "extracting"]);
 /** Документы, ожидающие автозапуск extraction после ingestion */
 const pipelineQueue = new Set();
 let graphLayerFilter = "all";
-let showCrossLayerOnly = false;
+let highlightCrossLayer = false;
+let connectionFormationMode = false;
+let connectionFormationStep = 0;
+let connectionFormationTimer = null;
+let multiDocCountByNodeId = new Map();
 let graphDensityMode = "compact";
 let graphViewMode = "map";
 let graphData = { nodes: [], relationships: [] };
@@ -615,10 +995,16 @@ let lastGraphRenderKey = "";
 let lastGraphDataKey = "";
 let lastGraphDocId = null;
 let graphPhysicsStable = false;
+let graphViewsRenderTimer = null;
+let graphViewportTimer = null;
+const GRAPH_FILTER_DEBOUNCE_MS = 320;
+const GRAPH_VIEWPORT_DEBOUNCE_MS = 320;
 let embeddingStatusCache = null;
 let graphViewDocId = null;
 let graphVisible = false;
 let docsListCache = [];
+let docsListFetchSeq = 0;
+let docsListLoaded = false;
 let selectedFiles = [];
 let docStatusCache = new Map();
 let indexedDocsSet = new Set(JSON.parse(localStorage.getItem("mkg_indexed_docs") || "[]"));
@@ -628,12 +1014,39 @@ let docGraphCountCache = new Map();
 const GRAPH_CONTENT_HASH_LIMIT = 12000;
 
 let nodeFieldHints = {};
+let nodeFieldRequired = {};
 
 async function loadNodeFieldHints() {
   try {
     const r = await fetch(`${API}/ontology/node-fields`);
-    if (r.ok) nodeFieldHints = await r.json();
+    if (!r.ok) return;
+    const data = await r.json();
+    nodeFieldHints = {};
+    nodeFieldRequired = {};
+    for (const [label, spec] of Object.entries(data)) {
+      if (Array.isArray(spec)) {
+        nodeFieldHints[label] = spec;
+        nodeFieldRequired[label] = spec;
+      } else if (spec && typeof spec === "object") {
+        nodeFieldHints[label] = spec.fields || [];
+        nodeFieldRequired[label] = spec.required || spec.fields || [];
+      }
+    }
   } catch { /* ignore */ }
+}
+
+const L2_CONTEXT_LABELS = new Set(["Expert", "Organization", "Location", "Event", "Timeline", "Facility"]);
+const L2_ENRICHMENT_FIELDS = new Set(["quote", "source_quote", "extraction_confidence", "organization", "role"]);
+
+function isExpectedNodeField(label, key, props) {
+  const hints = nodeFieldHints[label] || [];
+  if (!hints.includes(key) || key === "id") return false;
+  if (label === "Expert" && key === "name" && propHasValue(props.full_name)) return false;
+  if (label === "Organization" && key === "name" && propHasValue(props.legal_name)) return false;
+  if (L2_CONTEXT_LABELS.has(label) && L2_ENRICHMENT_FIELDS.has(key)) return false;
+  const required = nodeFieldRequired[label];
+  if (Array.isArray(required) && required.length) return required.includes(key);
+  return hints.includes(key);
 }
 
 function propHasValue(v) {
@@ -670,11 +1083,14 @@ function renderNodePropsSection(label, props) {
   }
 
   let expectedFilled = 0;
-  const hintSet = new Set(hints);
+  let expectedCount = 0;
   const rows = ordered.map((key) => {
     const has = propHasValue(props[key]);
-    const expected = hintSet.has(key);
-    if (expected && has) expectedFilled += 1;
+    const expected = isExpectedNodeField(label, key, props);
+    if (expected) {
+      expectedCount += 1;
+      if (has) expectedFilled += 1;
+    }
     let rowCls = "prop-row";
     if (has && expected) rowCls += " prop-ok";
     else if (has && !expected) rowCls += " prop-extra";
@@ -686,9 +1102,8 @@ function renderNodePropsSection(label, props) {
     return `<div class="${rowCls}"><dt>${esc(key)} ${badge}</dt><dd>${formatPropValue(props[key])}</dd></div>`;
   }).join("");
 
-  const hintCount = hints.filter((k) => !skip.has(k)).length;
-  const summary = hintCount
-    ? `<p class="detail-props-summary">Заполнено <b>${expectedFilled}/${hintCount}</b> ожидаемых · всего полей <b>${actualKeys.length}</b></p>`
+  const summary = expectedCount
+    ? `<p class="detail-props-summary">Заполнено <b>${expectedFilled}/${expectedCount}</b> ожидаемых · всего полей <b>${actualKeys.length}</b></p>`
     : `<p class="detail-props-summary">Полей в узле: <b>${actualKeys.length}</b> (схема для ${esc(label)} не задана)</p>`;
 
   return `${summary}<dl class="detail-props detail-props-full">${rows}</dl>`;
@@ -781,6 +1196,7 @@ async function uploadFiles() {
     fd.append("file", selectedFiles[0]);
   }
   fd.append("classification", els.classification?.value || "открытый");
+  fd.append("processing_mode", "full");
   let ok = false;
   const uploadedIds = [];
   try {
@@ -860,6 +1276,7 @@ async function retryPipelineStage(docId, action, btn) {
   try {
     let url = "";
     if (action === "reprocess") url = `${API}/documents/${encodeURIComponent(docId)}/reprocess`;
+    else if (action === "full") url = `${API}/documents/${encodeURIComponent(docId)}/reprocess-full`;
     else if (action === "extract") url = `${API}/documents/${encodeURIComponent(docId)}/submit`;
     else if (action === "neo4j") url = `${API}/documents/${encodeURIComponent(docId)}/neo4j-sync`;
     else if (action === "index") url = `${API}/documents/${encodeURIComponent(docId)}/index`;
@@ -962,22 +1379,22 @@ function renderDocMetadata(data) {
 function applyMarkdownFromPreview(data) {
   if (!data) return;
   if (data.markdown && data.markdown.trim()) {
-    setMarkdownViews(data.markdown, data.markdown_marked || data.markdown, false);
+    setMarkdownViews(data.markdown, data.markdown_raw || "", data.markdown_marked || data.markdown, false);
     return;
   }
   const stepHint = data.step ? ` · ${STEP_RU[data.step] || data.step}` : "";
   if (data.status === "processing") {
-    setMarkdownViews(`OCR → Markdown${stepHint}…`, "", true);
+    setMarkdownViews(`OCR → Markdown${stepHint}…`, "", "", true);
   } else if (data.status === "uploaded") {
-    setMarkdownViews("В очереди на обработку…", "", true);
+    setMarkdownViews("В очереди на обработку…", "", "", true);
   } else if (data.status === "extracting") {
-    setMarkdownViews(`Извлечение графа${stepHint}…`, "", true);
+    setMarkdownViews(`Извлечение графа${stepHint}…`, "", "", true);
   } else if (data.status === "failed") {
-    setMarkdownViews(data.error ? `Ошибка: ${data.error}` : "Ошибка обработки.", "", true);
+    setMarkdownViews(data.error ? `Ошибка: ${data.error}` : "Ошибка обработки.", "", "", true);
   } else if (data.status === "md_ready" || data.status === "loaded") {
-    setMarkdownViews("Markdown пуст или ещё не сохранён.", "", true);
+    setMarkdownViews("Markdown пуст или ещё не сохранён.", "", "", true);
   } else {
-    setMarkdownViews("Ожидание worker…", "", true);
+    setMarkdownViews("Ожидание worker…", "", "", true);
   }
 }
 
@@ -1067,37 +1484,59 @@ function stripMdComments(text) {
   return String(text || "").replace(/<!--[\s\S]*?-->/g, "");
 }
 
+function sanitizeMarkdownHtml(html) {
+  if (window.DOMPurify?.sanitize) {
+    return window.DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  }
+  return String(html || "").replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+}
+
 function renderMarkdownHtml(text) {
   const src = stripMdComments(text || "").slice(0, 120000);
   if (!src.trim()) return "";
+  let html;
   if (window.marked?.parse) {
-    return window.marked.parse(src, { breaks: true, gfm: true });
+    html = window.marked.parse(src, { breaks: true, gfm: true });
+  } else {
+    html = esc(src).replace(/\n/g, "<br>");
   }
-  return esc(src).replace(/\n/g, "<br>");
+  return sanitizeMarkdownHtml(html);
 }
 
 function setMdViewMode(mode) {
-  mdViewMode = mode === "marked" ? "marked" : "clean";
-  els.mdViewRenderBtn?.classList.toggle("active", mdViewMode === "clean");
-  els.mdViewSourceBtn?.classList.toggle("active", mdViewMode === "marked");
-  els.mdInlineCleanBtn?.classList.toggle("active", mdViewMode === "clean");
-  els.mdInlineMarkedBtn?.classList.toggle("active", mdViewMode === "marked");
-  els.previewMdRender?.classList.toggle("hidden", mdViewMode !== "clean");
-  els.previewMdSource?.classList.toggle("hidden", mdViewMode !== "marked");
-  els.docMdInlineClean?.classList.toggle("hidden", mdViewMode !== "clean");
-  els.docMdInlineMarked?.classList.toggle("hidden", mdViewMode !== "marked");
+  mdViewMode = mode === "raw" ? "raw" : mode === "marked" ? "marked" : "clean";
+  const isClean = mdViewMode === "clean";
+  const isRaw = mdViewMode === "raw";
+  const isMarked = mdViewMode === "marked";
+  els.mdViewCleanBtn?.classList.toggle("active", isClean);
+  els.mdViewRawBtn?.classList.toggle("active", isRaw);
+  els.mdViewMarkedBtn?.classList.toggle("active", isMarked);
+  els.mdInlineCleanBtn?.classList.toggle("active", isClean);
+  els.mdInlineRawBtn?.classList.toggle("active", isRaw);
+  els.mdInlineMarkedBtn?.classList.toggle("active", isMarked);
+  els.previewMdRender?.classList.toggle("hidden", !isClean);
+  els.previewMdRaw?.classList.toggle("hidden", !isRaw);
+  els.previewMdSource?.classList.toggle("hidden", !isMarked);
+  els.docMdInlineClean?.classList.toggle("hidden", !isClean);
+  els.docMdInlineRaw?.classList.toggle("hidden", !isRaw);
+  els.docMdInlineMarked?.classList.toggle("hidden", !isMarked);
 }
 
 function updateMarkdownPreview(isEmpty) {
   const renderEl = els.previewMdRender;
+  const rawEl = els.previewMdRaw;
   const sourceEl = els.previewMdSource;
   const inlineClean = els.docMdInlineClean;
+  const inlineRaw = els.docMdInlineRaw;
   const inlineMarked = els.docMdInlineMarked;
 
   const emptyText = markdownClean || "—";
   const cleanHtml = isEmpty || !markdownClean.trim()
     ? esc(emptyText)
     : renderMarkdownHtml(markdownClean);
+  const rawText = isEmpty || !(markdownRaw || markdownClean).trim()
+    ? emptyText
+    : (markdownRaw || markdownClean).slice(0, 120000);
   const markedText = isEmpty || !(markdownMarked || markdownClean).trim()
     ? emptyText
     : (markdownMarked || markdownClean).slice(0, 120000);
@@ -1105,6 +1544,10 @@ function updateMarkdownPreview(isEmpty) {
   if (renderEl) {
     renderEl.innerHTML = cleanHtml;
     renderEl.className = `preview md-panel doc-md-panel md-render-view${isEmpty || !markdownClean.trim() ? " empty" : ""}`;
+  }
+  if (rawEl) {
+    rawEl.textContent = rawText;
+    rawEl.className = `preview md-panel doc-md-panel md-raw-view hidden${isEmpty ? " empty" : ""}`;
   }
   if (sourceEl) {
     sourceEl.textContent = markedText;
@@ -1114,6 +1557,10 @@ function updateMarkdownPreview(isEmpty) {
     inlineClean.innerHTML = cleanHtml;
     inlineClean.className = `preview md-panel doc-md-inline md-clean-view${isEmpty || !markdownClean.trim() ? " empty" : ""}`;
   }
+  if (inlineRaw) {
+    inlineRaw.textContent = rawText;
+    inlineRaw.className = `preview md-panel doc-md-inline md-raw-view hidden${isEmpty ? " empty" : ""}`;
+  }
   if (inlineMarked) {
     inlineMarked.textContent = markedText;
     inlineMarked.className = `preview md-panel doc-md-inline md-marked-view hidden${isEmpty ? " empty" : ""}`;
@@ -1121,15 +1568,16 @@ function updateMarkdownPreview(isEmpty) {
   setMdViewMode(mdViewMode);
 }
 
-function setMarkdownViews(clean, marked, isEmpty) {
+function setMarkdownViews(clean, raw, marked, isEmpty) {
   markdownClean = clean || "";
+  markdownRaw = raw || "";
   markdownMarked = marked || clean || "";
   updateMarkdownPreview(isEmpty);
 }
 
 function downloadDocumentMd(variant) {
   if (!selectedDoc) return;
-  const v = variant || (mdViewMode === "marked" ? "marked" : "clean");
+  const v = variant || mdViewMode;
   const url = `${API}/documents/${encodeURIComponent(selectedDoc)}/markdown?variant=${v}&download=1`;
   const a = document.createElement("a");
   a.href = url;
@@ -1170,6 +1618,130 @@ function isCrossLayerRel(rel, layerMap) {
   return !!(lf && lt && lf !== lt);
 }
 
+function slugEntityName(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-zа-яё0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+function canonicalEntityKey(node) {
+  const label = node?.label || "";
+  if (!ENTITY_LABELS.has(label)) return null;
+  const props = node.props || {};
+  const id = String(node.id || "");
+  let base = id;
+  const colonIdx = id.indexOf(":");
+  if (colonIdx > 0) {
+    const prefix = id.slice(0, colonIdx);
+    if (prefix.length >= 8 && (prefix.includes("-") || prefix.startsWith("doc_"))) {
+      base = id.slice(colonIdx + 1);
+    }
+  }
+  const name = props.name_en || props.name_ru || props.title_ru || "";
+  if (name) return `${label}:${slugEntityName(name)}`;
+  return `${label}:${base}`;
+}
+
+function buildMultiDocCountMap(nodes) {
+  const byKey = new Map();
+  const out = new Map();
+  (nodes || []).forEach((n) => {
+    const key = canonicalEntityKey(n);
+    if (!key) return;
+    const docId = n.props?.source_doc_id || n.props?.document_id || n.props?._doc_id || "";
+    if (!byKey.has(key)) byKey.set(key, new Set());
+    if (docId) byKey.get(key).add(docId);
+  });
+  (nodes || []).forEach((n) => {
+    const key = canonicalEntityKey(n);
+    const count = key ? (byKey.get(key)?.size || 0) : 0;
+    const fromProps = Number(n.props?.multi_doc_count || 0);
+    const total = Math.max(count, fromProps);
+    if (total >= 2) out.set(n.id, total);
+  });
+  return out;
+}
+
+function annotateGraphNodes(nodes, primaryLayer) {
+  return (nodes || []).map((n) => {
+    const layer = layerOf(n.label);
+    const multiDoc = multiDocCountByNodeId.get(n.id) || 0;
+    const isPrimary = !primaryLayer || primaryLayer === "all" || layer === primaryLayer;
+    const isGhost = primaryLayer && primaryLayer !== "all" && !isPrimary;
+    return {
+      ...n,
+      _ghost: isGhost,
+      _primary: isPrimary,
+      _multiDoc: multiDoc,
+    };
+  });
+}
+
+function stopConnectionFormationTimer() {
+  if (connectionFormationTimer) {
+    clearInterval(connectionFormationTimer);
+    connectionFormationTimer = null;
+  }
+}
+
+function renderConnectionFormationTimeline() {
+  const el = els.connectionFormationTimeline;
+  if (!el) return;
+  if (!connectionFormationMode) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  el.classList.remove("hidden");
+  el.innerHTML = FORMATION_LAYERS.map((layer, idx) => {
+    const step = idx + 1;
+    const cls = step < connectionFormationStep
+      ? "formation-step done"
+      : step === connectionFormationStep
+        ? "formation-step active"
+        : "formation-step";
+    return `<span class="${cls}" data-step="${step}">${esc(FORMATION_LAYER_LABELS[layer] || layer)}</span>`;
+  }).join("");
+}
+
+function startConnectionFormationPlayback() {
+  stopConnectionFormationTimer();
+  connectionFormationStep = 1;
+  renderConnectionFormationTimeline();
+  scheduleGraphViewsRender();
+  connectionFormationTimer = setInterval(() => {
+    if (connectionFormationStep >= FORMATION_LAYERS.length) {
+      stopConnectionFormationTimer();
+      return;
+    }
+    connectionFormationStep += 1;
+    renderConnectionFormationTimeline();
+    resetGraphNetwork();
+    scheduleGraphViewsRender();
+  }, FORMATION_STEP_MS);
+}
+
+function toggleConnectionFormationMode() {
+  connectionFormationMode = !connectionFormationMode;
+  if (connectionFormationMode) {
+    graphLayerFilter = "all";
+    highlightCrossLayer = true;
+    graphDensityMode = "full";
+    updateDensityToggleUI();
+  } else {
+    stopConnectionFormationTimer();
+    connectionFormationStep = 0;
+  }
+  els.connectionFormationBtn?.classList.toggle("active", connectionFormationMode);
+  els.crossLayerToggle?.classList.toggle("active", highlightCrossLayer);
+  renderConnectionFormationTimeline();
+  if (connectionFormationMode) startConnectionFormationPlayback();
+  else scheduleGraphViewsRender();
+}
+
 function countCrossLayerRels() {
   const layerMap = nodeLayerMap();
   return graphData.relationships.filter((r) => isCrossLayerRel(r, layerMap)).length;
@@ -1194,23 +1766,46 @@ function updateSearchBadge(docId) {
 
 function formatEmbeddingStatus(data) {
   if (!data) return "Эмбеддинги: недоступны";
-  const chunks = data.collections?.mkg_chunks?.points ?? 0;
-  const claims = data.collections?.mkg_claims?.points ?? 0;
-  const ok = data.yandex_configured ? "настроен" : "не настроен";
-  return `Yandex (${ok}) → Qdrant · chunks ${chunks} · claims ${claims}`;
+  const chunks = data.l3_points ?? data.collections?.mkg_chunks?.points ?? 0;
+  const claims = data.l4_points ?? data.collections?.mkg_claims?.points ?? 0;
+  const total = data.total_points ?? chunks + claims;
+  const qdrant = data.qdrant_ok !== false ? "OK" : "недоступен";
+  const yandex = data.yandex_configured ? "настроен" : "не настроен";
+  return `Qdrant ${qdrant} · ${total} точек (L3 chunks ${chunks}, L4 claims ${claims}) · Yandex ${yandex}`;
 }
 
 function formatQdrantInfo(data) {
   if (!data) return "";
   const lines = [
-    `Qdrant: ${data.qdrant_url}`,
+    `Qdrant: ${data.qdrant_url}${data.qdrant_ok === false ? " (недоступен)" : ""}`,
     `Размер вектора: ${data.vector_size}`,
-    `Yandex: ${data.yandex_configured ? "ключ настроен" : "ключ не задан"}`,
+    `Yandex: ${data.yandex_configured ? "ключ настроен" : "ключ не задан — индексация недоступна, визуализация из Qdrant работает"}`,
   ];
   Object.entries(data.collections || {}).forEach(([name, c]) => {
     lines.push(`${name}: ${c.points} точек — ${c.purpose}`);
   });
   return lines.join("\n");
+}
+
+function qdrantRetryHtml(label, action) {
+  return `<p class="muted">${esc(label)} <button type="button" class="btn btn-ghost btn-small qdrant-retry-btn" data-retry="${esc(action)}">Повторить</button></p>`;
+}
+
+function normalizeDocId(docId) {
+  if (!docId) return docId;
+  if (docId.startsWith("doc_") && !docId.includes(":")) return `doc:${docId.slice(4)}`;
+  return docId;
+}
+
+function bindQdrantRetry(container) {
+  container?.querySelectorAll(".qdrant-retry-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const action = btn.dataset.retry;
+      if (action === "status") refreshEmbeddingStatus();
+      else if (action === "viz") loadQdrantClusterMap();
+      else if (action === "points") loadQdrantPoints();
+    });
+  });
 }
 
 function saveIndexedDocs() {
@@ -1229,46 +1824,51 @@ function countL3Nodes(nodes) {
 
 function renderL3Stats() {
   if (!els.l3Stats) return;
-  if (!selectedDoc || !graphData?.nodes?.length) {
-    els.l3Stats.innerHTML = '<p class="muted">Постройте граф документа — здесь появится статистика L3.</p>';
+  const data = embeddingStatusCache;
+  if (!data) {
+    els.l3Stats.innerHTML = '<p class="muted">Статистика корпуса — загрузка…</p>';
     return;
   }
-  const c = countL3Nodes(graphData.nodes);
-  const cross = countCrossLayerRels();
-  const indexed = indexedDocsSet.has(selectedDoc);
+  const chunks = data.l3_points ?? data.collections?.mkg_chunks?.points ?? 0;
+  const claims = data.l4_points ?? data.collections?.mkg_claims?.points ?? 0;
+  const indexedCount = docsListCache.filter((d) => indexedDocsSet.has(d.id)).length;
   els.l3Stats.innerHTML = `
-    <div class="l3-stat"><span class="l3-stat-val">${c.TextParagraph}</span><span class="l3-stat-label">TextParagraph</span></div>
-    <div class="l3-stat"><span class="l3-stat-val">${c.HeadingContext}</span><span class="l3-stat-label">HeadingContext</span></div>
-    <div class="l3-stat"><span class="l3-stat-val">${c.LangContext}</span><span class="l3-stat-label">LangContext</span></div>
-    <div class="l3-stat"><span class="l3-stat-val">${cross}</span><span class="l3-stat-label">межсл. связей</span></div>
-    <div class="l3-stat"><span class="l3-stat-val">${indexed ? "да" : "нет"}</span><span class="l3-stat-label">в Qdrant</span></div>`;
-}
-
-function populateGraphDocFilter(items) {
-  const list = items || docsListCache;
-  const docOpts = list.length
-    ? list.map((d) => `<option value="${esc(d.id)}" ${d.id === selectedDoc ? "selected" : ""}>${esc(d.file_name || d.id)}</option>`).join("")
-    : "";
-  if (els.qdrantDocFilter) {
-    els.qdrantDocFilter.innerHTML = docOpts || '<option value="">—</option>';
-  }
+    <div class="l3-stat"><span class="l3-stat-val">${chunks}</span><span class="l3-stat-label">L3</span></div>
+    <div class="l3-stat"><span class="l3-stat-val">${claims}</span><span class="l3-stat-label">L4</span></div>
+    <div class="l3-stat"><span class="l3-stat-val">${indexedCount}</span><span class="l3-stat-label">док. в Qdrant</span></div>`;
 }
 
 async function refreshEmbeddingStatus() {
+  let statusOk = false;
   try {
     const r = await fetch(`${AGENT_API}/embeddings/status`);
-    if (!r.ok) return;
-    embeddingStatusCache = await r.json();
-    const line = formatEmbeddingStatus(embeddingStatusCache);
-    if (els.l3EmbeddingStatus) els.l3EmbeddingStatus.textContent = line;
-    if (els.l3QdrantInfo) els.l3QdrantInfo.textContent = formatQdrantInfo(embeddingStatusCache);
-  } catch {
-    const line = "Эмбеддинги: сервис недоступен";
-    if (els.l3EmbeddingStatus) els.l3EmbeddingStatus.textContent = line;
+    if (r.ok) {
+      embeddingStatusCache = await r.json();
+      statusOk = true;
+      const line = formatEmbeddingStatus(embeddingStatusCache);
+      if (els.l3EmbeddingStatus) els.l3EmbeddingStatus.textContent = line;
+      if (els.l3QdrantInfo) els.l3QdrantInfo.textContent = formatQdrantInfo(embeddingStatusCache);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      const msg = err.detail || `HTTP ${r.status}`;
+      if (els.l3EmbeddingStatus) {
+        els.l3EmbeddingStatus.innerHTML = qdrantRetryHtml(`Статус эмбеддингов: ${msg}`, "status");
+        bindQdrantRetry(els.l3EmbeddingStatus);
+      }
+    }
+  } catch (e) {
+    if (els.l3EmbeddingStatus) {
+      els.l3EmbeddingStatus.innerHTML = qdrantRetryHtml(`Статус недоступен: ${e.message}`, "status");
+      bindQdrantRetry(els.l3EmbeddingStatus);
+    }
     if (els.l3QdrantInfo) els.l3QdrantInfo.textContent = "";
   }
   renderL3Stats();
-  if (currentPage === "qdrant" && selectedDoc) loadQdrantPoints(selectedDoc);
+  if (currentPage === "qdrant") {
+    loadQdrantClusterMap();
+    loadQdrantPoints();
+  }
+  return statusOk;
 }
 
 async function indexEmbeddings(docId = selectedDoc, opts = {}) {
@@ -1292,9 +1892,15 @@ async function indexEmbeddings(docId = selectedDoc, opts = {}) {
       saveIndexedDocs();
     }
     if (docId === selectedDoc) updateSearchBadge(docId);
-    if (!silent) appendQdrantLog(`Индексация: +${data.indexed ?? 0}, пропущено ${data.skipped ?? 0}`);
+    if (!silent) {
+      const l3 = data.indexed_l3 ?? data.collections?.mkg_chunks ?? "?";
+      const l4 = data.indexed_l4 ?? data.collections?.mkg_claims ?? "?";
+      appendQdrantLog(`Индексация L3+L4: +${data.indexed ?? 0} (L3 ${l3}, L4 ${l4}), пропущено ${data.skipped ?? 0}`);
+    }
     await refreshEmbeddingStatus();
-    await loadQdrantPoints(docId);
+    await loadQdrantPoints();
+    qdrantClusterAutoDone = false;
+    await loadQdrantClusterMap();
     return data;
   } catch (e) {
     if (!silent) appendQdrantLog(`Ошибка: ${e.message}`, true);
@@ -1334,29 +1940,20 @@ async function indexAllEmbeddings() {
 }
 
 async function runSearch(query, targetEl = els.qdrantSearchResults) {
-  if (!selectedDoc || !query?.trim() || !targetEl) return;
+  if (!query?.trim() || !targetEl) return;
   targetEl.innerHTML = '<p class="muted">Поиск…</p>';
   try {
-    const r = await fetch(
-      `${AGENT_API}/documents/${encodeURIComponent(selectedDoc)}/search`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: query.trim(), limit: 15, mode: "auto", index_if_missing: true }),
-      },
-    );
+    const r = await fetch(`${AGENT_API}/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: query.trim(), limit: 15, mode: "auto" }),
+    });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "Ошибка поиска");
-    if (data.index?.indexed > 0) {
-      indexedDocsSet.add(selectedDoc);
-      saveIndexedDocs();
-      updateSearchBadge(selectedDoc);
-      await refreshEmbeddingStatus();
-    }
     if (els.qdrantSearchMeta) {
-      els.qdrantSearchMeta.textContent = `Режим: ${data.mode} · ${data.hits?.length ?? 0} результатов`;
+      els.qdrantSearchMeta.textContent = `весь корпус · режим: ${data.mode} · ${data.hits?.length ?? 0} результатов`;
     }
-    renderSearchHits(data.hits || [], targetEl, { showDoc: false });
+    renderSearchHits(data.hits || [], targetEl, { showDoc: true });
   } catch (e) {
     targetEl.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
   }
@@ -1395,6 +1992,8 @@ function renderSearchHits(hits, targetEl, opts = {}) {
       const node = graphData.nodes.find((n) => n.id === el.dataset.nodeId);
       if (node) openDetailPanel(node);
       else {
+        if (els.detailTitle) els.detailTitle.textContent = "Узел";
+        els.detailBody.classList.remove("has-split");
         els.detailBody.innerHTML = `<p class="muted">Узел ${esc(el.dataset.nodeId)} — откройте граф документа.</p>`;
         els.detailPanel.classList.remove("hidden");
         els.appRoot.classList.add("has-detail");
@@ -1412,31 +2011,57 @@ function appendQdrantLog(msg, isErr = false) {
     .map((l) => `<div class="qdrant-log-line${isErr ? " err" : ""}">${esc(l)}</div>`).join("");
 }
 
-async function loadQdrantPoints(docId = selectedDoc) {
-  if (!docId || !els.qdrantPointsList) return;
+async function loadQdrantPoints() {
+  if (!els.qdrantPointsList) {
+    if (els.qdrantPointsCount) els.qdrantPointsCount.textContent = "(0)";
+    return;
+  }
   try {
-    const r = await fetch(`${AGENT_API}/documents/${encodeURIComponent(docId)}/embeddings/points?limit=200`);
+    const r = await fetch(`${AGENT_API}/embeddings/points/all?limit=200`);
     if (!r.ok) {
-      els.qdrantPointsList.innerHTML = '<p class="muted">Точки недоступны (индексируйте документ).</p>';
+      const err = await r.json().catch(() => ({}));
+      const msg = err.detail || `HTTP ${r.status}`;
+      els.qdrantPointsList.innerHTML = qdrantRetryHtml(`Точки недоступны: ${msg}`, "points");
+      bindQdrantRetry(els.qdrantPointsList);
       if (els.qdrantPointsCount) els.qdrantPointsCount.textContent = "(0)";
       return;
     }
     const data = await r.json();
     if (els.qdrantPointsCount) els.qdrantPointsCount.textContent = `(${data.total})`;
     if (!data.points?.length) {
-      els.qdrantPointsList.innerHTML = '<p class="muted">Нет точек в Qdrant для этого документа.</p>';
+      els.qdrantPointsList.innerHTML = '<p class="muted">Нет точек в Qdrant — проиндексируйте документы.</p>';
       return;
     }
     els.qdrantPointsList.innerHTML = data.points.map((p) => `
-      <div class="qdrant-point-row">
+      <div class="qdrant-point-row" data-point-id="${esc(p.point_id)}" data-node-id="${esc(p.node_id || "")}" data-doc-id="${esc(p.document_id || "")}">
         <span class="qp-layer" style="background:${LAYER_COLOR[p.layer] || LAYER_COLOR["L?"]}">${esc(p.layer || "?")}</span>
         <span class="qp-label">${esc(p.label || "?")}</span>
+        ${p.document_id ? `<span class="qp-doc muted">${esc(docName(p.document_id))}</span>` : ""}
         <code class="qp-id">${esc(p.node_id || p.point_id)}</code>
         <span class="qp-coll muted">${esc(p.collection)}</span>
+        ${p.cluster_id != null ? `<span class="qp-cluster muted">${p.cluster_name ? esc(p.cluster_name) : `c${esc(String(p.cluster_id))}`}</span>` : ""}
+        ${p.is_anomaly ? '<span class="qp-anomaly muted">anomaly</span>' : ""}
         <p class="qp-text">${esc(p.text || "")}</p>
       </div>`).join("");
-  } catch {
-    els.qdrantPointsList.innerHTML = '<p class="muted">Ошибка загрузки точек Qdrant.</p>';
+    els.qdrantPointsList.querySelectorAll(".qdrant-point-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        highlightQdrantPoint(row.dataset.pointId, { scroll: false });
+        const p = qdrantVizPoints.find((pt) => pt.id === row.dataset.pointId || pt.node_id === row.dataset.nodeId);
+        openQdrantPointDetail(p || {
+          node_id: row.dataset.nodeId,
+          neo4j_node_id: row.dataset.nodeId,
+          text: row.querySelector(".qp-text")?.textContent || "",
+        });
+      });
+    });
+  } catch (e) {
+    els.qdrantPointsList.innerHTML = qdrantRetryHtml(`Ошибка загрузки точек: ${e.message}`, "points");
+    bindQdrantRetry(els.qdrantPointsList);
+  }
+
+  function docName(docId) {
+    const d = docsListCache.find((x) => x.id === docId);
+    return d?.file_name || docId;
   }
 }
 
@@ -1482,11 +2107,10 @@ function renderLiveRels(rels) {
   els.liveRels.innerHTML = order
     .filter((l) => grouped[l]?.length)
     .map((layer) => {
-      const chips = grouped[layer].map((rel) =>
-        `<span class="rel-chip rel-chip-${layer}" title="${esc(rel.type)}"><span class="rel-from">${esc(rel.from_short)}</span><b>${esc(rel.type)}</b><span class="rel-to">${esc(rel.to_short)}</span></span>`,
-      ).join("");
+      const chips = grouped[layer].map((rel) => renderRelChip(rel, { docId: selectedDoc })).join("");
       return `<div class="live-rel-group"><span class="lp-mini-badge l-${layer}">${layer}</span>${chips}</div>`;
     }).join("");
+  bindRelChipClicks(els.liveRels, selectedDoc);
 }
 
 async function refreshLiveExtract(docId) {
@@ -1550,7 +2174,14 @@ function updateGraphVisibility() {
   els.graphPanel?.classList.toggle("hidden", !showGraphArea);
   els.pageGraphShell?.classList.toggle("doc-detail-only", isDocPage && isDocDetail);
   els.graphPageHead?.classList.toggle("hidden", !showGraphArea || (isDocPage && isDocDetail) || (isInlineGraph && graphScope === "doc"));
-  els.docWorkHeader?.classList.toggle("hidden", !isInlineGraph || graphScope !== "doc" || !selectedDoc);
+  if (isInlineGraph) {
+    const headerDoc = graphScope === "all"
+      ? { id: GRAPH_ALL_ID }
+      : docsListCache.find((d) => d.id === selectedDoc);
+    updateDocWorkHeader(headerDoc);
+  } else {
+    els.docWorkHeader?.classList.add("hidden");
+  }
 
   if (isInlineGraph && graphScope === "doc") {
     syncDocWorkTabUI(docWorkTab);
@@ -1568,12 +2199,24 @@ function updateGraphVisibility() {
   els.graphsEmpty?.classList.toggle("hidden", !showGraphArea || hasGraph);
   els.graphsWorkspace?.classList.toggle("hidden", !showGraphArea || !hasGraph);
 
-  const emptyMsg = els.graphsEmpty?.querySelector("p");
-  if (emptyMsg) {
-    emptyMsg.textContent = graphScope === "all"
-      ? "Нет документов с графом. Загрузите файл на вкладке «Документы» — пайплайн запустится автоматически."
-      : "Граф строится… или загрузите документ и дождитесь обработки.";
-  }
+  const headerDoc = graphScope === "doc" && selectedDoc
+    ? docsListCache.find((d) => d.id === selectedDoc)
+    : null;
+  updateGraphEmptyState(headerDoc);
+}
+
+function isDocGraphLive(docId) {
+  if (!docId || docId === GRAPH_ALL_ID) return false;
+  const st = docStatusCache.get(docId)
+    || docsListCache.find((d) => d.id === docId)?.status;
+  return ACTIVE_DOC_STATUSES.has(st) || st === "extracting";
+}
+
+function shouldRefreshGraphData(docId) {
+  if (!docId) return false;
+  if (docId !== lastGraphDocId || !visNetwork) return true;
+  if (docId === GRAPH_ALL_ID) return false;
+  return isDocGraphLive(docId);
 }
 
 function updateGraphsPageState() {
@@ -1589,7 +2232,9 @@ function updateGraphsPageState() {
     const docId = graphScope === "all" ? GRAPH_ALL_ID : (graphViewDocId || selectedDoc || pickGraphDocId());
     if (docId) {
       graphViewDocId = docId;
-      loadGraph(docId);
+      if (shouldRefreshGraphData(docId)) {
+        loadGraph(docId, { silent: true });
+      }
     }
   }
 }
@@ -1598,9 +2243,12 @@ function renderDocCard(d) {
   const st = statusLabel(d);
   const typeHint = d.doc_type ? ` · ${d.doc_type}` : "";
   const isLive = ["uploaded", "processing", "extracting"].includes(d.status);
+  const modeBadge = isAnswersOnlyMode(d)
+    ? '<span class="doc-mode-badge" title="Загружен только для чата — граф не строился">только чат</span>'
+    : "";
   return `
     <div class="doc ${selectedDoc === d.id ? "active" : ""} ${isLive ? "doc-live" : ""}" data-id="${esc(d.id)}" role="button">
-      <div class="doc-name">${esc(d.file_name)}</div>
+      <div class="doc-name">${esc(d.file_name)}${modeBadge}</div>
       <div class="doc-meta">${formatBytes(d.size_bytes)}${esc(typeHint)} · ${formatDateTime(d.upload_date)}</div>
       ${renderDocPipelineHtml(d)}
       <span class="badge ${st.cls}">${esc(st.text)}</span>
@@ -1618,7 +2266,7 @@ function bindDocCards(container) {
         openDoc(id, { keepPage: true, showGraph: true });
         graphScope = "doc";
         updateGraphsPageState();
-        refreshGraphViewport();
+        refreshGraphViewport({ fit: true, force: true });
         renderDocsList();
         return;
       }
@@ -1627,108 +2275,777 @@ function bindDocCards(container) {
   });
 }
 
-async function loadQdrantClusterMap() {
-  if (!els.qdrantClusterMap) return;
+async function maybeAutoClusterL4(points) {
+  if (qdrantClusterAutoPending || qdrantClusterAutoDone) return false;
+  const l4 = (points || []).filter((p) => p.layer === "L4");
+  if (!l4.length) return false;
+  const needsCluster = l4.some((p) => p.cluster_id == null);
+  if (!needsCluster) return false;
+  qdrantClusterAutoPending = true;
   try {
-    const r = await fetch(`${AGENT_API}/embeddings/points/all?limit=500`);
-    if (!r.ok) {
-      els.qdrantClusterMap.innerHTML = '<p class="muted">Точки недоступны</p>';
-      return;
+    appendQdrantLog("Авто-кластеризация L4 (HDBSCAN)…");
+    const ok = await runL4Clustering({ silent: true, skipReload: true });
+    if (ok) qdrantClusterAutoDone = true;
+    return ok;
+  } finally {
+    qdrantClusterAutoPending = false;
+  }
+}
+
+function isQdrantL4Anomaly(p) {
+  return p.layer === "L4" && (p.cluster_id === -1 || p.is_anomaly || Number(p.cluster_id) < 0);
+}
+
+function filterQdrantVizL4(points) {
+  return (points || []).filter((p) => p.layer === "L4");
+}
+
+function showQdrantToast(message, { error = false, ms = 4500 } = {}) {
+  if (!els.qdrantToast) {
+    if (els.qdrantIndexLog) els.qdrantIndexLog.textContent = message;
+    return;
+  }
+  els.qdrantToast.textContent = message;
+  els.qdrantToast.classList.toggle("qdrant-toast-error", !!error);
+  els.qdrantToast.classList.remove("hidden");
+  clearTimeout(showQdrantToast._t);
+  showQdrantToast._t = setTimeout(() => {
+    els.qdrantToast?.classList.add("hidden");
+  }, ms);
+}
+
+
+function openSideDetailPanel(title, mainHtml, sideHtml) {
+  if (els.detailTitle) els.detailTitle.textContent = title;
+  els.detailBody.classList.add("has-split");
+  els.detailBody.innerHTML = `
+    <div class="detail-body-split">
+      <div class="detail-body-main">${mainHtml}</div>
+      <div class="detail-body-side">${sideHtml}</div>
+    </div>`;
+  els.detailPanel.classList.remove("hidden");
+  els.appRoot.classList.add("has-detail");
+}
+
+function nodeTextPreview(node, limit = 200) {
+  if (!node) return "";
+  const props = node.props || {};
+  for (const key of ["text", "quote", "name", "title", "value", "name_ru", "name_en"]) {
+    const val = props[key];
+    if (typeof val === "string" && val.trim()) {
+      const text = val.trim().replace(/\n/g, " ");
+      return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
     }
-    const data = await r.json();
-    const points = data.points || [];
-    if (els.qdrantClusterCount) els.qdrantClusterCount.textContent = `(${points.length})`;
-    if (!points.length) {
-      els.qdrantClusterMap.innerHTML = '<p class="muted">Нет точек — проиндексируйте документы</p>';
-      return;
-    }
-    const l4Points = points.filter((p) => p.layer === "L4");
-    const byCluster = {};
-    l4Points.forEach((p) => {
-      const cid = p.cluster_id != null ? p.cluster_id : (p.is_anomaly ? -1 : "none");
-      const key = String(cid);
-      if (!byCluster[key]) byCluster[key] = [];
-      byCluster[key].push(p);
+  }
+  return "";
+}
+
+function renderRelNodeCard(node, roleLabel) {
+  if (!node) {
+    return `<div class="rel-node-card rel-node-missing"><h4 class="detail-section-title">${esc(roleLabel)}</h4><p class="muted">Узел не найден в графе</p></div>`;
+  }
+  const layer = layerOf(node.label);
+  const preview = nodeTextPreview(node);
+  return `
+    <div class="rel-node-card">
+      <h4 class="detail-section-title">${esc(roleLabel)}</h4>
+      <span class="detail-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)} · ${esc(node.label)}</span>
+      <div class="detail-id">${esc(node.id)}</div>
+      ${preview ? `<p class="rel-node-preview">${esc(preview)}</p>` : ""}
+      <button type="button" class="btn btn-ghost btn-small rel-open-node-btn" data-node-id="${esc(node.id)}">Открыть узел</button>
+    </div>`;
+}
+
+function renderRelPropsBlock(props) {
+  const keys = Object.keys(props || {}).filter((k) => propHasValue(props[k]));
+  if (!keys.length) return '<p class="muted small">Свойства связи не заданы</p>';
+  return `<dl class="detail-props detail-props-compact">${keys.map((k) =>
+    `<div class="prop-row prop-ok"><dt>${esc(k)}</dt><dd>${formatPropValue(props[k])}</dd></div>`,
+  ).join("")}</dl>`;
+}
+
+function renderRelatedEdgesList(edges, emptyLabel) {
+  if (!edges?.length) return `<p class="muted small">${esc(emptyLabel)}</p>`;
+  return `<ul class="rel-detail-related">${edges.map((e) => {
+    const from = e.from || e.from_ || "?";
+    const to = e.to || "?";
+    return `<li><button type="button" class="rel-related-edge-btn" data-from="${esc(from)}" data-to="${esc(to)}" data-type="${esc(e.type || "?")}"><code>${esc(e.type || "?")}</code> · ${esc(from)} → ${esc(to)}</button></li>`;
+  }).join("")}</ul>`;
+}
+
+function findRelationshipInGraph(from, to, type) {
+  return graphData.relationships.find((r) => {
+    const start = r.from || r.from_;
+    return start === from && r.to === to && r.type === type;
+  }) || null;
+}
+
+function findNodeInGraph(nodeId) {
+  return graphData.nodes.find((n) => n.id === nodeId) || null;
+}
+
+function buildRelationshipDetailFromGraph(from, to, type) {
+  const rel = findRelationshipInGraph(from, to, type);
+  if (!rel) return null;
+  const source = findNodeInGraph(from);
+  const target = findNodeInGraph(to);
+  const related = graphData.relationships.filter((r) => {
+    const start = r.from || r.from_;
+    const end = r.to;
+    if (start === from && end === to && r.type === type) return false;
+    return start === from || end === from || start === to || end === to;
+  }).slice(0, 12);
+  return {
+    type,
+    from,
+    to,
+    props: rel.props || {},
+    layer: source ? layerOf(source.label) : "L?",
+    description: REL_TYPE_HINTS[type] || `Связь типа ${type}`,
+    source_node: source,
+    target_node: target,
+    related_edges: related,
+  };
+}
+
+function highlightGraphEdge(from, to, type) {
+  if (!visNetwork || !visEdgesDataSet) return;
+  const edges = visEdgesDataSet.get({
+    filter: (e) => e.from === from && e.to === to && (!type || e.title === type),
+  });
+  if (!edges.length) return;
+  visNetwork.selectNodes([from, to]);
+  visNetwork.selectEdges([edges[0].id]);
+  try {
+    visNetwork.focus(from, { scale: 1.15, animation: { duration: 400, easingFunction: "easeInOutQuad" } });
+  } catch { /* ignore focus errors on hidden graph */ }
+}
+
+function clearGraphEdgeHighlight() {
+  if (!visNetwork) return;
+  visNetwork.unselectAll();
+}
+
+function bindRelDetailActions(root, docId) {
+  root?.querySelectorAll(".rel-open-node-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const node = findNodeInGraph(btn.dataset.nodeId);
+      if (node) openDetailPanel(node);
     });
-    const clusterKeys = Object.keys(byCluster).sort((a, b) => {
-      if (a === "none") return 1;
-      if (b === "none") return -1;
-      return Number(a) - Number(b);
-    });
-    if (!clusterKeys.length || (clusterKeys.length === 1 && clusterKeys[0] === "none")) {
-      const byLayer = {};
-      points.forEach((p) => {
-        const layer = p.layer || "L?";
-        if (!byLayer[layer]) byLayer[layer] = [];
-        byLayer[layer].push(p);
+  });
+  root?.querySelectorAll(".rel-related-edge-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      openRelationshipDetail({
+        from: btn.dataset.from,
+        to: btn.dataset.to,
+        type: btn.dataset.type,
+        docId,
       });
-      els.qdrantClusterMap.innerHTML = Object.entries(byLayer).map(([layer, pts]) => `
-        <div class="qdrant-cluster-group">
-          <div class="qdrant-cluster-head">
-            <span class="qp-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)}</span>
-            <span class="muted">${pts.length} точек · запустите HDBSCAN</span>
-          </div>
-          <div class="qdrant-cluster-dots">
-            ${pts.map((p) => `<span class="qdrant-dot" title="${esc(p.text || p.node_id || "")}" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}"></span>`).join("")}
-          </div>
-        </div>`).join("");
+    });
+  });
+}
+
+function bindRelChipClicks(root = document, docId = null) {
+  const resolvedDocId = docId || selectedDoc;
+  root?.querySelectorAll(".rel-chip-clickable").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      openRelationshipDetail({
+        from: btn.dataset.from,
+        to: btn.dataset.to,
+        type: btn.dataset.type,
+        docId: btn.dataset.docId || resolvedDocId,
+      });
+    });
+  });
+}
+
+const REL_TYPE_HINTS = {
+  STRUCTURING: "Заголовок раздела структурирует абзац текста (иерархия документа L3).",
+  TAGGED_WITH: "Абзац помечен языковым или типографским контекстом.",
+  NEXT_PARAGRAPH: "Последовательный переход к следующему абзацу в тексте.",
+  HAS_PARAGRAPH: "Документ содержит абзац текста.",
+  CONTEXT_FOR: "Текст или таблица даёт контекст для сущности другого слоя.",
+  DATA_SOURCE_FOR: "Фрагмент текста — источник данных для факта или измерения.",
+  ABOUT: "Фрагмент текста описывает технологическое решение (L6).",
+  WRITES_LOG: "Статус верификации фиксируется в журнале аудита (L5).",
+  GOVERNED_BY: "Документ регулируется ролью безопасности.",
+  USES_MAT: "Стадия или опыт использует материал.",
+  PRODUCED_MEASURE: "Стадия или опыт породил измерение.",
+  SHOWED_EFFECT: "Эксперимент или стадия показала эффект.",
+};
+
+function openRelationshipDetailPanel(data, docId) {
+  const layer = data.layer || "L?";
+  const title = `${data.type} · ${layer}`;
+  const mainHtml = `
+    <span class="detail-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)} · ${esc(data.type)}</span>
+    <p class="rel-detail-desc">${esc(data.description || REL_TYPE_HINTS[data.type] || `Связь ${data.type}`)}</p>
+    <p class="muted small rel-detail-route"><code>${esc(data.from)}</code> → <code>${esc(data.to)}</code></p>
+    <h4 class="detail-section-title">Свойства связи</h4>
+    ${renderRelPropsBlock(data.props || {})}
+    <h4 class="detail-section-title">Узлы</h4>
+    ${renderRelNodeCard(data.source_node, "Источник")}
+    ${renderRelNodeCard(data.target_node, "Цель")}`;
+  const sideHtml = `
+    <h4 class="detail-section-title">Смежные связи</h4>
+    ${renderRelatedEdgesList(data.related_edges, "Других связей у этих узлов пока нет.")}`;
+  openSideDetailPanel(title, mainHtml, sideHtml);
+  bindRelDetailActions(els.detailBody, docId);
+  highlightGraphEdge(data.from, data.to, data.type);
+}
+
+async function openRelationshipDetail({ from, to, type, docId }) {
+  if (!from || !to || !type) return;
+  const resolvedDocId = docId || selectedDoc;
+  openSideDetailPanel("Загрузка связи…", '<p class="muted">Загрузка…</p>', "");
+  const cached = buildRelationshipDetailFromGraph(from, to, type);
+  if (cached && graphScope === "doc" && (graphViewDocId === resolvedDocId || selectedDoc === resolvedDocId)) {
+    openRelationshipDetailPanel(cached, resolvedDocId);
+    return;
+  }
+  if (!resolvedDocId || resolvedDocId === GRAPH_ALL_ID) {
+    if (cached) {
+      openRelationshipDetailPanel(cached, resolvedDocId);
       return;
     }
-    els.qdrantClusterMap.innerHTML = clusterKeys.map((key) => {
-      const pts = byCluster[key];
-      const isAnomaly = key === "-1";
-      const label = key === "none" ? "без кластера" : (isAnomaly ? `аномалии (${pts.length})` : `кластер ${key}`);
-      const color = isAnomaly ? "#c62828" : (LAYER_COLOR.L4 || "#ef6c00");
-      return `
-      <div class="qdrant-cluster-group">
-        <div class="qdrant-cluster-head">
-          <span class="qp-layer" style="background:${color}">${esc(label)}</span>
-          <span class="muted">${pts.length} L4-точек</span>
-        </div>
-        <div class="qdrant-cluster-dots">
-          ${pts.map((p) => `<span class="qdrant-dot ${p.is_anomaly ? "qdrant-dot-anomaly" : ""}" title="${esc(p.text || p.neo4j_node_id || p.node_id || "")}" style="background:${color}"></span>`).join("")}
-        </div>
-      </div>`;
-    }).join("");
-  } catch {
-    els.qdrantClusterMap.innerHTML = '<p class="muted">Ошибка загрузки карты точек</p>';
-  }
-}
-
-async function runL4Clustering() {
-  const docParam = selectedDoc ? `?document_id=${encodeURIComponent(selectedDoc)}` : "";
-  if (els.qdrantIndexLog) {
-    els.qdrantIndexLog.textContent = "HDBSCAN L4…";
+    openSideDetailPanel("Связь", `<p class="muted">Выберите документ, чтобы загрузить детали связи.</p>`, "");
+    return;
   }
   try {
-    const r = await fetch(`${AGENT_API}/analytics/l4-cluster${docParam}`, { method: "POST" });
+    const qs = new URLSearchParams({ from, to, type });
+    const r = await fetch(`${API}/graph/documents/${encodeURIComponent(resolvedDocId)}/relationship?${qs}`);
     const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "Ошибка кластеризации");
-    if (els.qdrantIndexLog) {
-      els.qdrantIndexLog.textContent = `L4: ${data.clustered || 0} точек, ${data.clusters || 0} кластеров, ${data.anomalies || 0} аномалий`;
-    }
-    await loadQdrantClusterMap();
-    if (selectedDoc && graphVisible) await loadGraph(selectedDoc, { silent: true });
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    openRelationshipDetailPanel(data, resolvedDocId);
   } catch (e) {
-    if (els.qdrantIndexLog) els.qdrantIndexLog.textContent = `Ошибка: ${e.message}`;
+    if (cached) {
+      openRelationshipDetailPanel(cached, resolvedDocId);
+      return;
+    }
+    openSideDetailPanel("Ошибка", `<p class="muted">${esc(e.message)}</p>`, "");
   }
 }
 
-function viewAllGraph() {
+function bindQdrantDetailActions(root) {
+  root?.querySelector(".qdrant-nearest-cluster-btn")?.addEventListener("click", (ev) => {
+    openQdrantClusterDetail(Number(ev.currentTarget.dataset.clusterId));
+  });
+  root?.querySelector(".qdrant-open-cluster-btn")?.addEventListener("click", (ev) => {
+    openQdrantClusterDetail(Number(ev.currentTarget.dataset.clusterId));
+  });
+}
+
+function renderQdrantEdgesList(edges, emptyLabel) {
+  if (!edges?.length) {
+    return `<p class="muted small">${esc(emptyLabel)}</p>`;
+  }
+    return `<ul class="qdrant-detail-edges">${edges.map((e) => {
+    const cross = e.other_cluster_name
+      ? ` → кластер «${esc(e.other_cluster_name)}»`
+      : (e.other_cluster_id != null ? ` → кластер #${esc(String(e.other_cluster_id))}` : "");
+    return `<li><code>${esc(e.type || "?")}</code> · ${esc(e.from_node || "?")} → ${esc(e.to_node || "?")}${cross}</li>`;
+  }).join("")}</ul>`;
+}
+
+function formatClusteringStatsBlock(ctx) {
+  if (!ctx) return "";
+  return `
+    <dl class="qdrant-stats-dl">
+      <div><dt>Документов</dt><dd>${ctx.doc_count ?? "—"}</dd></div>
+      <div><dt>L4-точек</dt><dd>${ctx.l4_points ?? "—"}</dd></div>
+      <div><dt>Среднее L4/док</dt><dd>${ctx.avg_l4_per_doc ?? "—"}</dd></div>
+      <div><dt>HDBSCAN_MIN_CLUSTER_SIZE</dt><dd>${ctx.min_cluster_size ?? 2}</dd></div>
+      <div><dt>min_samples</dt><dd>${ctx.min_samples ?? ctx.min_cluster_size ?? 2}</dd></div>
+    </dl>`;
+}
+
+function buildNoClustersExplanation(l4Points, ctx, clusterCount, hasClusters) {
+  const n = l4Points.length;
+  const mcs = ctx?.min_cluster_size ?? 2;
+  const ms = ctx?.min_samples ?? mcs;
+  const stats = formatClusteringStatsBlock(ctx);
+  const ran = hasClusters && ctx?.clustering_ran;
+  let why = `<p><strong>Почему 0 кластеров?</strong> HDBSCAN уже запускался, но все ${n} L4-точек получили <code>cluster_id = -1</code> (noise).</p>`;
+  if (!ran) {
+    why = `<p><strong>Кластеризация ещё не выполнялась</strong> — метки cluster_id отсутствуют. Нажмите «Перекластеризовать».</p>`;
+  } else {
+    why += `<ul class="qdrant-no-cluster-list">
+      <li>Эмбеддинги L4 <em>семантически разрознены</em> — нет плотных групп из ≥${mcs} похожих точек.</li>
+      <li>При малом корпусе (${ctx?.l4_points ?? n} точек, ~${ctx?.avg_l4_per_doc ?? "?"} на документ) HDBSCAN часто помечает всё как noise.</li>
+      <li>Текущие параметры: <code>min_cluster_size=${mcs}</code>, <code>min_samples=${ms}</code> (из <code>.env</code>).</li>
+      <li>После смены <code>HDBSCAN_MIN_CLUSTER_SIZE</code> в <code>.env</code> — перезапустите gateway и нажмите «Перекластеризовать».</li>
+      <li>Добавьте документы на <em>схожую тему</em> — кластеры появятся, когда появятся группы близких фактов.</li>
+    </ul>`;
+  }
+  return `${why}${stats}
+    <button type="button" class="btn btn-primary btn-small qdrant-cluster-run-btn">Перекластеризовать L4</button>`;
+}
+
+function chartDataPointFromEvent(chart, evt) {
+  const pos = typeof Chart !== "undefined" && Chart.helpers?.getRelativePosition
+    ? Chart.helpers.getRelativePosition(evt, chart)
+    : { x: evt.offsetX, y: evt.offsetY };
+  return {
+    x: chart.scales.x.getValueForPixel(pos.x),
+    y: chart.scales.y.getValueForPixel(pos.y),
+  };
+}
+
+function pointInPolygon(x, y, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const xi = polygon[i].x;
+    const yi = polygon[i].y;
+    const xj = polygon[j].x;
+    const yj = polygon[j].y;
+    const intersect = ((yi > y) !== (yj > y))
+      && (x < ((xj - xi) * (y - yi)) / (yj - yi + 1e-12) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function hitTestQdrantClusterRegion(chart, evt, regions) {
+  if (!chart || !regions?.length) return null;
+  const { x, y } = chartDataPointFromEvent(chart, evt);
+  for (const region of regions) {
+    if (region.type === "hull" && region.points?.length >= 3) {
+      if (pointInPolygon(x, y, region.points)) return region.clusterId;
+    } else if (region.type === "ellipse") {
+      const dx = (x - region.cx) / Math.max(region.rx, 1e-6);
+      const dy = (y - region.cy) / Math.max(region.ry, 1e-6);
+      if (dx * dx + dy * dy <= 1) return region.clusterId;
+    }
+  }
+  return null;
+}
+
+async function openQdrantClusterDetail(clusterId) {
+  if (clusterId == null || Number(clusterId) < 0) return;
+  openSideDetailPanel("Загрузка кластера…", '<p class="muted">Загрузка…</p>', "");
+  try {
+    const r = await fetch(`${API}/graph/l4/cluster/${encodeURIComponent(clusterId)}/detail`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    const title = `${data.cluster_name} · #${data.cluster_id}`;
+    const mainHtml = `
+      <p class="qdrant-detail-desc">${esc(data.cluster_description || "Описание не сгенерировано.")}</p>
+      <p class="muted small">${data.point_count} точек в кластере</p>
+      ${data.members?.length ? `<h4 class="qdrant-detail-sub">Факты</h4><ul class="qdrant-detail-members">${data.members.slice(0, 12).map((m) => `<li><span class="muted">${esc(m.label || "")}</span> ${esc((m.text || "").slice(0, 160))}</li>`).join("")}</ul>` : ""}`;
+    const sideHtml = `
+      <h4 class="detail-section-title">Связи внутри кластера</h4>
+      ${renderQdrantEdgesList(data.internal_edges, "Нет связей Neo4j между фактами этого кластера.")}
+      <h4 class="detail-section-title">Межкластерные связи</h4>
+      ${renderQdrantEdgesList(data.cross_cluster_edges, "Нет связей с другими кластерами.")}`;
+    openSideDetailPanel(title, mainHtml, sideHtml);
+  } catch (e) {
+    openSideDetailPanel("Ошибка", `<p class="muted">${esc(e.message)}</p>`, "");
+  }
+}
+
+async function openQdrantPointDetail(point) {
+  if (!point) return;
+  const nodeId = point.neo4j_node_id || point.node_id;
+  if (!nodeId) return;
+  openSideDetailPanel(isQdrantL4Anomaly(point) ? "L4-аномалия" : "L4-факт", '<p class="muted">Загрузка…</p>', "");
+  try {
+    const r = await fetch(`${API}/graph/l4/point/${encodeURIComponent(nodeId)}/detail`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    const title = data.is_anomaly ? `Аномалия · ${data.label || "L4"}` : (data.cluster_name || data.label || "L4-факт");
+    let anomalyBlock = "";
+    if (data.is_anomaly) {
+      anomalyBlock = `
+        <p class="qdrant-detail-warn"><strong>Почему аномалия:</strong> ${esc(data.anomaly_reason || "HDBSCAN noise (cluster_id=-1)")}</p>
+        ${data.anomaly_score != null ? `<p class="muted small">anomaly_score: ${esc(String(data.anomaly_score))}</p>` : ""}
+        ${data.nearest_cluster ? `<p class="muted small">Ближайший кластер: <button type="button" class="btn btn-ghost btn-small qdrant-nearest-cluster-btn" data-cluster-id="${esc(String(data.nearest_cluster.cluster_id))}">«${esc(data.nearest_cluster.cluster_name)}» (#${esc(String(data.nearest_cluster.cluster_id))})</button></p>` : "<p class=\"muted small\">Ближайший кластер не определён — других кластеров нет.</p>"}`;
+    } else if (data.cluster_id != null && Number(data.cluster_id) >= 0) {
+      anomalyBlock = `<p class="muted small">Кластер: <button type="button" class="btn btn-ghost btn-small qdrant-open-cluster-btn" data-cluster-id="${esc(String(data.cluster_id))}">${esc(data.cluster_name || `Кластер ${data.cluster_id}`)}</button></p>`;
+    }
+    const mainHtml = `
+      <p class="qdrant-detail-desc">${esc(data.text || point.text || "—")}</p>
+      ${anomalyBlock}`;
+    const sideHtml = `
+      <h4 class="detail-section-title">Связи Neo4j</h4>
+      ${renderQdrantEdgesList(data.edges, "Связей не найдено.")}`;
+    openSideDetailPanel(title, mainHtml, sideHtml);
+    bindQdrantDetailActions(els.detailBody);
+  } catch (e) {
+    const mainHtml = `
+      <p class="qdrant-detail-desc">${esc(point.text || "—")}</p>
+      ${isQdrantL4Anomaly(point) ? `<p class="qdrant-detail-warn">${esc(point.anomaly_reason || "Аномалия HDBSCAN (вне кластера)")}</p>` : ""}
+      <p class="muted small">${esc(e.message)}</p>`;
+    openSideDetailPanel(isQdrantL4Anomaly(point) ? "L4-аномалия" : "L4-факт", mainHtml, "");
+  }
+}
+
+function bindQdrantClusterRunButtons(root) {
+  root?.querySelectorAll(".qdrant-cluster-run-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      qdrantClusterAutoDone = false;
+      runL4Clustering();
+    });
+  });
+}
+
+function bindQdrantClusterCardClicks() {
+  els.qdrantClusterCards?.querySelectorAll("[data-cluster-id]").forEach((el) => {
+    el.addEventListener("click", () => openQdrantClusterDetail(Number(el.dataset.clusterId)));
+  });
+}
+
+function updateQdrantAllAnomaliesBanner(l4Points, clusterCount, hasClusters, ctx = qdrantClusteringContext) {
+  if (!els.qdrantVizEmptyState) return;
+  els.qdrantVizEmptyState.classList.add("hidden");
+  els.qdrantVizEmptyState.innerHTML = "";
+}
+
+async function loadQdrantClusterMap() {
+  if (!els.qdrantVizCanvas) return;
+  const docParam = "layer=L4&limit=500";
+  if (els.qdrantVizPlaceholder) {
+    els.qdrantVizPlaceholder.textContent = "Загрузка карты…";
+    els.qdrantVizPlaceholder.classList.remove("hidden");
+  }
+  if (els.qdrantVizEmptyState) {
+    els.qdrantVizEmptyState.classList.add("hidden");
+    els.qdrantVizEmptyState.innerHTML = "";
+  }
+  try {
+    const r = await fetch(`${AGENT_API}/embeddings/points/viz?${docParam}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${r.status}`);
+    }
+    const data = await r.json();
+    let points = filterQdrantVizL4(data.points || []);
+    let hasClusters = data.has_clusters;
+    let clusters = data.clusters || [];
+    let clusterCount = data.cluster_count ?? clusters.length;
+    let anomalyCount = data.anomaly_count ?? points.filter(isQdrantL4Anomaly).length;
+    let data2 = null;
+    const autoRan = await maybeAutoClusterL4(points);
+    if (autoRan) {
+      const r2 = await fetch(`${AGENT_API}/embeddings/points/viz?${docParam}`);
+      if (r2.ok) {
+        data2 = await r2.json();
+        points = filterQdrantVizL4(data2.points || points);
+        hasClusters = data2.has_clusters;
+        clusters = data2.clusters || clusters;
+        clusterCount = data2.cluster_count ?? clusters.length;
+        anomalyCount = data2.anomaly_count ?? anomalyCount;
+      }
+    }
+    qdrantVizPoints = points;
+    qdrantVizClusters = clusters;
+    qdrantClusteringContext = (data2 || data).clustering_context || null;
+    if (els.qdrantClusterCount) els.qdrantClusterCount.textContent = `(${points.length})`;
+    if (els.qdrantVizMeta) {
+      let clusterHint = "";
+      if (!hasClusters) {
+        clusterHint = " · кластеризация не запускалась";
+      } else if (clusterCount > 0) {
+        clusterHint = ` · ${clusterCount} кластер(ов) · ${anomalyCount} аномалий`;
+      } else {
+        clusterHint = ` · 0 кластеров · ${anomalyCount} аномалий (все точки — noise)`;
+      }
+      els.qdrantVizMeta.textContent = `PCA · L4 only · весь корпус${clusterHint} · клик по области/точке — описание и связи`;
+    }
+    if (!points.length) {
+      destroyQdrantVizChart();
+      if (els.qdrantVizPlaceholder) {
+        els.qdrantVizPlaceholder.textContent = "Нет L4-точек — постройте граф и проиндексируйте документ";
+        els.qdrantVizPlaceholder.classList.remove("hidden");
+      }
+      if (els.qdrantVizLegend) els.qdrantVizLegend.innerHTML = "";
+      if (els.qdrantClusterCards) els.qdrantClusterCards.innerHTML = "";
+      return;
+    }
+    renderQdrantVizLegend(hasClusters, points, qdrantVizClusters, clusterCount);
+    renderQdrantClusterCards(qdrantVizClusters, points, hasClusters, clusterCount);
+    updateQdrantAllAnomaliesBanner(points, clusterCount, hasClusters, qdrantClusteringContext);
+    qdrantVizRegions = qdrantVizClusters?.length ? buildQdrantClusterRegions(points, qdrantVizClusters) : [];
+    const chartOk = renderQdrantVizChart(points, hasClusters, qdrantVizClusters, qdrantVizRegions);
+    if (els.qdrantVizPlaceholder) {
+      if (chartOk) {
+        els.qdrantVizPlaceholder.classList.add("hidden");
+      } else {
+        els.qdrantVizPlaceholder.innerHTML = qdrantRetryHtml("Chart.js не загружен — карта недоступна", "viz");
+        bindQdrantRetry(els.qdrantVizPlaceholder);
+        els.qdrantVizPlaceholder.classList.remove("hidden");
+      }
+    }
+  } catch (e) {
+    destroyQdrantVizChart();
+    if (els.qdrantVizEmptyState) {
+      els.qdrantVizEmptyState.classList.add("hidden");
+      els.qdrantVizEmptyState.innerHTML = "";
+    }
+    if (els.qdrantVizPlaceholder) {
+      els.qdrantVizPlaceholder.innerHTML = qdrantRetryHtml(`Ошибка загрузки карты: ${e.message}`, "viz");
+      bindQdrantRetry(els.qdrantVizPlaceholder);
+      els.qdrantVizPlaceholder.classList.remove("hidden");
+    }
+    if (els.qdrantVizLegend) els.qdrantVizLegend.innerHTML = "";
+    if (els.qdrantClusterCards) els.qdrantClusterCards.innerHTML = "";
+  }
+}
+
+function renderQdrantClusterCards(clusterMeta, points, hasClusters, clusterCount = clusterMeta?.length || 0) {
+  if (!els.qdrantClusterCards) return;
+  const l4 = filterQdrantVizL4(points);
+  if (!l4.length) {
+    els.qdrantClusterCards.innerHTML = "";
+    return;
+  }
+  if (clusterMeta?.length) {
+    els.qdrantClusterCards.innerHTML = `
+      <div class="qdrant-cluster-map">${clusterMeta.map((c) => `
+        <div class="qdrant-cluster-group qdrant-cluster-clickable" data-cluster-id="${esc(String(c.id))}" role="button" tabindex="0">
+          <div class="qdrant-cluster-head">
+            <span class="qdrant-viz-legend-swatch qdrant-viz-legend-swatch-region" style="background:${esc(c.color || clusterColor(c.id))}"></span>
+            <strong>${esc(c.name || `Кластер ${c.id}`)}</strong>
+            <span class="muted">${c.count || 0} точек · клик — описание и связи</span>
+          </div>
+          ${c.description ? `<p class="muted small qdrant-cluster-card-desc">${esc(c.description.slice(0, 140))}${c.description.length > 140 ? "…" : ""}</p>` : ""}
+        </div>`).join("")}</div>`;
+    bindQdrantClusterCardClicks();
+    const anomalies = l4.filter(isQdrantL4Anomaly).length;
+    if (anomalies) {
+      els.qdrantClusterCards.innerHTML += `<p class="muted small qdrant-anomaly-note">+ ${anomalies} аномалий (красные точки) — клик по точке на карте</p>`;
+    }
+    return;
+  }
+  const anomalies = l4.filter(isQdrantL4Anomaly).length;
+  if (hasClusters && clusterCount === 0 && anomalies === l4.length) {
+    els.qdrantClusterCards.innerHTML = `
+      <div class="qdrant-cluster-empty-info">
+        ${buildNoClustersExplanation(l4, qdrantClusteringContext, clusterCount, hasClusters)}
+      </div>`;
+    bindQdrantClusterRunButtons(els.qdrantClusterCards);
+    return;
+  }
+  els.qdrantClusterCards.innerHTML = `<p class="muted small">L4 без меток кластеров — <button type="button" class="btn btn-ghost btn-small qdrant-cluster-run-btn">Запустить кластеризацию</button></p>`;
+  bindQdrantClusterRunButtons(els.qdrantClusterCards);
+}
+
+function destroyQdrantVizChart() {
+  if (qdrantVizChart) {
+    qdrantVizChart.destroy();
+    qdrantVizChart = null;
+  }
+}
+
+function qdrantVizPointColor(p, hasClusters) {
+  if (isQdrantL4Anomaly(p)) return QDRANT_VIZ_ANOMALY_COLOR;
+  if (hasClusters && p.cluster_id != null && Number(p.cluster_id) >= 0) {
+    return QDRANT_CLUSTER_PALETTE[Math.abs(Number(p.cluster_id)) % QDRANT_CLUSTER_PALETTE.length];
+  }
+  return QDRANT_VIZ_L4_COLOR;
+}
+
+function renderQdrantVizLegend(hasClusters, points, clusterMeta = [], clusterCount = clusterMeta.length) {
+  if (!els.qdrantVizLegend) return;
+  const items = [];
+  if (!hasClusters) {
+    items.push({ color: QDRANT_VIZ_L4_COLOR, label: `L4 без кластеров (${points.length})`, shape: "dot" });
+  } else if (clusterCount > 0) {
+    const metaById = new Map(clusterMeta.map((c) => [Number(c.id), c]));
+    const clusterIds = [...new Set(
+      points.filter((p) => p.layer === "L4" && p.cluster_id != null && Number(p.cluster_id) >= 0)
+        .map((p) => p.cluster_id),
+    )].sort((a, b) => Number(a) - Number(b));
+    clusterIds.slice(0, 12).forEach((cid) => {
+      const meta = metaById.get(Number(cid));
+      items.push({
+        color: meta?.color || clusterColor(cid),
+        label: meta?.name ? `${meta.name} (${meta.count || ""})`.replace(" ()", "") : `кластер ${cid}`,
+        shape: "region",
+      });
+    });
+    const anomalies = points.filter(isQdrantL4Anomaly).length;
+    if (anomalies) {
+      items.push({
+        color: QDRANT_VIZ_ANOMALY_COLOR,
+        label: `аномалии — L4 вне кластеров (${anomalies})`,
+        shape: "dot",
+      });
+    }
+  } else {
+    items.push({
+      color: QDRANT_VIZ_ANOMALY_COLOR,
+      label: `все точки — аномалии HDBSCAN (${points.length})`,
+      shape: "dot",
+    });
+  }
+  els.qdrantVizLegend.innerHTML = items.map((it) => `
+    <span class="qdrant-viz-legend-item">
+      <span class="qdrant-viz-legend-swatch${it.shape === "region" ? " qdrant-viz-legend-swatch-region" : ""}" style="background:${it.color}"></span>
+      ${esc(it.label)}
+    </span>`).join("");
+}
+
+function highlightQdrantPoint(pointId, opts = {}) {
+  if (!pointId || !els.qdrantPointsList) return;
+  const scroll = opts.scroll !== false;
+  els.qdrantPointsList.querySelectorAll(".qdrant-point-row").forEach((el) => {
+    el.classList.toggle("qdrant-point-highlight", el.dataset.pointId === pointId);
+  });
+  if (scroll) {
+    const row = els.qdrantPointsList.querySelector(`[data-point-id="${CSS.escape(pointId)}"]`);
+    row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+function renderQdrantVizChart(points, hasClusters, clusterMeta = [], regions = []) {
+  if (typeof Chart === "undefined" || !els.qdrantVizCanvas) return false;
+  destroyQdrantVizChart();
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const padX = Math.max((Math.max(...xs) - Math.min(...xs)) * 0.08, 0.05);
+  const padY = Math.max((Math.max(...ys) - Math.min(...ys)) * 0.08, 0.05);
+  const chartData = points.map((p) => ({
+    x: p.x,
+    y: p.y,
+    _p: p,
+  }));
+  const hullRegions = regions?.length ? regions : (clusterMeta?.length ? buildQdrantClusterRegions(points, clusterMeta) : []);
+  qdrantVizRegions = hullRegions;
+  qdrantVizChart = new Chart(els.qdrantVizCanvas, {
+    type: "scatter",
+    data: {
+      datasets: [{
+        label: "L4",
+        data: chartData,
+        pointBackgroundColor: (ctx) => qdrantVizPointColor(ctx.raw._p, hasClusters),
+        pointBorderColor: (ctx) => {
+          const p = ctx.raw._p;
+          if (isQdrantL4Anomaly(p)) return "#8b0000";
+          if (hasClusters && p.cluster_id != null && Number(p.cluster_id) >= 0) {
+            return clusterColor(p.cluster_id);
+          }
+          return "#ffffff";
+        },
+        pointBorderWidth: (ctx) => (isQdrantL4Anomaly(ctx.raw._p) ? 2 : 1.5),
+        pointRadius: (ctx) => (isQdrantL4Anomaly(ctx.raw._p) ? 7 : 6),
+        pointHoverRadius: 9,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 350 },
+      plugins: {
+        legend: { display: false },
+        qdrantClusterHulls: { hulls: hullRegions, regions: hullRegions },
+        tooltip: { enabled: false },
+      },
+      scales: {
+        x: {
+          type: "linear",
+          min: Math.min(...xs) - padX,
+          max: Math.max(...xs) + padX,
+          grid: { color: "rgba(0,0,0,0.06)" },
+          ticks: { display: false },
+          border: { display: false },
+        },
+        y: {
+          min: Math.min(...ys) - padY,
+          max: Math.max(...ys) + padY,
+          grid: { color: "rgba(0,0,0,0.06)" },
+          ticks: { display: false },
+          border: { display: false },
+        },
+      },
+      onClick: (evt, elements) => {
+        if (!qdrantVizChart) return;
+        const hitCluster = hitTestQdrantClusterRegion(qdrantVizChart, evt, qdrantVizRegions);
+        if (hitCluster != null && Number(hitCluster) >= 0) {
+          openQdrantClusterDetail(hitCluster);
+          return;
+        }
+        if (!elements.length) return;
+        const idx = elements[0].index;
+        const p = qdrantVizChart.data.datasets[0].data[idx]?._p;
+        if (p?.id) highlightQdrantPoint(p.id);
+        openQdrantPointDetail(p);
+      },
+    },
+  });
+  return true;
+}
+
+async function runL4Clustering(opts = {}) {
+  const { silent = false, skipReload = false } = opts;
+  if (!silent && els.qdrantIndexLog) {
+    els.qdrantIndexLog.textContent = "Глобальная кластеризация L4…";
+  }
+  try {
+    const r = await fetch(`${API}/graph/l4/cluster`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document_id: null }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || data.message || "Ошибка кластеризации");
+    if (data.debounced) {
+      const debMsg = data.message || "Кластеризация отложена (debounce)";
+      if (!silent) appendQdrantLog(debMsg);
+      showQdrantToast(debMsg);
+      return false;
+    }
+    const names = (data.named_clusters || []).map((c) => c.name).slice(0, 3).join(", ");
+    const msg = `Готово: ${data.clusters || 0} кластеров, ${data.anomalies || 0} аномалий из ${data.points || data.clustered || 0} L4-точек${names ? ` · ${names}` : ""}`;
+    const hint = data.noise_hint || data.message;
+    if (!silent) {
+      if (els.qdrantIndexLog) els.qdrantIndexLog.textContent = hint ? `${msg} — ${hint}` : msg;
+    } else {
+      appendQdrantLog(hint ? `${msg} — ${hint}` : msg);
+    }
+    showQdrantToast(hint && !data.clusters ? `${msg}. ${hint}` : msg, { error: !!(data.all_noise && !data.clusters) });
+    if (!skipReload) {
+      await loadQdrantClusterMap();
+      await loadQdrantPoints();
+      if (selectedDoc && graphVisible) await loadGraph(selectedDoc, { silent: true });
+    }
+    return true;
+  } catch (e) {
+    if (!silent && els.qdrantIndexLog) els.qdrantIndexLog.textContent = `Ошибка: ${e.message}`;
+    else appendQdrantLog(`Ошибка кластеризации: ${e.message}`, true);
+    showQdrantToast(`Ошибка: ${e.message}`, { error: true });
+    return false;
+  }
+}
+
+function clearGraphNodeSelection() {
+  closeDetailPanel();
+  if (visNetwork) visNetwork.unselectAll();
+  document.querySelectorAll(".graph-node-item.active, .entity-card.active").forEach((el) => {
+    el.classList.remove("active");
+  });
+}
+
+function activateAllDocumentsGraph() {
   graphScope = "all";
   graphDensityMode = "full";
   graphVisible = true;
   graphViewDocId = GRAPH_ALL_ID;
-  docWorkTabManual = true;
-  if (!isGraphHostPage()) {
-    switchPage("docs");
-    return;
-  }
+  graphLayerFilter = "all";
+  clearGraphNodeSelection();
   updateGraphScopeUI();
   updateDensityToggleUI();
-  setDocWorkTab("graph");
-  updateGraphsPageState();
-  refreshGraphViewport();
+  loadGraph(GRAPH_ALL_ID, { force: true });
+  refreshGraphViewport({ fit: true, force: true });
+}
+
+function viewAllGraph() {
+  docWorkTabManual = true;
+  graphScope = "all";
+  if (!isGraphHostPage()) {
+    switchPage("docs");
+  }
+  activateAllDocumentsGraph();
+  setDocWorkTab("graph", { skipGraphLoad: true });
 }
 
 function openNeo4jBrowser() {
@@ -1736,10 +3053,16 @@ function openNeo4jBrowser() {
 }
 
 function resetGraphFilters() {
+  clearGraphNodeSelection();
   graphLayerFilter = "all";
-  showCrossLayerOnly = false;
+  highlightCrossLayer = false;
+  connectionFormationMode = false;
+  connectionFormationStep = 0;
+  stopConnectionFormationTimer();
   graphDensityMode = "full";
   if (els.crossLayerToggle) els.crossLayerToggle.classList.remove("active");
+  if (els.connectionFormationBtn) els.connectionFormationBtn.classList.remove("active");
+  renderConnectionFormationTimeline();
   updateDensityToggleUI();
   graphViewMode = "map";
   if (els.viewMapBtn) els.viewMapBtn.classList.add("active");
@@ -1782,6 +3105,7 @@ function setGraphDensityMode(mode) {
 }
 
 function setGraphViewMode(mode) {
+  if (graphViewMode === mode) return;
   graphViewMode = mode;
   const isMap = mode === "map";
   els.viewMapBtn?.classList.toggle("active", isMap);
@@ -1790,7 +3114,7 @@ function setGraphViewMode(mode) {
   els.graphMapView?.classList.toggle("hidden", !isMap);
   els.graphRelsView?.classList.toggle("hidden", isMap);
   if (!isMap) renderAllRelationshipsList();
-  if (isMap) refreshGraphViewport();
+  if (isMap) scheduleGraphViewsRender();
 }
 
 function updateExtractControls(status, step) {
@@ -1840,6 +3164,7 @@ function updateDocPrimaryBtn(data) {
   if (!els.docPrimaryBtn || !data) return;
   const hasGraph = (data.graph_nodes || 0) > 0;
   const extracting = data.status === "extracting";
+  const answersOnly = isAnswersOnlyMode(data);
   if (graphScope === "all") {
     els.docPrimaryBtn.textContent = "Обновить карту";
     els.docPrimaryBtn.dataset.action = "refresh";
@@ -1850,6 +3175,12 @@ function updateDocPrimaryBtn(data) {
     els.docPrimaryBtn.textContent = "Посмотреть граф";
     els.docPrimaryBtn.dataset.action = "view";
     els.docPrimaryBtn.disabled = false;
+  } else if (answersOnly) {
+    els.docPrimaryBtn.textContent = extracting || data.status === "processing"
+      ? "Обработка…"
+      : "Построить полный граф";
+    els.docPrimaryBtn.dataset.action = "full";
+    els.docPrimaryBtn.disabled = extracting || data.status === "processing" || data.status === "uploaded";
   } else {
     els.docPrimaryBtn.textContent = extracting ? "Извлечение…" : "Построить граф";
     els.docPrimaryBtn.dataset.action = "build";
@@ -1902,6 +3233,9 @@ function statusLabel(doc) {
     case "extracting": return { text: `извлечение${stepSuffix}`, cls: "s-extracting s-live" };
     case "failed": return { text: "ошибка", cls: "s-failed" };
     case "loaded":
+      if (isAnswersOnlyMode(doc) && nodes === 0) {
+        return { text: "только для чата", cls: "s-md_ready" };
+      }
       if (nodes > 0 && synced) return { text: `в Neo4j · ${nodes} узл.`, cls: "s-loaded" };
       if (nodes > 0) return { text: `граф локально · ${nodes} узл.`, cls: "s-md_ready" };
       return { text: "граф пуст", cls: "s-failed" };
@@ -2031,34 +3365,72 @@ function filteredGraph() {
   const layerMap = nodeLayerMap();
   let nodes = [...graphData.nodes];
   let rels = [...graphData.relationships];
+  let primaryLayer = graphLayerFilter;
 
-  if (showCrossLayerOnly) {
-    rels = rels.filter((r) => isCrossLayerRel(r, layerMap));
-    const ids = new Set();
-    rels.forEach((r) => {
+  if (connectionFormationMode && connectionFormationStep > 0) {
+    const activeLayers = new Set(FORMATION_LAYERS.slice(0, connectionFormationStep));
+    const primary = nodes.filter((n) => activeLayers.has(layerOf(n.label)));
+    const keepIds = new Set(primary.map((n) => n.id));
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      rels.forEach((r) => {
+        const { from, to } = relEndpoints(r);
+        const fromLayer = layerMap.get(from);
+        const toLayer = layerMap.get(to);
+        const fromActive = keepIds.has(from) && activeLayers.has(fromLayer);
+        const toActive = keepIds.has(to) && activeLayers.has(toLayer);
+        if (fromActive && toLayer && !keepIds.has(to)) {
+          keepIds.add(to);
+          expanded = true;
+        }
+        if (toActive && fromLayer && !keepIds.has(from)) {
+          keepIds.add(from);
+          expanded = true;
+        }
+        if (keepIds.has(from) && keepIds.has(to) && fromLayer && toLayer
+          && activeLayers.has(fromLayer) && activeLayers.has(toLayer)) {
+          /* keep edge */
+        }
+      });
+    }
+    nodes = nodes.filter((n) => keepIds.has(n.id));
+    rels = rels.filter((r) => {
       const { from, to } = relEndpoints(r);
-      ids.add(from);
-      ids.add(to);
+      return keepIds.has(from) && keepIds.has(to);
     });
-    nodes = nodes.filter((n) => ids.has(n.id));
+    primaryLayer = connectionFormationStep === 1 ? "L1" : "all";
+    nodes = annotateGraphNodes(nodes, primaryLayer);
+    if (graphDensityMode === "compact") return applyCompactGraphFilter(nodes, rels);
     return { nodes, rels };
   }
 
   if (graphLayerFilter !== "all") {
     const primary = nodes.filter((n) => layerOf(n.label) === graphLayerFilter);
     const keepIds = new Set(primary.map((n) => n.id));
-    rels.forEach((r) => {
-      const { from, to } = relEndpoints(r);
-      if (keepIds.has(from) || keepIds.has(to)) {
-        keepIds.add(from);
-        keepIds.add(to);
-      }
-    });
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      rels.forEach((r) => {
+        const { from, to } = relEndpoints(r);
+        if (keepIds.has(from) && !keepIds.has(to)) {
+          keepIds.add(to);
+          expanded = true;
+        }
+        if (keepIds.has(to) && !keepIds.has(from)) {
+          keepIds.add(from);
+          expanded = true;
+        }
+      });
+    }
     nodes = nodes.filter((n) => keepIds.has(n.id));
     rels = rels.filter((r) => {
       const { from, to } = relEndpoints(r);
       return keepIds.has(from) && keepIds.has(to);
     });
+    nodes = annotateGraphNodes(nodes, graphLayerFilter);
+  } else {
+    nodes = annotateGraphNodes(nodes, "all");
   }
 
   if (graphDensityMode === "compact") {
@@ -2068,10 +3440,165 @@ function filteredGraph() {
   return { nodes, rels };
 }
 
+let activeGuideSection = "pipeline";
+const guideContentCache = new Map();
+let docSectionsLoaded = false;
+
+const DOC_SECTIONS_FALLBACK = [
+  { id: "pipeline", title: "Пайплайн и слои L1–L6" },
+  { id: "layer-agents", title: "Межслойные агенты (L1–L6)" },
+  { id: "chat-agents", title: "Чат, роли и AI-агенты" },
+  { id: "agent-hierarchy", title: "Иерархия агентов" },
+  { id: "orchestrator", title: "Оркестратор L1–L6" },
+  { id: "roles-vs-agents", title: "Роли vs агенты" },
+];
+
+const DOC_STATIC_FALLBACK = {
+  pipeline: "/static/docs/21_pipeline_and_layers.md",
+  "layer-agents": "/static/docs/24_layer_agents.md",
+  "chat-agents": "/static/docs/22_chat_agents.md",
+  "agent-hierarchy": "/static/docs/agent_hierarchy.md",
+  orchestrator: "/static/docs/orchestrator.md",
+  "roles-vs-agents": "/static/docs/roles-vs-agents.md",
+};
+
+function docLoadingSkeletonHtml() {
+  return `<div class="doc-loading-skeleton" aria-busy="true" aria-label="Загрузка">
+    <div class="doc-skeleton-bar wide"></div>
+    <div class="doc-skeleton-bar"></div>
+    <div class="doc-skeleton-bar medium"></div>
+    <div class="doc-skeleton-bar short"></div>
+  </div>`;
+}
+
+function renderDocSectionTabs(sections) {
+  if (!els.docSectionTabs) return;
+  const items = sections?.length ? sections : DOC_SECTIONS_FALLBACK;
+  els.docSectionTabs.innerHTML = items.map((s) => (
+    `<button type="button" class="doc-section-tab doc-work-tab${s.id === activeGuideSection ? " active" : ""}"
+      role="tab" aria-selected="${s.id === activeGuideSection}" data-guide="${esc(s.id)}">${esc(s.title)}</button>`
+  )).join("");
+  els.docSectionTabs.querySelectorAll(".doc-section-tab").forEach((btn) => {
+    btn.addEventListener("click", () => loadDocSection(btn.dataset.guide));
+  });
+}
+
+async function loadDocSections() {
+  if (docSectionsLoaded && els.docSectionTabs?.children.length) return;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    const r = await fetch(`${API}/docs/sections`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error("sections unavailable");
+    const sections = await r.json();
+    renderDocSectionTabs(sections);
+    docSectionsLoaded = true;
+  } catch {
+    renderDocSectionTabs(DOC_SECTIONS_FALLBACK);
+    docSectionsLoaded = true;
+  }
+}
+
+async function fetchDocPayload(slug) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const r = await fetch(`${API}/docs/${encodeURIComponent(slug)}`, { signal: ctrl.signal });
+    if (r.ok) return await r.json();
+  } catch {
+    /* try static fallback below */
+  } finally {
+    clearTimeout(timer);
+  }
+  const staticPath = DOC_STATIC_FALLBACK[slug];
+  if (staticPath) {
+    const r2 = await fetch(staticPath);
+    if (r2.ok) {
+      const meta = DOC_SECTIONS_FALLBACK.find((s) => s.id === slug);
+      return { id: slug, title: meta?.title || slug, content: await r2.text() };
+    }
+  }
+  throw new Error("Документ недоступен");
+}
+
+async function renderMermaidBlocks(container) {
+  if (typeof mermaid === "undefined" || !container) return;
+  container.querySelectorAll(".mermaid[data-processed]").forEach((el) => el.remove());
+  const blocks = container.querySelectorAll("pre code.language-mermaid, code.language-mermaid");
+  for (const block of blocks) {
+    const parent = block.closest("pre") || block;
+    const src = block.textContent || "";
+    if (!src.trim()) continue;
+    const div = document.createElement("div");
+    div.className = "mermaid";
+    div.textContent = src.trim();
+    parent.replaceWith(div);
+  }
+  const nodes = container.querySelectorAll(".mermaid:not([data-processed])");
+  if (!nodes.length) return;
+  try {
+    await Promise.race([
+      mermaid.run({ nodes }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("mermaid timeout")), 12000)),
+    ]);
+  } catch (err) {
+    console.warn("mermaid render:", err);
+  }
+}
+
+function renderGuideMarkdown(md) {
+  if (typeof marked === "undefined") return esc(md);
+  const raw = marked.parse(md || "", { gfm: true, breaks: false });
+  if (typeof DOMPurify !== "undefined") {
+    return DOMPurify.sanitize(raw, { ADD_TAGS: ["pre", "code"], ADD_ATTR: ["class", "id"] });
+  }
+  return raw;
+}
+
+async function loadDocSection(slug) {
+  if (!els.guideContent) return;
+  activeGuideSection = slug || activeGuideSection;
+  els.docSectionTabs?.querySelectorAll(".doc-section-tab").forEach((btn) => {
+    const on = btn.dataset.guide === activeGuideSection;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  if (guideContentCache.has(activeGuideSection)) {
+    els.guideContent.innerHTML = guideContentCache.get(activeGuideSection);
+    await renderMermaidBlocks(els.guideContent);
+    return;
+  }
+  els.guideContent.innerHTML = docLoadingSkeletonHtml();
+  try {
+    const data = await fetchDocPayload(activeGuideSection);
+    const html = renderGuideMarkdown(data.content || "");
+    guideContentCache.set(activeGuideSection, html);
+    els.guideContent.innerHTML = html;
+    await renderMermaidBlocks(els.guideContent);
+  } catch (e) {
+    els.guideContent.innerHTML = `<div class="doc-error-box"><p>Не удалось загрузить раздел.</p><p class="muted small">${esc(e.message || "ошибка")}</p><button type="button" class="btn btn-small btn-ghost doc-retry-btn">Повторить</button></div>`;
+    els.guideContent.querySelector(".doc-retry-btn")?.addEventListener("click", () => {
+      guideContentCache.delete(activeGuideSection);
+      loadDocSection(activeGuideSection);
+    });
+  }
+}
+
+const loadGuideSection = loadDocSection;
+
+function openDocGuide(slug) {
+  if (slug) activeGuideSection = slug;
+  switchPage("guide");
+  loadDocSections().then(() => loadDocSection(activeGuideSection));
+}
+
 function switchPage(page) {
   if (!page) return;
   if (page === "graphs" || page === "fullgraph") page = "doc";
   if (page === "search" || page === "home") page = "docs";
+  const prevGraphScope = graphScope;
+  const prevGraphDocId = lastGraphDocId;
   currentPage = page;
   const isGraphView = page === "doc" || page === "graphAll";
   const isDocsArea = page === "docs" || isGraphView;
@@ -2080,6 +3607,7 @@ function switchPage(page) {
   els.pageGraphShell?.classList.toggle("hidden", !isGraphView);
   els.pageQdrant?.classList.toggle("hidden", page !== "qdrant");
   els.pageChats?.classList.toggle("hidden", page !== "chats");
+  els.pageGuide?.classList.toggle("hidden", page !== "guide");
   els.pageSettings?.classList.toggle("hidden", page !== "settings");
   els.pageDocs?.classList.toggle("page-docs-graph", page === "docs");
   els.mainArea?.classList.toggle("layout-docs-graph", page === "docs");
@@ -2105,13 +3633,23 @@ function switchPage(page) {
       graphViewDocId = GRAPH_ALL_ID;
       graphVisible = true;
     }
+    const enteringAllScope = graphScope === "all"
+      && (prevGraphScope !== "all" || prevGraphDocId !== GRAPH_ALL_ID);
+    if (enteringAllScope) {
+      graphLayerFilter = "all";
+      clearGraphNodeSelection();
+    }
     updateGraphScopeUI();
     updateDensityToggleUI();
     if (graphScope === "doc" && selectedDoc) {
       graphViewDocId = selectedDoc;
     }
-    updateGraphsPageState();
-    if (graphVisible || graphScope === "all") refreshGraphViewport();
+    if (enteringAllScope) {
+      loadGraph(GRAPH_ALL_ID, { force: true });
+    } else {
+      updateGraphsPageState();
+    }
+    if (graphVisible || graphScope === "all") refreshGraphViewport({ fit: true, force: true });
     if (graphScope === "all") {
       updateDocPageBar({ file_name: "Все документы", id: GRAPH_ALL_ID, graph_nodes: graphData.nodes.length });
     } else if (selectedDoc) {
@@ -2122,22 +3660,28 @@ function switchPage(page) {
     updateGraphScopeUI();
     updateDensityToggleUI();
     updateGraphsPageState();
-    refreshGraphViewport();
+    updateDocWorkHeader(graphScope === "all" ? { id: GRAPH_ALL_ID } : docsListCache.find((d) => d.id === selectedDoc));
+    refreshGraphViewport({ fit: true, force: true });
+    window.MKGAuth?.syncDocsUploadFallback?.();
   } else {
     updateGraphScopeUI();
     updateGraphVisibility();
   }
-  if (page === "docs") loadDocuments();
-  else {
+  if (page === "docs") {
+    loadDocuments();
+    window.MKGAuth?.syncDocsUploadFallback?.();
+  } else {
     updateDocWorkArea(null);
     if (page !== "docs") els.docWorkHeader?.classList.add("hidden");
   }
   if (page === "qdrant") {
-    if (els.qdrantDocFilter && selectedDoc) els.qdrantDocFilter.value = selectedDoc;
     refreshEmbeddingStatus();
     renderL3Stats();
     loadQdrantClusterMap();
-    if (selectedDoc) loadQdrantPoints(selectedDoc);
+    loadQdrantPoints();
+  }
+  if (page === "guide") {
+    loadDocSections().then(() => loadDocSection(activeGuideSection));
   }
   if (page === "chats") window.MKGAuth?.refreshChatsPage();
 }
@@ -2146,8 +3690,10 @@ window.MKG = {
   get selectedDoc() { return selectedDoc; },
   get currentPage() { return currentPage; },
   switchPage,
+  openDocGuide,
   openDocWithMd,
   downloadDocumentMd,
+  renderMarkdownHtml,
   renderDocPipelineHtml,
   getDocPipelineStates,
   formatLogEntry,
@@ -2163,12 +3709,16 @@ window.MKG = {
 
 function closeDetailPanel() {
   els.detailPanel.classList.add("hidden");
+  els.detailBody.classList.remove("has-split");
   els.appRoot.classList.remove("has-detail");
+  clearGraphEdgeHighlight();
 }
 
 function openDetailPanel(node) {
   if (!node) return;
+  els.detailBody.classList.remove("has-split");
   if (node._collapsed) {
+    if (els.detailTitle) els.detailTitle.textContent = "Узел";
     els.detailBody.innerHTML = `
       <span class="detail-layer" style="background:${LAYER_COLOR.L3}">L3 · Текст документа</span>
       <div class="detail-id">${esc(node.id)}</div>
@@ -2188,20 +3738,30 @@ function openDetailPanel(node) {
   const anomalyBadge = props.is_anomaly
     ? `<span class="detail-badge detail-badge-warn">аномалия</span>`
     : "";
+  const multiDoc = node._multiDoc || multiDocCountByNodeId.get(node.id) || Number(props.multi_doc_count || 0);
+  const multiDocBadge = multiDoc >= 2
+    ? `<span class="detail-badge detail-badge-multidoc">связь с ${multiDoc} документами</span>`
+    : "";
 
+  if (els.detailTitle) els.detailTitle.textContent = `${layer} · ${node.label}`;
+  els.detailBody.classList.add("has-split");
   els.detailBody.innerHTML = `
-    <span class="detail-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)} · ${esc(node.label)}</span>
-    <div class="detail-id">${esc(node.id)} ${clusterBadge}${anomalyBadge}</div>
-    <section class="detail-section">
-      <h4 class="detail-section-title">Метаданные узла</h4>
-      ${propsHtml}
-    </section>
-    <section class="detail-section detail-rels">
-      <h4 class="detail-section-title">Входящие (${incoming.length})</h4>
-      ${renderRelBlock(incoming, "in")}
-      <h4 class="detail-section-title">Исходящие (${outgoing.length})</h4>
-      ${renderRelBlock(outgoing, "out")}
-    </section>`;
+    <div class="detail-body-split">
+      <div class="detail-body-main">
+        <span class="detail-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)} · ${esc(node.label)}</span>
+        <div class="detail-id">${esc(node.id)} ${clusterBadge}${anomalyBadge}${multiDocBadge}</div>
+        <section class="detail-section">
+          <h4 class="detail-section-title">Метаданные узла</h4>
+          ${propsHtml}
+        </section>
+      </div>
+      <div class="detail-body-side detail-rels">
+        <h4 class="detail-section-title">Входящие (${incoming.length})</h4>
+        ${renderRelBlock(incoming, "in")}
+        <h4 class="detail-section-title">Исходящие (${outgoing.length})</h4>
+        ${renderRelBlock(outgoing, "out")}
+      </div>
+    </div>`;
 
   els.detailPanel.classList.remove("hidden");
   els.appRoot.classList.add("has-detail");
@@ -2225,14 +3785,24 @@ function renderLayerFilters() {
     }).join("");
   els.layerFilters.querySelectorAll(".layer-chip").forEach((btn) => {
     btn.addEventListener("click", () => {
-      graphLayerFilter = btn.dataset.layer;
-      showCrossLayerOnly = false;
-      if (els.crossLayerToggle) els.crossLayerToggle.classList.remove("active");
-      renderGraphViews();
+      const nextLayer = btn.dataset.layer;
+      if (nextLayer === graphLayerFilter) {
+        if (nextLayer === "all" && els.appRoot?.classList.contains("has-detail")) {
+          clearGraphNodeSelection();
+        }
+        return;
+      }
+      graphLayerFilter = nextLayer;
+      clearGraphNodeSelection();
+      if (connectionFormationMode) toggleConnectionFormationMode();
+      scheduleGraphViewsRender();
     });
   });
   if (els.crossLayerToggle) {
-    els.crossLayerToggle.classList.toggle("active", showCrossLayerOnly);
+    els.crossLayerToggle.classList.toggle("active", highlightCrossLayer);
+  }
+  if (els.connectionFormationBtn) {
+    els.connectionFormationBtn.classList.toggle("active", connectionFormationMode);
   }
 }
 
@@ -2241,12 +3811,17 @@ function renderGraphNodeList(nodes) {
     els.graphNodeList.innerHTML = '<div class="muted" style="padding:12px">Нет узлов</div>';
     return;
   }
-  els.graphNodeList.innerHTML = nodes.slice(0, 200).map((n) => `
-    <button type="button" class="graph-node-item" data-id="${esc(n.id)}">
-      <div class="gn-label">${esc(n.label)}</div>
+  els.graphNodeList.innerHTML = nodes.slice(0, 200).map((n) => {
+    const ghostCls = n._ghost ? " ghost-context" : "";
+    const multiCls = (n._multiDoc || 0) >= 2 ? " multi-doc" : "";
+    const multiBadge = (n._multiDoc || 0) >= 2 ? ` · 🔗${n._multiDoc}` : "";
+    return `
+    <button type="button" class="graph-node-item${ghostCls}${multiCls}" data-id="${esc(n.id)}">
+      <div class="gn-label">${esc(n.label)}${esc(multiBadge)}</div>
       <div class="gn-id">${esc(shortNodeLabel(n))}</div>
-      <div class="gn-layer">${esc(layerOf(n.label))}</div>
-    </button>`).join("");
+      <div class="gn-layer">${esc(layerOf(n.label))}${n._ghost ? " · контекст" : ""}</div>
+    </button>`;
+  }).join("");
   els.graphNodeList.querySelectorAll(".graph-node-item").forEach((btn) => {
     btn.addEventListener("click", () => {
       const node = graphData.nodes.find((n) => n.id === btn.dataset.id);
@@ -2276,7 +3851,7 @@ function renderAllRelationshipsList() {
     const fromLayer = fromNode ? layerOf(fromNode.label) : "?";
     const toLayer = toNode ? layerOf(toNode.label) : "?";
     return `
-      <div class="rel-row ${cross ? "rel-cross-layer" : ""}" data-from="${esc(from)}" data-to="${esc(to)}">
+      <div class="rel-row ${cross ? "rel-cross-layer" : ""}${cross && highlightCrossLayer ? " highlighted" : ""}" data-from="${esc(from)}" data-to="${esc(to)}">
         <span class="rel-from" data-id="${esc(from)}">${esc(shortNodeLabel(fromNode || { id: from }))}<small>${fromLayer}</small></span>
         <span class="rel-type">${esc(r.type)}</span>
         <span class="rel-to" data-id="${esc(to)}">${esc(shortNodeLabel(toNode || { id: to }))}<small>${toLayer}</small></span>
@@ -2304,10 +3879,12 @@ function graphContentKey(nodes, rels) {
 }
 
 function graphViewKey(nodes, rels) {
-  return `${graphLayerFilter}|${showCrossLayerOnly}|${graphDensityMode}|${graphViewMode}|${graphDataKey(nodes, rels)}`;
+  return `${graphLayerFilter}|${highlightCrossLayer}|${connectionFormationMode}|${connectionFormationStep}|${graphDensityMode}|${graphViewMode}|${graphDataKey(nodes, rels)}`;
 }
 
 function resetGraphNetwork() {
+  clearTimeout(graphViewportTimer);
+  graphViewportTimer = null;
   if (visNetwork) {
     visNetwork.destroy();
     visNetwork = null;
@@ -2318,9 +3895,27 @@ function resetGraphNetwork() {
   graphPhysicsStable = false;
 }
 
+function unfreezeGraphNodes() {
+  if (!visNodesDataSet) return;
+  const ids = visNodesDataSet.getIds();
+  if (!ids.length) return;
+  visNodesDataSet.update(ids.map((id) => ({ id, fixed: false })));
+}
+
 function freezeGraphPhysics() {
   if (!visNetwork || graphPhysicsStable) return;
   visNetwork.setOptions({ physics: { enabled: false } });
+  if (visNodesDataSet && visNetwork) {
+    const positions = visNetwork.getPositions(visNodesDataSet.getIds());
+    visNodesDataSet.update(
+      Object.entries(positions).map(([id, pos]) => ({
+        id,
+        x: pos.x,
+        y: pos.y,
+        fixed: { x: true, y: true },
+      })),
+    );
+  }
   graphPhysicsStable = true;
 }
 
@@ -2347,7 +3942,7 @@ function getVisNetworkOptions(nodeCount) {
     return {
       physics: {
         enabled: true,
-        stabilization: { iterations: 55, fit: true, updateInterval: 20 },
+        stabilization: { iterations: 55, fit: false, updateInterval: 20 },
         barnesHut: {
           gravitationalConstant: -1100,
           centralGravity: 0.1,
@@ -2365,7 +3960,7 @@ function getVisNetworkOptions(nodeCount) {
   return {
     physics: {
       enabled: true,
-      stabilization: { iterations: 80, fit: true, updateInterval: 25 },
+      stabilization: { iterations: 80, fit: false, updateInterval: 25 },
       barnesHut: {
         gravitationalConstant: -3000,
         centralGravity: 0.2,
@@ -2385,19 +3980,48 @@ function buildVisGraphItems(nodes, rels) {
   nodes.forEach((n) => layerMap.set(n.id, layerOf(n.label)));
   const compact = graphDensityMode === "compact";
   const visNodes = nodes.map((n) => {
+    const layer = layerOf(n.label);
+    const baseColor = LAYER_COLOR[layer] || LAYER_COLOR["L?"];
+    const isGhost = n._ghost === true;
+    const multiDoc = n._multiDoc || multiDocCountByNodeId.get(n.id) || 0;
+    const props = n.props || {};
+    const clusterId = props.cluster_id;
+    const isL4 = layer === "L4";
+    const isAnomaly = props.is_anomaly === true || clusterId === -1;
+    let label = shortGraphLabel(n);
+    if (multiDoc >= 2) label = `${label}\n🔗${multiDoc}`;
+    const colorBg = isGhost ? "rgba(176, 190, 197, 0.45)" : baseColor;
+    let colorBorder = multiDoc >= 2 ? "#ff9800" : (isGhost ? "#b0bec5" : "#fff");
+    let borderWidth = multiDoc >= 2 ? 2.5 : (isGhost ? 1 : 1);
+    if (isL4 && clusterId != null && !isGhost) {
+      if (isAnomaly) {
+        colorBorder = QDRANT_VIZ_ANOMALY_COLOR;
+        borderWidth = 3;
+      } else if (clusterId >= 0) {
+        colorBorder = clusterColor(clusterId);
+        borderWidth = 2.5;
+      }
+    }
+    const clusterHint = props.cluster_name ? `\n⬤ ${props.cluster_name}` : "";
     const item = {
       id: n.id,
-      label: shortGraphLabel(n),
-      title: `${n.label}: ${n.id}`,
+      label,
+      title: `${n.label}: ${n.id}${clusterHint}${multiDoc >= 2 ? ` · связь с ${multiDoc} документами` : ""}${isGhost ? " · контекст другого слоя" : ""}${isAnomaly ? " · L4-аномалия" : ""}`,
       color: {
-        background: LAYER_COLOR[layerOf(n.label)] || LAYER_COLOR["L?"],
-        border: "#fff",
-        highlight: { background: "#01579b", border: "#fff" },
+        background: colorBg,
+        border: colorBorder,
+        highlight: { background: isGhost ? "#78909c" : "#01579b", border: "#fff" },
       },
-      font: { color: "#fff", size: compact ? 9 : 11, face: "Inter, sans-serif" },
+      font: {
+        color: isGhost ? "#546e7a" : "#fff",
+        size: compact ? 9 : 11,
+        face: "Inter, sans-serif",
+      },
       shape: n._collapsed ? "ellipse" : "box",
       margin: compact ? 4 : 8,
       widthConstraint: compact ? { maximum: 90 } : undefined,
+      borderWidth,
+      opacity: isGhost ? 0.55 : 1,
     };
     if (compact) item.level = nodeHierarchicalLevel(n.label);
     return item;
@@ -2405,7 +4029,8 @@ function buildVisGraphItems(nodes, rels) {
   const edgeLimit = compact ? MAX_COMPACT_EDGES : 500;
   const visEdges = rels.slice(0, edgeLimit).map((r, i) => {
     const cross = isCrossLayerRel(r, layerMap);
-    const showLabel = !compact && (cross || rels.length < 25);
+    const emphasize = cross && highlightCrossLayer;
+    const showLabel = !compact && (emphasize || cross || rels.length < 25);
     return {
       id: `e${i}`,
       from: r.from || r.from_,
@@ -2413,11 +4038,19 @@ function buildVisGraphItems(nodes, rels) {
       label: showLabel ? r.type : undefined,
       title: r.type,
       arrows: { to: { enabled: true, scaleFactor: compact ? 0.45 : 0.6 } },
-      font: { size: 8, align: "middle", strokeWidth: 0, color: cross ? "#e65100" : "#546e7a" },
+      font: {
+        size: emphasize ? 9 : 8,
+        align: "middle",
+        strokeWidth: 0,
+        color: emphasize ? "#e65100" : (cross ? "#e65100" : "#546e7a"),
+      },
       color: cross
-        ? { color: "rgba(255,152,0,0.55)", highlight: "#e65100" }
+        ? {
+          color: emphasize ? "rgba(255,152,0,0.95)" : "rgba(255,152,0,0.55)",
+          highlight: "#e65100",
+        }
         : { color: "rgba(144,202,249,0.7)", highlight: "#0288d1" },
-      width: cross ? (compact ? 1.2 : 2) : 0.8,
+      width: cross ? (emphasize ? 2.8 : (compact ? 1.2 : 2)) : 0.8,
       smooth: { type: "dynamic", roundness: compact ? 0.35 : 0.5 },
       dashes: cross ? false : undefined,
     };
@@ -2425,7 +4058,7 @@ function buildVisGraphItems(nodes, rels) {
   return { visNodes, visEdges };
 }
 
-function syncVisGraphData(visNodes, visEdges) {
+function syncVisGraphData(visNodes, visEdges, { clearPositions = false } = {}) {
   if (!visNodesDataSet || !visEdgesDataSet) return;
   const nodeIds = new Set(visNodes.map((n) => n.id));
   const edgeIds = new Set(visEdges.map((e) => e.id));
@@ -2433,13 +4066,74 @@ function syncVisGraphData(visNodes, visEdges) {
   const staleEdges = visEdgesDataSet.getIds().filter((id) => !edgeIds.has(id));
   if (staleNodes.length) visNodesDataSet.remove(staleNodes);
   if (staleEdges.length) visEdgesDataSet.remove(staleEdges);
-  visNodesDataSet.update(visNodes);
+  const nodesToApply = clearPositions
+    ? visNodes.map((n) => ({ ...n, x: undefined, y: undefined, fixed: false }))
+    : visNodes;
+  visNodesDataSet.update(nodesToApply);
   visEdgesDataSet.update(visEdges);
 }
 
-function refreshGraphViewport() {
+function ensureGraphContainerReady(callback, attempt = 0) {
+  const wrap = els.graphCanvasWrap;
+  if (!wrap || wrap.classList.contains("hidden")) return;
+  if (wrap.offsetWidth >= 20 && wrap.offsetHeight >= 20) {
+    callback();
+    return;
+  }
+  if (attempt >= 12) {
+    callback();
+    return;
+  }
+  requestAnimationFrame(() => ensureGraphContainerReady(callback, attempt + 1));
+}
+
+function attachGraphStabilizationHandlers() {
   if (!visNetwork) return;
-  requestAnimationFrame(() => visNetwork.redraw());
+  graphPhysicsStable = false;
+  let fitted = false;
+  const onStable = () => {
+    if (!visNetwork || fitted) return;
+    fitted = true;
+    freezeGraphPhysics();
+    visNetwork.fit({ animation: { duration: 280, easingFunction: "easeInOutQuad" } });
+  };
+  visNetwork.once("stabilizationIterationsDone", onStable);
+  visNetwork.once("stabilized", onStable);
+}
+
+function relayoutGraphNetwork(visNodes, visEdges, nodeCount) {
+  if (!visNetwork || !visNodesDataSet) return;
+  graphPhysicsStable = false;
+  visNetwork.releaseNodePositions();
+  syncVisGraphData(visNodes, visEdges, { clearPositions: true });
+  visNetwork.setOptions(getVisNetworkOptions(nodeCount));
+  attachGraphStabilizationHandlers();
+  const iterations = Math.min(100, Math.max(40, nodeCount));
+  visNetwork.stabilize(iterations);
+}
+
+function refreshGraphViewport({ fit = false, force = false } = {}) {
+  if (!visNetwork) return;
+  if (!force && graphPhysicsStable && !fit) return;
+  clearTimeout(graphViewportTimer);
+  graphViewportTimer = setTimeout(() => {
+    graphViewportTimer = null;
+    ensureGraphContainerReady(() => {
+      if (!visNetwork) return;
+      visNetwork.redraw();
+      if (fit) {
+        visNetwork.fit({ animation: { duration: 220, easingFunction: "easeInOutQuad" } });
+      }
+    });
+  }, fit ? 0 : GRAPH_VIEWPORT_DEBOUNCE_MS);
+}
+
+function scheduleGraphViewsRender(opts = {}) {
+  clearTimeout(graphViewsRenderTimer);
+  graphViewsRenderTimer = setTimeout(() => {
+    graphViewsRenderTimer = null;
+    renderGraphViews(opts);
+  }, GRAPH_FILTER_DEBOUNCE_MS);
 }
 
 function renderGraphMap(nodes, rels) {
@@ -2455,16 +4149,13 @@ function renderGraphMap(nodes, rels) {
     return;
   }
 
-  if (visNetwork && visNodesDataSet) {
-    const prevDensity = lastGraphRenderKey.split("|")[2];
-    if (prevDensity && prevDensity !== graphDensityMode) {
-      resetGraphNetwork();
-    } else {
-      syncVisGraphData(visNodes, visEdges);
-      lastGraphRenderKey = renderKey;
-      if (graphPhysicsStable) refreshGraphViewport();
-      return;
-    }
+  const prevDensity = lastGraphRenderKey.split("|")[2];
+  const densityChanged = prevDensity && prevDensity !== graphDensityMode;
+
+  if (visNetwork && visNodesDataSet && !densityChanged) {
+    lastGraphRenderKey = renderKey;
+    ensureGraphContainerReady(() => relayoutGraphNetwork(visNodes, visEdges, nodes.length));
+    return;
   }
 
   resetGraphNetwork();
@@ -2472,48 +4163,82 @@ function renderGraphMap(nodes, rels) {
   updateDensityToggleUI();
   visNodesDataSet = new vis.DataSet(visNodes);
   visEdgesDataSet = new vis.DataSet(visEdges);
-  visNetwork = new vis.Network(
-    els.graphCanvas,
-    { nodes: visNodesDataSet, edges: visEdgesDataSet },
-    getVisNetworkOptions(nodes.length),
-  );
-  visNetwork.on("click", (params) => {
-    if (!params.nodes.length) return;
-    const nodeId = params.nodes[0];
-    const node = nodes.find((n) => n.id === nodeId) || graphData.nodes.find((n) => n.id === nodeId);
-    openDetailPanel(node);
+  ensureGraphContainerReady(() => {
+    if (!els.graphCanvas) return;
+    visNetwork = new vis.Network(
+      els.graphCanvas,
+      { nodes: visNodesDataSet, edges: visEdgesDataSet },
+      getVisNetworkOptions(nodes.length),
+    );
+    visNetwork.on("click", (params) => {
+      if (!params.nodes.length) return;
+      const nodeId = params.nodes[0];
+      const node = nodes.find((n) => n.id === nodeId) || graphData.nodes.find((n) => n.id === nodeId);
+      openDetailPanel(node);
+    });
+    attachGraphStabilizationHandlers();
+    lastGraphRenderKey = renderKey;
   });
-  if (graphDensityMode === "compact") {
-    graphPhysicsStable = false;
-    const onCompactStable = () => {
-      visNetwork?.fit({ animation: { duration: 280, easingFunction: "easeInOutQuad" } });
-      visNetwork?.setOptions({
-        physics: {
-          enabled: true,
-          barnesHut: {
-            gravitationalConstant: -450,
-            centralGravity: 0.06,
-            springLength: 200,
-            springConstant: 0.01,
-            damping: 0.32,
-            avoidOverlap: 0.25,
-          },
-          maxVelocity: 2.5,
-          minVelocity: 0.02,
-        },
+}
+
+const L4_OUTLIERS_HELP = "HDBSCAN noise: точки L4 с cluster_id = −1, не вошедшие ни в один кластер.";
+
+function l4PointsLabel(n) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return "точка";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return "точки";
+  return "точек";
+}
+
+function renderGraphClusterLegend(nodes) {
+  if (!els.graphClusterLegend) return;
+  const clusters = new Map();
+  let outliers = 0;
+  nodes.forEach((n) => {
+    if (layerOf(n.label) !== "L4") return;
+    const props = n.props || {};
+    const cid = props.cluster_id;
+    if (props.is_anomaly || cid === -1) {
+      outliers += 1;
+      return;
+    }
+    if (cid == null || cid < 0) return;
+    const key = Number(cid);
+    if (!clusters.has(key)) {
+      clusters.set(key, {
+        id: key,
+        name: props.cluster_name || `Кластер ${key}`,
+        color: clusterColor(key),
+        count: 0,
       });
-    };
-    visNetwork.once("stabilizationIterationsDone", onCompactStable);
-    visNetwork.once("stabilized", onCompactStable);
-  } else {
-    const onStable = () => {
-      freezeGraphPhysics();
-      visNetwork.fit({ animation: { duration: 300, easingFunction: "easeInOutQuad" } });
-    };
-    visNetwork.once("stabilizationIterationsDone", onStable);
-    visNetwork.once("stabilized", () => freezeGraphPhysics());
+    }
+    clusters.get(key).count += 1;
+  });
+  if (!clusters.size && !outliers) {
+    els.graphClusterLegend.classList.add("hidden");
+    els.graphClusterLegend.innerHTML = "";
+    return;
   }
-  lastGraphRenderKey = renderKey;
+  const clusterItems = [...clusters.values()].sort((a, b) => a.id - b.id).slice(0, 12);
+  const clusterHtml = clusterItems.map((it) => `
+    <span class="graph-cluster-legend-item" title="${esc(it.name)}">
+      <span class="graph-cluster-legend-swatch" style="border-color:${it.color}"></span>
+      <span class="graph-cluster-legend-label">${esc(it.name)}</span>
+      <span class="graph-cluster-legend-count muted">${it.count}</span>
+    </span>`).join("");
+  const outliersHtml = outliers
+    ? `<div class="graph-toolbar-legend-outliers">
+        <span class="graph-cluster-legend-item graph-cluster-legend-outlier">
+          <span class="graph-cluster-legend-swatch" style="border-color:${QDRANT_VIZ_ANOMALY_COLOR}"></span>
+          <span class="graph-cluster-legend-label" title="${esc(L4_OUTLIERS_HELP)}">Выбросы L4: ${outliers}</span>
+        </span>
+      </div>`
+    : "";
+  els.graphClusterLegend.innerHTML = `
+    <div class="graph-toolbar-legend-clusters">${clusterHtml}</div>
+    ${outliersHtml}`;
+  els.graphClusterLegend.classList.remove("hidden");
 }
 
 function renderGraphViews(opts = {}) {
@@ -2522,6 +4247,7 @@ function renderGraphViews(opts = {}) {
   updateCrossLayerStat();
   const { nodes, rels } = filteredGraph();
   renderGraphNodeList(nodes);
+  renderGraphClusterLegend(nodes);
   if (graphViewMode === "rels") {
     renderAllRelationshipsList();
   } else {
@@ -2542,16 +4268,22 @@ function initGraphToolbarCollapse() {
   const shell = els.graphToolbarShell;
   const toggle = els.graphToolbarToggle;
   if (!shell || !toggle) return;
-  const key = "mkg_graph_toolbar_collapsed";
-  const collapsed = localStorage.getItem(key) === "1";
-  shell.classList.toggle("collapsed", collapsed);
-  toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  const key = "mkg_graph_filters_open";
+  const legacy = localStorage.getItem("mkg_graph_toolbar_collapsed");
+  if (localStorage.getItem(key) === null && legacy !== null) {
+    localStorage.setItem(key, legacy === "1" ? "false" : "true");
+  }
+  const setOpen = (open) => {
+    shell.classList.toggle("collapsed", !open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.title = open ? "Свернуть фильтры слоёв" : "Развернуть фильтры слоёв";
+  };
+  setOpen(localStorage.getItem(key) !== "false");
   toggle.addEventListener("click", () => {
-    const nowCollapsed = !shell.classList.contains("collapsed");
-    shell.classList.toggle("collapsed", nowCollapsed);
-    toggle.setAttribute("aria-expanded", nowCollapsed ? "false" : "true");
-    localStorage.setItem(key, nowCollapsed ? "1" : "0");
-    refreshGraphViewport();
+    const open = shell.classList.contains("collapsed");
+    setOpen(open);
+    localStorage.setItem(key, open ? "true" : "false");
+    refreshGraphViewport({ force: true });
   });
 }
 
@@ -2572,9 +4304,10 @@ function initGraphResize() {
   const onMove = (e) => {
     const h = Math.max(getGraphMinHeight(), Math.min(getGraphMaxHeight(), startH + (e.clientY - startY)));
     wrap.style.height = `${h}px`;
-    refreshGraphViewport();
+    refreshGraphViewport({ force: true });
   };
   const onUp = () => {
+    document.body.classList.remove("mkg-resizing-row");
     localStorage.setItem("mkg_graph_h", String(wrap.offsetHeight));
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
@@ -2583,6 +4316,60 @@ function initGraphResize() {
     e.preventDefault();
     startY = e.clientY;
     startH = wrap.offsetHeight;
+    document.body.classList.add("mkg-resizing-row");
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+}
+
+function getGraphNodePanelMinHeight() {
+  return 160;
+}
+
+function getGraphNodePanelMaxHeight() {
+  return Math.round(window.innerHeight * 0.55);
+}
+
+function syncGraphNodePanelHandle() {
+  const hidden = els.graphMapView?.classList.contains("graph-node-list-hidden");
+  els.graphNodePanelResizeHandle?.classList.toggle("hidden", !!hidden || !graphNodeListVisible);
+}
+
+function applyGraphNodePanelHeight(h) {
+  const list = els.graphNodeList;
+  if (!list) return h;
+  const clamped = Math.max(getGraphNodePanelMinHeight(), Math.min(getGraphNodePanelMaxHeight(), h));
+  list.style.height = `${clamped}px`;
+  list.style.maxHeight = `${clamped}px`;
+  return clamped;
+}
+
+function initGraphNodePanelResize() {
+  const handle = els.graphNodePanelResizeHandle;
+  if (!handle || !els.graphNodeList) return;
+
+  const saved = localStorage.getItem("mkg_graph_node_h");
+  const parsed = saved ? parseInt(saved, 10) : 280;
+  applyGraphNodePanelHeight(Number.isFinite(parsed) ? parsed : 280);
+  syncGraphNodePanelHandle();
+
+  let startY = 0;
+  let startH = 0;
+  const onMove = (e) => {
+    applyGraphNodePanelHeight(startH + (e.clientY - startY));
+  };
+  const onUp = () => {
+    document.body.classList.remove("mkg-resizing-row");
+    localStorage.setItem("mkg_graph_node_h", String(parseInt(els.graphNodeList.style.height || "280", 10)));
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  };
+  handle.addEventListener("mousedown", (e) => {
+    if (els.graphMapView?.classList.contains("graph-node-list-hidden")) return;
+    e.preventDefault();
+    startY = e.clientY;
+    startH = parseInt(els.graphNodeList.style.height || "280", 10);
+    document.body.classList.add("mkg-resizing-row");
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   });
@@ -2592,6 +4379,8 @@ function toggleGraphNodeList() {
   graphNodeListVisible = !graphNodeListVisible;
   els.graphMapView?.classList.toggle("graph-node-list-hidden", !graphNodeListVisible);
   els.toggleNodeListBtn?.classList.toggle("active", graphNodeListVisible);
+  syncGraphNodePanelHandle();
+  refreshGraphViewport({ force: true });
 }
 
 function fillModelSelect(selectEl, models, labels, current) {
@@ -2764,11 +4553,13 @@ function formatLogEntry(item) {
 
 async function loadGraph(docId, opts = {}) {
   const silent = opts.silent === true;
+  const force = opts.force === true;
   const docChanged = docId !== lastGraphDocId;
   if (docChanged) {
     resetGraphNetwork();
     lastGraphDocId = docId;
     lastGraphDataKey = "";
+    clearGraphNodeSelection();
   }
   if (graphViewMode === "map" && !silent && !visNetwork) {
     els.graphCanvas.innerHTML = '<div class="muted" style="padding:20px">Загрузка графа…</div>';
@@ -2786,6 +4577,7 @@ async function loadGraph(docId, opts = {}) {
         els.graphCanvas.innerHTML = '<div class="muted" style="padding:20px">Граф ещё не сформирован. Нажмите «Построить граф».</div>';
       }
       renderGraphViews();
+      updateGraphEmptyState(docsListCache.find((d) => d.id === docId));
       return;
     }
     const g = await r.json();
@@ -2799,12 +4591,14 @@ async function loadGraph(docId, opts = {}) {
     const newKey = graphContentKey(nodes, rels);
     const dataChanged = newKey !== lastGraphDataKey || docChanged;
     graphData = { nodes, relationships: rels };
+    multiDocCountByNodeId = buildMultiDocCountMap(nodes);
     lastGraphDataKey = newKey;
-    if (!dataChanged) {
+    if (!dataChanged && !force) {
       updateCrossLayerStat();
       if (!silent) renderGraphViews();
       return;
     }
+    if (force && !docChanged) clearGraphNodeSelection();
     renderGraphViews({ skipLayerFilters: silent });
     if (docId === GRAPH_ALL_ID) {
       updateDocPageBar({ file_name: "Все документы", id: GRAPH_ALL_ID, graph_nodes: nodes.length });
@@ -2888,8 +4682,14 @@ async function rebuildGraphConnections() {
 
 async function submitToGraph() {
   if (!selectedDoc) return;
+  const doc = docsListCache.find((d) => d.id === selectedDoc);
+  if (doc && isAnswersOnlyMode(doc)) {
+    await startFullPipeline(selectedDoc, els.docPrimaryBtn);
+    return;
+  }
   if (els.docPrimaryBtn) els.docPrimaryBtn.disabled = true;
   await fetch(`${API}/documents/${encodeURIComponent(selectedDoc)}/submit`, { method: "POST" });
+  pipelineQueue.add(selectedDoc);
   await openDoc(selectedDoc, { switchTo: "doc" });
   if (els.docPrimaryBtn) els.docPrimaryBtn.disabled = false;
 }
@@ -2902,7 +4702,7 @@ function viewGraph() {
     switchPage("doc");
   } else {
     updateGraphsPageState();
-    refreshGraphViewport();
+    refreshGraphViewport({ fit: true, force: true });
   }
 }
 
@@ -2928,13 +4728,13 @@ async function openDoc(id, opts = {}) {
   await applyPreviewUpdate(data, { clearError: true, forceGraph: true });
   refreshEmbeddingStatus();
   updateSearchBadge(id);
-  populateGraphDocFilter(docsListCache);
   if (docPanelMode === "logs") loadLogs(id, { force: true });
   updateGraphsPageState();
   if (currentPage === "docs") renderDocsList();
   if (currentPage === "qdrant") {
-    loadQdrantPoints(id);
+    loadQdrantPoints();
     loadQdrantClusterMap();
+    renderL3Stats();
   }
 }
 
@@ -2960,7 +4760,7 @@ async function pollSelectedDocumentPreview() {
     if (!prev.ok) return;
     const p = await prev.json();
     await applyPreviewUpdate(p, {
-      forceGraph: p.status === "loaded" || p.status === "md_ready",
+      forceGraph: isDocGraphLive(selectedDoc),
     });
   } catch { /* ignore */ }
 }
@@ -2969,20 +4769,72 @@ async function loadDocuments() {
   return renderDocsList();
 }
 
-async function renderDocsList() {
+function renderDocsListLoading() {
   if (!els.docs) return;
+  els.docs.innerHTML = '<div class="muted docs-list-loading">Загрузка документов…</div>';
+}
+
+function isTransientFetchError(err) {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("load failed");
+}
+
+async function fetchDocumentsPage() {
+  const url = `${API}/documents?page=1&page_size=50`;
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await fetch(url);
+    } catch (e) {
+      lastErr = e;
+      if (attempt === 0 && isTransientFetchError(e)) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
+function renderDocsListError(message, status) {
+  if (!els.docs) return;
+  const detail = status ? `HTTP ${status}` : esc(message || "неизвестная ошибка");
+  els.docs.innerHTML = `<div class="doc-error-box docs-list-error">
+    <p>Не удалось загрузить документы</p>
+    <p class="muted small">${detail}</p>
+    <button type="button" class="btn btn-small btn-ghost doc-retry-btn" id="docsListRetryBtn">Повторить</button>
+  </div>`;
+  els.docs.querySelector("#docsListRetryBtn")?.addEventListener("click", () => renderDocsList());
+  window.MKGAuth?.syncDocsUploadFallback?.();
+}
+
+async function renderDocsList({ silent = false } = {}) {
+  if (!els.docs) return;
+  const seq = ++docsListFetchSeq;
+  const showLoading = !docsListLoaded && !silent;
+  if (showLoading) renderDocsListLoading();
   try {
-    const r = await fetch(`${API}/documents?page=1&page_size=50`);
+    const r = await fetchDocumentsPage();
+    if (seq !== docsListFetchSeq) return;
     if (!r.ok) {
-      els.docs.innerHTML = '<div class="muted">Не удалось загрузить список документов</div>';
+      let detail = "";
+      try {
+        const err = await r.json();
+        detail = err.detail || err.message || "";
+      } catch { /* ignore */ }
+      if (silent && docsListLoaded) return;
+      renderDocsListError(detail || r.statusText, r.status);
       return;
     }
     const data = await r.json();
+    if (seq !== docsListFetchSeq) return;
+    docsListLoaded = true;
     docsListCache = data.items || [];
-    populateGraphDocFilter(docsListCache);
     updateGraphsPageState();
     if (!data.items?.length) {
       els.docs.innerHTML = '<div class="muted">Пока нет документов — загрузите файл выше</div>';
+      window.MKGAuth?.syncDocsUploadFallback?.();
       return;
     }
     const q = docListFilterText.trim().toLowerCase();
@@ -2991,6 +4843,7 @@ async function renderDocsList() {
       : data.items;
     if (!filtered.length) {
       els.docs.innerHTML = '<div class="muted">Нет документов по фильтру</div>';
+      window.MKGAuth?.syncDocsUploadFallback?.();
       return;
     }
     els.docs.innerHTML = filtered.map(renderDocCard).join("");
@@ -2999,10 +4852,15 @@ async function renderDocsList() {
     updateDocWorkArea(sel || null);
     await pollSelectedDocumentPreview();
     for (const id of [...pipelineQueue]) {
-      await ensurePipeline(id);
+      try {
+        await ensurePipeline(id);
+      } catch { /* per-doc pipeline errors must not break the list */ }
     }
+    window.MKGAuth?.syncDocsUploadFallback?.();
   } catch (e) {
-    els.docs.innerHTML = `<div class="muted">Ошибка загрузки: ${esc(e.message)}</div>`;
+    if (seq !== docsListFetchSeq) return;
+    if (silent && docsListLoaded) return;
+    renderDocsListError(e.message || String(e));
   }
 }
 
@@ -3015,6 +4873,7 @@ function bindNavigation() {
 function bindEvents() {
   els.file?.addEventListener("change", (e) => pickFiles(e.target.files));
   els.pickBtn?.addEventListener("click", (e) => { e.stopPropagation(); openFilePicker(); });
+  els.docUploadFallbackBtn?.addEventListener("click", (e) => { e.stopPropagation(); openFilePicker(); });
   els.drop?.addEventListener("click", (e) => {
     if (e.target.closest(".upload-actions")) return;
     openFilePicker();
@@ -3033,13 +4892,15 @@ function bindEvents() {
   els.saveConfigBtn?.addEventListener("click", saveConfig);
   els.clearDbBtn?.addEventListener("click", clearDatabase);
   els.diagBtn?.addEventListener("click", runDiagnostics);
-  els.l3IndexBtn?.addEventListener("click", () => indexEmbeddings(selectedDoc));
+  els.l3IndexBtn?.addEventListener("click", () => {
+    if (!selectedDoc) {
+      appendQdrantLog("Выберите документ на вкладке «Документы» для индексации одного файла", true);
+      return;
+    }
+    indexEmbeddings(selectedDoc);
+  });
   els.l3IndexAllBtn?.addEventListener("click", indexAllEmbeddings);
   els.l4ClusterBtn?.addEventListener("click", runL4Clustering);
-  els.qdrantDocFilter?.addEventListener("change", () => {
-    openDoc(els.qdrantDocFilter.value, { keepPage: true });
-    loadQdrantPoints(selectedDoc);
-  });
   els.qdrantSearchForm?.addEventListener("submit", (e) => {
     e.preventDefault();
     runSearch(els.qdrantSearchQuery?.value, els.qdrantSearchResults);
@@ -3056,12 +4917,17 @@ function bindEvents() {
       graphVisible = true;
       if (graphScope === "all") {
         updateGraphVisibility();
-        loadGraph(GRAPH_ALL_ID);
-        refreshGraphViewport();
+        activateAllDocumentsGraph();
       } else {
         viewGraph();
       }
+    } else if (action === "full") {
+      startFullPipeline(selectedDoc, els.docPrimaryBtn);
     } else submitToGraph();
+  });
+  els.graphEmptyActionBtn?.addEventListener("click", () => {
+    const docId = els.graphEmptyActionBtn?.dataset.docId || selectedDoc;
+    startFullPipeline(docId, els.graphEmptyActionBtn);
   });
   els.docRebuildGraphBtn?.addEventListener("click", rebuildGraphConnections);
   els.docReprocessBtn?.addEventListener("click", async () => {
@@ -3071,9 +4937,11 @@ function bindEvents() {
   });
   els.docMdBtn?.addEventListener("click", () => toggleDocPanel("md"));
   els.docLogsBtn?.addEventListener("click", () => toggleDocPanel("logs"));
-  els.mdViewRenderBtn?.addEventListener("click", () => setMdViewMode("clean"));
-  els.mdViewSourceBtn?.addEventListener("click", () => setMdViewMode("marked"));
+  els.mdViewCleanBtn?.addEventListener("click", () => setMdViewMode("clean"));
+  els.mdViewRawBtn?.addEventListener("click", () => setMdViewMode("raw"));
+  els.mdViewMarkedBtn?.addEventListener("click", () => setMdViewMode("marked"));
   els.mdInlineCleanBtn?.addEventListener("click", () => setMdViewMode("clean"));
+  els.mdInlineRawBtn?.addEventListener("click", () => setMdViewMode("raw"));
   els.mdInlineMarkedBtn?.addEventListener("click", () => setMdViewMode("marked"));
   els.docMdDownloadBtn?.addEventListener("click", () => downloadDocumentMd());
   els.docMdInlineDownloadBtn?.addEventListener("click", () => downloadDocumentMd());
@@ -3090,10 +4958,11 @@ function bindEvents() {
   els.graphFullBtn?.addEventListener("click", () => setGraphDensityMode("full"));
   els.closeDetailBtn?.addEventListener("click", closeDetailPanel);
   els.crossLayerToggle?.addEventListener("click", () => {
-    showCrossLayerOnly = !showCrossLayerOnly;
-    if (showCrossLayerOnly) graphLayerFilter = "all";
-    renderGraphViews();
+    highlightCrossLayer = !highlightCrossLayer;
+    els.crossLayerToggle?.classList.toggle("active", highlightCrossLayer);
+    scheduleGraphViewsRender();
   });
+  els.connectionFormationBtn?.addEventListener("click", toggleConnectionFormationMode);
   els.toggleNodeListBtn?.addEventListener("click", toggleGraphNodeList);
   els.viewMapBtn?.addEventListener("click", () => setGraphViewMode("map"));
   els.viewRelsBtn?.addEventListener("click", () => setGraphViewMode("rels"));
@@ -3101,11 +4970,15 @@ function bindEvents() {
   els.headerNeo4jBtn?.addEventListener("click", openNeo4jBrowser);
   initGraphToolbarCollapse();
   initGraphResize();
+  initGraphNodePanelResize();
 }
 
 function boot() {
   if (window.marked?.setOptions) {
     window.marked.setOptions({ breaks: true, gfm: true });
+  }
+  if (typeof mermaid !== "undefined") {
+    mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
   }
   switchPage("chats");
   bindNavigation();
@@ -3122,7 +4995,7 @@ function boot() {
   loadProjectStage();
   refreshEmbeddingStatus();
   renderDocsList();
-  setInterval(renderDocsList, 1500);
+  setInterval(() => renderDocsList({ silent: true }), 1500);
   setInterval(refreshEmbeddingStatus, 30000);
   window.MKGAuth?.init();
 }

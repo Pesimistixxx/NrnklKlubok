@@ -142,10 +142,28 @@ class LayerPipelineItem(BaseModel):
 
 
 class LayerRecentRel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    from_: str = Field(alias="from", default="")
     from_short: str
     type: str
+    to: str = ""
     to_short: str
     layer: str = ""
+    props: dict = Field(default_factory=dict)
+
+
+class GraphRelationshipDetailOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    document_id: str
+    type: str
+    from_: str = Field(alias="from")
+    to: str
+    props: dict = Field(default_factory=dict)
+    layer: str = ""
+    description: str = ""
+    source_node: GraphNode | None = None
+    target_node: GraphNode | None = None
+    related_edges: list[GraphRelationship] = Field(default_factory=list)
 
 
 class LayerPipelineOut(BaseModel):
@@ -309,6 +327,8 @@ class AgentEmbeddingStatusOut(BaseModel):
     embed_query_model: str
     embed_client: str
     qdrant_url: str
+    qdrant_ok: bool = True
+    total_points: int = 0
     collections: dict[str, AgentEmbeddingCollection]
     vector_size: int
     yandex_configured: bool
@@ -327,6 +347,7 @@ class AgentQdrantPointOut(BaseModel):
     layer: str | None = None
     text: str | None = None
     cluster_id: int | None = None
+    cluster_name: str | None = None
     is_anomaly: bool | None = None
     anomaly_score: float | None = None
 
@@ -335,6 +356,63 @@ class AgentQdrantPointsOut(BaseModel):
     document_id: str
     total: int
     points: list[AgentQdrantPointOut]
+
+
+class AgentQdrantVizPointOut(BaseModel):
+    id: str
+    x: float
+    y: float
+    layer: str | None = None
+    cluster_id: int | None = None
+    cluster_name: str | None = None
+    cluster_description: str | None = None
+    is_anomaly: bool | None = None
+    anomaly_reason: str | None = None
+    anomaly_score: float | None = None
+    label: str | None = None
+    node_id: str | None = None
+    neo4j_node_id: str | None = None
+    text: str | None = None
+    document_id: str | None = None
+    collection: str | None = None
+
+
+class AgentClusterInfoOut(BaseModel):
+    id: int
+    name: str
+    count: int = 0
+    color: str | None = None
+    description: str | None = None
+
+
+class L4ClusteringContextOut(BaseModel):
+    document_id: str | None = None
+    doc_count: int = 0
+    docs_with_graph: int = 0
+    l3_points: int = 0
+    l4_points: int = 0
+    avg_l4_per_doc: float = 0.0
+    min_cluster_size: int = 2
+    min_samples: int = 2
+    has_cluster_labels: bool = False
+    cluster_count: int = 0
+    anomaly_count: int = 0
+    clustering_ran: bool = False
+
+
+class AgentQdrantVizOut(BaseModel):
+    document_id: str | None = None
+    total: int
+    l4_total: int = 0
+    cluster_count: int = 0
+    anomaly_count: int = 0
+    has_clusters: bool = False
+    has_named_clusters: bool = False
+    method: str = "pca"
+    layer_filter: str | None = None
+    clusters: list[AgentClusterInfoOut] = Field(default_factory=list)
+    points: list[AgentQdrantVizPointOut]
+    clustering_context: L4ClusteringContextOut | None = None
 
 
 class AgentEndpointOut(BaseModel):
@@ -486,6 +564,8 @@ class ContextGraphOut(BaseModel):
     relationships: list[GraphRelationship] = Field(default_factory=list)
     seed_count: int = 0
     document_ids: list[str] = Field(default_factory=list)
+    graph_walk_steps: list[dict[str, Any]] = Field(default_factory=list)
+    walk_path: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatSourceOut(BaseModel):
@@ -506,6 +586,7 @@ class ChatCompleteOut(BaseModel):
     graph: ContextGraphOut | None = None
     artifacts: list[ChatArtifact] = Field(default_factory=list)
     sources: list[ChatSourceOut] = Field(default_factory=list)
+    layer_results: list[dict[str, Any]] | None = None
     timing_ms: int = 0
 
 
@@ -536,6 +617,7 @@ class AgentServiceRunIn(BaseModel):
     doc_ids: list[str] = Field(default_factory=list)
     user_role: str = "researcher"
     limit: int = Field(default=5, ge=1, le=20)
+    history: list[ChatHistoryTurn] = Field(default_factory=list, max_length=20)
 
 
 class AgentServiceRunOut(BaseModel):
@@ -549,8 +631,11 @@ class AgentServiceRunOut(BaseModel):
     anomalies: list[dict[str, Any]] = Field(default_factory=list)
     literature_review: dict[str, Any] = Field(default_factory=dict)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    graph: ContextGraphOut | None = None
     trace: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    layer_results: list[dict[str, Any]] | None = None
+    orchestrator_plan: dict[str, Any] | None = None
 
 
 class AgentServiceModeInfo(BaseModel):
@@ -564,8 +649,8 @@ class AgentServiceModesOut(BaseModel):
 
 
 class L4ClusterRequest(BaseModel):
-    document_id: str = Field(..., min_length=1)
-    min_cluster_size: int = Field(default=3, ge=2, le=50)
+    document_id: str | None = Field(None, description="Опционально: проиндексировать документ перед глобальной кластеризацией")
+    min_cluster_size: int | None = Field(None, ge=2, le=50)
 
 
 class L4ClusterOut(BaseModel):
@@ -574,8 +659,69 @@ class L4ClusterOut(BaseModel):
     anomalies: int = 0
     points: int = 0
     clusters: int = 0
+    global_: bool = Field(default=True, alias="global")
+    cluster_names: dict[str, str] = Field(default_factory=dict)
+    cluster_descriptions: dict[str, str] = Field(default_factory=dict)
+    named_clusters: list[dict[str, Any]] = Field(default_factory=list)
     min_cluster_size: int | None = None
+    min_samples: int | None = None
+    all_noise: bool | None = None
+    noise_hint: str | None = None
     message: str | None = None
+    debounced: bool | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class L4ClusterEdgeOut(BaseModel):
+    document_id: str | None = None
+    from_node: str = ""
+    to_node: str = ""
+    type: str = ""
+    from_label: str | None = None
+    to_label: str | None = None
+    other_cluster_id: int | None = None
+    other_cluster_name: str | None = None
+
+
+class L4ClusterMemberOut(BaseModel):
+    node_id: str
+    document_id: str = ""
+    label: str = ""
+    text: str = ""
+
+
+class L4ClusterDetailOut(BaseModel):
+    cluster_id: int
+    cluster_name: str
+    cluster_description: str = ""
+    point_count: int = 0
+    members: list[L4ClusterMemberOut] = Field(default_factory=list)
+    internal_edges: list[L4ClusterEdgeOut] = Field(default_factory=list)
+    cross_cluster_edges: list[L4ClusterEdgeOut] = Field(default_factory=list)
+    clustering_context: L4ClusteringContextOut | None = None
+
+
+class L4NearestClusterOut(BaseModel):
+    cluster_id: int
+    cluster_name: str = ""
+    distance: float = 0.0
+
+
+class L4PointDetailOut(BaseModel):
+    node_id: str
+    point_id: str | None = None
+    document_id: str = ""
+    label: str = ""
+    text: str = ""
+    cluster_id: int | None = None
+    cluster_name: str | None = None
+    is_anomaly: bool = False
+    anomaly_score: float | None = None
+    anomaly_reason: str = ""
+    nearest_cluster: L4NearestClusterOut | None = None
+    edges: list[L4ClusterEdgeOut] = Field(default_factory=list)
+    clustering_context: L4ClusteringContextOut | None = None
 
 
 class AnomalyNodeOut(BaseModel):
