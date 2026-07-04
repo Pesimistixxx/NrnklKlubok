@@ -1,114 +1,115 @@
-# L3: текстовая матрица, Qdrant и L4 HDBSCAN
+# L3: текстовая матрица, Qdrant и кластеризация L4
 
-В UI: вкладка **Qdrant** и этап **L4** на пайплайне документа.  
-L3 = семантический поиск; L4 = кластеры и аномалии.
+Отдельное окно в UI: **Документ → Qdrant** и блок **L4 HDBSCAN** на пайплайне.
+
+> L3 vs L4: [`22_pipeline_layers.md`](22_pipeline_layers.md) · API: [`21_api_reference.md`](21_api_reference.md) · Agent API: [`14_agent_api.md`](14_agent_api.md)
 
 ---
 
 ## 1. Что такое L3 в целевой модели
 
-**L3 — текстовая матрица:** структурированное содержимое документов с эмбеддингами для гибридного поиска.
+**L3 — текстовая матрица:** структурированное содержимое документов с эмбеддингами для семантического поиска.
 
-| Узел | Назначение | Статус в MVP |
-|------|------------|--------------|
+| Узел (целевая модель) | Назначение | Статус в MVP |
+|----------------------|------------|--------------|
 | `TextParagraph` | Абзац RU/EN, позиция в документе | ✅ из Markdown |
-| `TableMatrix` | Таблица в JSON + эмбеддинг | ⬜ |
+| `TableMatrix` | Таблица в JSON + эмбеддинг | ⬜ не извлекается |
 | `HeadingContext` | Заголовок H1–H6 | ✅ |
 | `LangContext` | Язык документа / абзаца | ✅ |
 | `SynonymMap` | Жаргон → L1-сущность | ⬜ |
 
-**Связи L3 (MVP):** `HAS_PARAGRAPH`, `NEXT_PARAGRAPH`, `STRUCTURING`, `TAGGED_WITH`, `CONTEXT_FOR`, `DATA_SOURCE_FOR`, `ABOUT` — через `_bridge_text_to_layers`.
+**L3 не кластеризуется HDBSCAN** — только semantic search.
 
 ---
 
-## 2. Где хранятся эмбеддинги
+## 2. L4 и HDBSCAN (реализовано)
 
-| Хранилище | Что | Когда |
-|-----------|-----|-------|
-| **Neo4j** | Узлы и связи (без векторов в props) | После extraction |
-| **Qdrant `mkg_chunks`** | L3 TextParagraph, MD chunks (`answers_only`) | После extraction / index / answers_only |
-| **Qdrant `mkg_claims`** | L4 Claim, Measurement, Effect… | После extraction / index |
+**L4** — факты (`Claim`, `Measurement`, `Effect`, …). В Qdrant коллекция **`mkg_claims`**.
 
-**Код:** `packages/core/src/mkg_core/embeddings.py`  
-Worker после extraction вызывает `index_document_graph` автоматически.
+После индексации L4 worker/gateway может запустить **HDBSCAN**:
 
----
+1. Векторы Claim из Qdrant.
+2. `hdbscan.HDBSCAN` (`packages/core/src/mkg_core/l4_clustering.py`).
+3. Метки на узлах графа и в payload Qdrant:
+   - `cluster_id` (или `-1` = noise/outlier);
+   - `is_anomaly`;
+   - `anomaly_score` (GLOSH).
 
-## 3. L3 semantic search
+| Параметр env | Default |
+|--------------|---------|
+| `HDBSCAN_MIN_CLUSTER_SIZE` | 3 |
+| `HDBSCAN_MIN_SAMPLES` | auto |
 
-- Модели: Yandex `text-search-doc` (индекс), `text-search-query` (поиск).
-- Размерность: 256 (`QDRANT_VECTOR_SIZE`).
-- Поиск по документу: `POST /api/v1/agents/documents/{id}/search`.
-- Глобальный / dual (L3+L4): `POST /api/v1/agents/search/global`.
-- Чат использует `search_global()` — обе коллекции, merge по score.
-
----
-
-## 4. L4 HDBSCAN — кластеры и аномалии ✅
-
-> Реализовано в MVP-2+: `l4_clustering.py`, UI этап L4, API anomalies.
-
-### Алгоритм
-
-1. Scroll L4-точек из `mkg_claims` с векторами.
-2. **HDBSCAN** (`hdbscan` Python) с `min_cluster_size` из env.
-3. Outliers → `cluster_id = -1`, `is_anomaly = true`, `anomaly_score`.
-4. Метки пишутся в payload Qdrant и props узлов графа (`l4_cluster`).
-
-### API
+API:
 
 ```bash
-# Кластеризация документа
-curl -X POST http://localhost:8000/api/v1/graph/l4/cluster \
+curl -s -X POST "http://localhost:8000/api/v1/documents/<doc_id>/l4-cluster"
+curl -s -X POST "http://localhost:8000/api/v1/graph/l4/cluster" \
   -H "Content-Type: application/json" \
-  -d '{"document_id": "doc:abc", "min_cluster_size": 3}'
-
-# Список аномалий (auto_cluster=true по умолчанию)
-curl "http://localhost:8000/api/v1/graph/anomalies?document_id=doc%3Aabc&limit=50"
-
-# Retry через documents API
-curl -X POST http://localhost:8000/api/v1/documents/doc%3Aabc/l4-cluster
+  -d '{"document_id": "<doc_id>", "min_cluster_size": 3}'
+curl -s "http://localhost:8000/api/v1/graph/anomalies?document_id=<doc_id>"
+curl -s -X POST "http://localhost:8000/api/v1/agents/analytics/l4-cluster?document_id=<doc_id>"
 ```
 
-### UI
+**Режим `answers_only`:** L4 и HDBSCAN пропускаются.
 
-- Пайплайн документа: этап **L4** со статусом и кнопкой **↺ HDBSCAN L4**.
-- Qdrant: блок кластеризации L4, карта точек с `cluster_id`.
-- Роль **Охотник за аномалиями** + AI-режим **Аномалии**.
-
-### Env
-
-| Переменная | Default | Описание |
-|------------|---------|----------|
-| `HDBSCAN_MIN_CLUSTER_SIZE` | 3 | Мин. точек в кластере |
-| `HDBSCAN_MIN_SAMPLES` | null | HDBSCAN min_samples (optional) |
+LangGraph **anomaly mode** использует эти метки: [`21_multiagent_system.md`](21_multiagent_system.md).
 
 ---
 
-## 5. UI: вкладка «Qdrant»
+## 3. Где хранятся эмбеддинги
 
-1. **Статистика** — точки в `mkg_chunks` / `mkg_claims`.
-2. **Индексировать** — `POST .../index` или Agent API.
-3. **Семантический поиск** — hits с layer L3/L4.
-4. **Карта точек** — scroll без векторов.
-5. **L4 cluster** — POST analytics/l4-cluster (Agent API).
+| Хранилище | Что | Когда пишется |
+|-----------|-----|---------------|
+| **Neo4j** | Узлы и связи (без векторов в props) | После extraction |
+| **Qdrant** | L3 → `mkg_chunks`, L4 → `mkg_claims` | `POST /documents/{id}/index` |
 
-**Настройки** — LLM, OCR, embedding doc/query: `GET/PUT /api/v1/config/models`.
+**Код:** `packages/core/src/mkg_core/embeddings.py`  
+**Модели:** Yandex `text-search-doc/latest` (index), `text-search-query/latest` (search)
 
 ---
 
-## 6. Agent API (кратко)
+## 4. Dual search (L3 + L4)
+
+В чате и `search_global`:
+
+- **L3 hits** — цитаты из текста (`mkg_chunks`).
+- **L4 hits** — факты и claims (`mkg_claims`), с учётом cluster context.
+
+Затем **graph traversal** (`GRAPH_TRAVERSAL_MAX_HOPS`) расширяет подграф в Neo4j/JSON.
+
+---
+
+## 5. UI
+
+1. **Пайплайн** — этап «Кластеризация L4», retry **↺ HDBSCAN L4**.
+2. **Qdrant** — индексация, карта точек по кластерам, кнопка HDBSCAN.
+3. **Граф** — badge `cluster_id` / anomaly на L4-узлах.
+
+**Настройки** — embedding doc/query: `GET/PUT /api/v1/config/models`.
+
+---
+
+## 6. Открытые вопросы (следующий этап)
+
+Связать HDBSCAN outliers с:
+
+- низкой `confidence` на Claim;
+- `:FOUND_ANOMALY` и Contradiction L5;
+- KnowledgeGap.
+
+Гипотеза факторов — см. исторический § в git; приоритет: [`03_implementation_gap.md`](03_implementation_gap.md).
+
+---
+
+## 7. Agent API (кратко)
 
 ```bash
 curl -s http://localhost:8000/api/v1/agents/embeddings/status | jq .
-
 curl -s -X POST "http://localhost:8000/api/v1/agents/documents/doc%3Aabc/embeddings/index" | jq .
-
 curl -s -X POST "http://localhost:8000/api/v1/agents/documents/doc%3Aabc/search" \
   -H "Content-Type: application/json" \
-  -d '{"query": "выщелачивание никеля", "limit": 5, "index_if_missing": true}' | jq .
+  -d '{"query": "выщелачивание", "limit": 5, "mode": "semantic"}' | jq .
 ```
 
 Полная спецификация: [`14_agent_api.md`](14_agent_api.md).
-
-См. также: [`21_pipeline_and_layers.md`](21_pipeline_and_layers.md).

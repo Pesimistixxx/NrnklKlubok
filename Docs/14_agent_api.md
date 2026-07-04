@@ -568,7 +568,9 @@ POST /agents/documents/{id}/search  mode=semantic
 
 Worker **не** пишет в Qdrant напрямую — только через gateway/Agent API.
 
-**Кластеризация / аномалии:** не реализовано; открытый вопрос и план — [`15_l3_qdrant_clustering.md`](15_l3_qdrant_clustering.md). Analytics (`clustering.py`) — TODO этап 3.
+**Кластеризация L4 / аномалии:** реализовано — HDBSCAN в `l4_clustering.py`, метки `cluster_id` / `is_anomaly` на L4-узлах и в Qdrant payload. API: `POST /api/v1/graph/l4/cluster`, `GET /api/v1/graph/anomalies`, `POST /api/v1/agents/analytics/l4-cluster`. Подробно: [`22_pipeline_layers.md`](22_pipeline_layers.md), [`15_l3_qdrant_clustering.md`](15_l3_qdrant_clustering.md).
+
+Связь outliers с Contradiction L5 — **следующий этап**.
 
 ---
 
@@ -629,7 +631,7 @@ POST /agents/documents/{id}/search             → mode=semantic
 |-----------|----------------------|
 | `/agents/documents/{id}/layers` | `/api/v1/documents/{id}/pipeline/layers` |
 | `/agents/documents/{id}/graph` | `/api/v1/graph/documents/{id}` |
-| `/agents/documents/{id}/text` | `/api/v1/documents/{id}/markdown` |
+| `POST /agents/analytics/l4-cluster` | `POST /api/v1/graph/l4/cluster`, `POST /api/v1/documents/{id}/l4-cluster` |
 
 Agent API добавляет: фильтры по слоям, соседей узлов, paragraphs, search, ontology, embeddings status, **capabilities registry**, **Qdrant points scroll**.
 
