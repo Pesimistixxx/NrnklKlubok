@@ -6,17 +6,25 @@ from app.client import GatewayClient
 from app.config import AgentSettings
 from app.llm import AgentLLM
 from app.nodes import (
+    agent_loop_controller,
     capabilities_check,
+    choose_loop,
     choose_mode,
+    consensus_detector,
     document_selector,
     evidence_collector,
+    expert_finder,
     final_report_builder,
     graph_context_loader,
+    literature_grouper,
     llm_evidence_analyzer,
     llm_mode_builder,
     llm_scope_planner,
+    pattern_discovery,
+    ranking_agent,
     retrieval_search,
     route_by_mode,
+    technology_coverage_analyzer,
 )
 from app.state import MKGAgentState
 
@@ -26,7 +34,7 @@ def _after_planner(state: MKGAgentState) -> str:
 
 
 def _after_analyzer(state: MKGAgentState) -> str:
-    return "final_report_builder" if state.get("fatal_error") else "route_by_mode"
+    return "final_report_builder" if state.get("fatal_error") else "agent_loop_controller"
 
 
 def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: AgentLLM):
@@ -50,6 +58,9 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     async def _llm_evidence_analyzer(state: MKGAgentState) -> MKGAgentState:
         return await llm_evidence_analyzer(state, llm, settings)
 
+    async def _agent_loop_controller(state: MKGAgentState) -> MKGAgentState:
+        return await agent_loop_controller(state, settings)
+
     async def _llm_mode_builder(state: MKGAgentState) -> MKGAgentState:
         return await llm_mode_builder(state, llm, settings)
 
@@ -60,11 +71,18 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     graph.add_node("graph_context_loader", _graph_context_loader)
     graph.add_node("evidence_collector", evidence_collector)
     graph.add_node("llm_evidence_analyzer", _llm_evidence_analyzer)
+    graph.add_node("agent_loop_controller", _agent_loop_controller)
+    graph.add_node("literature_grouper", literature_grouper)
+    graph.add_node("technology_coverage_analyzer", technology_coverage_analyzer)
+    graph.add_node("consensus_detector", consensus_detector)
     graph.add_node("route_by_mode", route_by_mode)
+    graph.add_node("pattern_discovery", pattern_discovery)
     graph.add_node("audit_mode_builder", _llm_mode_builder)
     graph.add_node("hypothesis_mode_builder", _llm_mode_builder)
     graph.add_node("literature_review_mode_builder", _llm_mode_builder)
     graph.add_node("recommendation_mode_builder", _llm_mode_builder)
+    graph.add_node("expert_finder", expert_finder)
+    graph.add_node("ranking_agent", ranking_agent)
     graph.add_node("final_report_builder", final_report_builder)
 
     graph.set_entry_point("capabilities_check")
@@ -85,24 +103,38 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
         "llm_evidence_analyzer",
         _after_analyzer,
         {
-            "route_by_mode": "route_by_mode",
+            "agent_loop_controller": "agent_loop_controller",
             "final_report_builder": "final_report_builder",
         },
     )
+    graph.add_conditional_edges(
+        "agent_loop_controller",
+        choose_loop,
+        {
+            "retry": "retrieval_search",
+            "continue": "literature_grouper",
+        },
+    )
+    graph.add_edge("literature_grouper", "technology_coverage_analyzer")
+    graph.add_edge("technology_coverage_analyzer", "consensus_detector")
+    graph.add_edge("consensus_detector", "route_by_mode")
     graph.add_conditional_edges(
         "route_by_mode",
         choose_mode,
         {
             "audit_mode": "audit_mode_builder",
-            "hypothesis_mode": "hypothesis_mode_builder",
+            "hypothesis_mode": "pattern_discovery",
             "literature_review_mode": "literature_review_mode_builder",
             "recommendation_mode": "recommendation_mode_builder",
         },
     )
+    graph.add_edge("pattern_discovery", "hypothesis_mode_builder")
     graph.add_edge("audit_mode_builder", "final_report_builder")
-    graph.add_edge("hypothesis_mode_builder", "final_report_builder")
+    graph.add_edge("hypothesis_mode_builder", "expert_finder")
     graph.add_edge("literature_review_mode_builder", "final_report_builder")
-    graph.add_edge("recommendation_mode_builder", "final_report_builder")
+    graph.add_edge("recommendation_mode_builder", "expert_finder")
+    graph.add_edge("expert_finder", "ranking_agent")
+    graph.add_edge("ranking_agent", "final_report_builder")
     graph.add_edge("final_report_builder", END)
 
     return graph.compile()

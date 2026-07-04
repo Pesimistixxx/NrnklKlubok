@@ -36,6 +36,10 @@ _ANALYZER_PROMPT = """
 Ты Evidence Analyzer Agent. Анализируешь только переданные evidence из графа.
 Верни только JSON object:
 {
+  "needs_more_evidence": false,
+  "refined_search_query": "",
+  "missing_evidence": [],
+  "confidence": 0.0,
   "issues": [],
   "contradictions": [],
   "anomalies": [],
@@ -53,6 +57,7 @@ _ANALYZER_PROMPT = """
   "warnings": []
 }
 Для каждого элемента указывай doc_id/node_id, если он есть во входе. Если данных мало, явно добавь knowledge_gaps.
+Если evidence недостаточно для ответа, поставь needs_more_evidence=true и дай refined_search_query.
 """.strip()
 
 _BUILDER_PROMPT = """
@@ -178,7 +183,12 @@ async def retrieval_search(
     doc_ids = new_state.get("candidate_doc_ids") or []
     scope = normalize_dict(new_state.get("scope"))
     keywords = scope.get("keywords") if isinstance(scope.get("keywords"), list) else []
-    search_query = scope.get("search_query") or " ".join([new_state.get("query", ""), *map(str, keywords[:4])]).strip()
+    search_query = (
+        new_state.get("current_search_query")
+        or scope.get("search_query")
+        or " ".join([new_state.get("query", ""), *map(str, keywords[:4])]).strip()
+    )
+    new_state["current_search_query"] = str(search_query)
     if not doc_ids:
         new_state["search_hits"] = []
         return new_state
@@ -242,12 +252,23 @@ async def evidence_collector(state: MKGAgentState) -> MKGAgentState:
     if _should_stop(state):
         return state
     new_state = dict(state)
-    evidence: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = list(new_state.get("evidence") or [])
+    seen_evidence = {
+        (str(item.get("doc_id")), str(item.get("node_id")))
+        for item in evidence
+        if item.get("doc_id") and item.get("node_id")
+    }
     for item in new_state.get("node_context") or []:
         hit = item.get("hit") or {}
         detail = item.get("detail") or {}
         node = detail.get("node") or {}
         props = node.get("props") or hit.get("props") or {}
+        evidence_key = (
+            str(hit.get("doc_id") or detail.get("document_id") or ""),
+            str(hit.get("node_id") or node.get("id") or ""),
+        )
+        if evidence_key in seen_evidence:
+            continue
         neighbors = []
         for neighbor in detail.get("neighbors") or []:
             n_props = neighbor.get("props") or {}
@@ -269,6 +290,7 @@ async def evidence_collector(state: MKGAgentState) -> MKGAgentState:
                 "neighbors": neighbors[:8],
             }
         )
+        seen_evidence.add(evidence_key)
     new_state["evidence"] = evidence
     return new_state
 
@@ -317,6 +339,174 @@ def choose_mode(state: MKGAgentState) -> str:
     return str(state.get("mode") or "hypothesis_mode")
 
 
+def choose_loop(state: MKGAgentState) -> str:
+    return str(state.get("loop_decision") or "continue")
+
+
+async def agent_loop_controller(state: MKGAgentState, settings: AgentSettings) -> MKGAgentState:
+    if _should_stop(state):
+        return state
+    new_state = dict(state)
+    analysis = normalize_dict(new_state.get("analysis"))
+    retry_count = int(new_state.get("retry_count") or 0)
+    evidence_count = len(new_state.get("evidence") or [])
+    wants_more = bool(analysis.get("needs_more_evidence"))
+    refined_query = analysis.get("refined_search_query")
+    has_time = remaining_seconds(new_state, settings.timeout_seconds, reserve=1.0) > 0.4
+    can_retry = retry_count < settings.max_agent_loops and has_time
+
+    if can_retry and (wants_more or evidence_count < 2):
+        new_state["retry_count"] = retry_count + 1
+        new_state["loop_decision"] = "retry"
+        used = list(new_state.get("used_search_queries") or [])
+        previous_query = new_state.get("current_search_query")
+        if previous_query:
+            used.append(str(previous_query))
+        new_state["used_search_queries"] = used
+        if isinstance(refined_query, str) and refined_query.strip():
+            new_state["current_search_query"] = refined_query.strip()
+        else:
+            missing = analysis.get("missing_evidence")
+            missing_text = " ".join(str(item) for item in missing[:3]) if isinstance(missing, list) else ""
+            new_state["current_search_query"] = f"{new_state.get('query', '')} {missing_text}".strip()
+        add_warning(new_state, f"agent loop retry {new_state['retry_count']}: уточняю поиск по evidence")
+        return new_state
+
+    new_state["loop_decision"] = "continue"
+    if wants_more and not can_retry:
+        add_warning(new_state, "LLM запросила больше evidence, но лимит agent loop/time budget исчерпан")
+    return new_state
+
+
+async def literature_grouper(state: MKGAgentState) -> MKGAgentState:
+    new_state = dict(state)
+    analysis = normalize_dict(new_state.get("analysis"))
+    review = normalize_dict(new_state.get("mode_result")).get("literature_review")
+    source_groups = []
+    if isinstance(review, dict):
+        source_groups = normalize_list(review.get("source_groups"))
+    if not source_groups:
+        source_groups = normalize_list(analysis.get("source_groups"))
+    if not source_groups:
+        source_groups = [
+            {
+                "method": item.get("label") or "unknown",
+                "geography": "unknown",
+                "detail_level": item.get("layer") or "unknown",
+                "source_count": 1,
+                "doc_id": item.get("doc_id"),
+            }
+            for item in (new_state.get("evidence") or [])[:8]
+        ]
+    new_state["source_groups"] = source_groups
+    return new_state
+
+
+async def technology_coverage_analyzer(state: MKGAgentState) -> MKGAgentState:
+    new_state = dict(state)
+    analysis = normalize_dict(new_state.get("analysis"))
+    coverage = normalize_dict(analysis.get("technology_coverage"))
+    if not coverage:
+        coverage = {
+            "domestic_only": [],
+            "foreign_only": [],
+            "both": [],
+            "unknown": [],
+        }
+    new_state["technology_coverage"] = coverage
+    return new_state
+
+
+async def consensus_detector(state: MKGAgentState) -> MKGAgentState:
+    new_state = dict(state)
+    analysis = normalize_dict(new_state.get("analysis"))
+    new_state["consensus_points"] = normalize_list(analysis.get("consensus_points"))
+    new_state["disagreement_zones"] = normalize_list(analysis.get("disagreement_zones"))
+    return new_state
+
+
+async def pattern_discovery(state: MKGAgentState) -> MKGAgentState:
+    new_state = dict(state)
+    patterns: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
+    for item in new_state.get("evidence") or []:
+        key = str(item.get("label") or item.get("layer") or "unknown")
+        seen[key] = seen.get(key, 0) + 1
+    for key, count in seen.items():
+        if count > 1:
+            patterns.append({"pattern": key, "supporting_evidence_count": count})
+    new_state["patterns"] = patterns
+    return new_state
+
+
+async def expert_finder(state: MKGAgentState) -> MKGAgentState:
+    new_state = dict(state)
+    analysis = normalize_dict(new_state.get("analysis"))
+    experts = normalize_list(analysis.get("related_experts"))
+    labs = normalize_list(analysis.get("related_labs"))
+    for item in new_state.get("evidence") or []:
+        for neighbor in item.get("neighbors") or []:
+            label = str(neighbor.get("label") or "")
+            if label == "Expert":
+                experts.append(neighbor)
+            if label in {"Organization", "Facility"}:
+                labs.append(neighbor)
+    new_state["related_experts"] = experts
+    new_state["related_labs"] = labs
+    return new_state
+
+
+async def ranking_agent(state: MKGAgentState) -> MKGAgentState:
+    new_state = dict(state)
+    result = normalize_dict(new_state.get("mode_result"))
+
+    def as_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def as_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    hypotheses = normalize_list(result.get("hypotheses"))
+    if hypotheses:
+        hypotheses.sort(
+            key=lambda item: (
+                as_int(item.get("rank"), 999),
+                -as_float(item.get("confidence"), 0.0),
+            )
+        )
+        result["hypotheses"] = hypotheses
+    recommendations = normalize_list(result.get("recommendations"))
+    experts = normalize_list(new_state.get("related_experts"))
+    labs = normalize_list(new_state.get("related_labs"))
+    if recommendations and (experts or labs):
+        first = dict(recommendations[0])
+        if experts and not first.get("related_experts"):
+            first["related_experts"] = experts
+        if labs and not first.get("related_labs"):
+            first["related_labs"] = labs
+        recommendations[0] = first
+    elif experts or labs:
+        recommendations = [
+            {
+                "similar_cases": [],
+                "adjacent_solutions": [],
+                "related_experts": experts,
+                "related_labs": labs,
+                "deep_dive_topics": [],
+                "reason": "Связанные эксперты и организации найдены в соседях evidence-графа.",
+            }
+        ]
+    result["recommendations"] = recommendations
+    new_state["mode_result"] = result
+    return new_state
+
+
 async def llm_mode_builder(
     state: MKGAgentState,
     llm: AgentLLM,
@@ -334,6 +524,11 @@ async def llm_mode_builder(
         "scope": new_state.get("scope", {}),
         "evidence": new_state.get("evidence", []),
         "analysis": new_state.get("analysis", {}),
+        "source_groups": new_state.get("source_groups", []),
+        "technology_coverage": new_state.get("technology_coverage", {}),
+        "consensus_points": new_state.get("consensus_points", []),
+        "disagreement_zones": new_state.get("disagreement_zones", []),
+        "patterns": new_state.get("patterns", []),
         "limit": new_state.get("limit", 5),
     }
     try:
@@ -362,6 +557,8 @@ async def final_report_builder(state: MKGAgentState) -> MKGAgentState:
             warnings.append(str(value))
     if new_state.get("fatal_error") and new_state["fatal_error"] not in warnings:
         warnings.append(str(new_state["fatal_error"]))
+    if int(new_state.get("retry_count") or 0) > 0:
+        warnings.append(f"agent loop выполнил {new_state.get('retry_count')} дополнительный поиск")
     summary = result.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         if new_state.get("fatal_error"):

@@ -90,6 +90,10 @@ async def run_agents(body: AgentRunRequest) -> AgentRunOut:
         "doc_ids": body.doc_ids,
         "user_role": body.user_role,
         "limit": body.limit,
+        "retry_count": 0,
+        "loop_decision": "continue",
+        "current_search_query": None,
+        "used_search_queries": [],
         "warnings": [],
     }
     try:
