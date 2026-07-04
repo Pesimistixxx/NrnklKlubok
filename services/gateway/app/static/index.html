@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=43" />
+  <link rel="stylesheet" href="/static/css/app.css?v=44" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
@@ -222,28 +222,42 @@
             <div class="live-rels" id="liveRels"></div>
           </div>
           <div class="graph-primary graph-page-primary">
+            <div class="graph-toolbar-shell" id="graphToolbarShell">
+              <div class="graph-toolbar">
+                <div class="graph-toolbar-head">
+                  <button type="button" class="graph-toolbar-toggle" id="graphToolbarToggle" aria-expanded="true" title="Свернуть фильтры слоёв">
+                    <span class="graph-toolbar-toggle-icon" aria-hidden="true">▾</span>
+                    <span class="graph-toolbar-toggle-label">Фильтры</span>
+                  </button>
+                  <div class="graph-toolbar-primary">
+                    <div class="graph-density-toggle">
+                      <button type="button" class="view-btn active" id="graphCompactBtn">Компактный</button>
+                      <button type="button" class="view-btn" id="graphFullBtn">Полный</button>
+                    </div>
+                    <div class="graph-view-toggle">
+                      <button type="button" class="view-btn active" id="viewMapBtn">Карта</button>
+                      <button type="button" class="view-btn" id="viewRelsBtn">Связи</button>
+                    </div>
+                    <div class="graph-toolbar-actions">
+                      <button class="btn btn-ghost btn-small" id="originalGraphBtn" type="button">Сброс</button>
+                      <button class="btn btn-ghost btn-small" id="headerNeo4jBtn" type="button">Neo4j ↗</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="graph-toolbar-filters" id="graphToolbarFilters">
+                  <div class="layer-filters-scroll">
+                    <div class="layer-filters" id="layerFilters"></div>
+                  </div>
+                  <div class="graph-toolbar-filter-actions">
+                    <button type="button" class="layer-chip cross-layer-toggle" id="crossLayerToggle">Межслойные</button>
+                    <button type="button" class="layer-chip" id="toggleNodeListBtn">Список узлов</button>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div class="graph-canvas-wrap" id="graphCanvasWrap">
               <div id="graphCanvas" class="graph-canvas"></div>
               <div class="graph-resize-handle" id="graphResizeHandle" title="Потяните для изменения высоты"></div>
-            </div>
-            <div class="graph-toolbar">
-              <div class="graph-toolbar-left">
-                <div class="graph-density-toggle">
-                  <button type="button" class="view-btn active" id="graphCompactBtn">Компактный</button>
-                  <button type="button" class="view-btn" id="graphFullBtn">Полный</button>
-                </div>
-                <div class="layer-filters" id="layerFilters"></div>
-                <button type="button" class="layer-chip cross-layer-toggle" id="crossLayerToggle">Межслойные</button>
-                <button type="button" class="layer-chip" id="toggleNodeListBtn">Список узлов</button>
-              </div>
-              <div class="graph-toolbar-right">
-                <div class="graph-view-toggle">
-                  <button type="button" class="view-btn active" id="viewMapBtn">Карта</button>
-                  <button type="button" class="view-btn" id="viewRelsBtn">Связи</button>
-                </div>
-                <button class="btn btn-ghost btn-small" id="originalGraphBtn" type="button">Сброс</button>
-                <button class="btn btn-ghost btn-small" id="headerNeo4jBtn" type="button">Neo4j ↗</button>
-              </div>
             </div>
             <div class="graph-map-view graph-node-list-hidden" id="graphMapView">
               <div class="graph-node-list" id="graphNodeList"></div>
@@ -373,8 +387,8 @@
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/graph-mini.js?v=43"></script>
-  <script src="/static/js/app.js?v=43"></script>
-  <script src="/static/js/chats.js?v=43"></script>
+  <script src="/static/js/graph-mini.js?v=44"></script>
+  <script src="/static/js/app.js?v=44"></script>
+  <script src="/static/js/chats.js?v=44"></script>
 </body>
 </html>

@@ -1,5 +1,7 @@
 # Архитектура мультиагентной системы
 
+> REST API agents: [`21_api_reference.md`](21_api_reference.md) · Пайплайн L3/L4: [`22_pipeline_layers.md`](22_pipeline_layers.md) · User guide: [`19_user_guide.md`](19_user_guide.md)
+
 ## Контекст
 
 Текущий проект уже решает базовую инфраструктурную часть:
