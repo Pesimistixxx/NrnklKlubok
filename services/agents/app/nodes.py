@@ -7,7 +7,7 @@ from app.client import GatewayClient
 from app.config import AgentSettings
 from app.llm import AgentLLM
 from app.state import MKGAgentState
-from app.utils import add_warning, compact_text, normalize_dict, normalize_list, remaining_seconds, text_from_props
+from app.utils import add_trace, add_warning, compact_text, normalize_dict, normalize_list, remaining_seconds, text_from_props
 
 _VALID_MODES = {
     "audit_mode",
@@ -76,6 +76,7 @@ _BUILDER_PROMPT = """
 Для literature_review_mode заполни literature_review: source_groups, domestic_only_technologies, foreign_only_technologies, consensus_points, disagreement_zones.
 Для recommendation_mode заполни recommendations: similar_cases, adjacent_solutions, related_experts, related_labs, deep_dive_topics, reason.
 Не добавляй утверждения без опоры на evidence; если данных мало, напиши это в summary и warnings.
+Если во входе есть builder_feedback, исправь результат с учётом замечаний Critic Agent.
 """.strip()
 
 
@@ -95,9 +96,11 @@ async def capabilities_check(state: MKGAgentState, gateway: GatewayClient) -> MK
     new_state = dict(state)
     try:
         new_state["capabilities"] = await gateway.capabilities()
+        add_trace(new_state, "capabilities_check", ok=True)
     except Exception as exc:
         add_warning(new_state, f"gateway capabilities недоступны: {exc}")
         new_state["capabilities"] = {}
+        add_trace(new_state, "capabilities_check", ok=False, error=str(exc))
     return new_state
 
 
@@ -137,6 +140,13 @@ async def llm_scope_planner(
         mode = "hypothesis_mode"
     new_state["mode"] = mode
     new_state["scope"] = scope if isinstance(scope, dict) else {}
+    add_trace(
+        new_state,
+        "llm_scope_planner",
+        mode=mode,
+        search_query=new_state["scope"].get("search_query"),
+        keywords=new_state["scope"].get("keywords"),
+    )
     return new_state
 
 
@@ -152,6 +162,7 @@ async def document_selector(
     if doc_ids:
         new_state["candidate_doc_ids"] = doc_ids[: settings.max_docs]
         new_state["docs"] = [{"id": doc_id} for doc_id in new_state["candidate_doc_ids"]]
+        add_trace(new_state, "document_selector", source="request", doc_count=len(new_state["candidate_doc_ids"]))
         return new_state
     try:
         payload = await gateway.docs(page_size=settings.max_docs * 2)
@@ -169,6 +180,7 @@ async def document_selector(
     new_state["candidate_doc_ids"] = [item["id"] for item in docs if item.get("id")]
     if not docs:
         add_warning(new_state, "нет документов со статусом loaded для анализа")
+    add_trace(new_state, "document_selector", source="gateway", doc_count=len(new_state["candidate_doc_ids"]))
     return new_state
 
 
@@ -193,23 +205,81 @@ async def retrieval_search(
         new_state["search_hits"] = []
         return new_state
 
+    per_doc_limit = min(settings.search_limit, int(new_state.get("limit", 5)))
+
     async def run_one(doc_id: str) -> dict[str, Any]:
-        return await gateway.search(doc_id, search_query, min(settings.search_limit, int(new_state.get("limit", 5))))
+        search_task = gateway.search(doc_id, search_query, per_doc_limit)
+        nodes_task = gateway.nodes(doc_id, search_query, per_doc_limit)
+        search_result, nodes_result = await asyncio.gather(search_task, nodes_task, return_exceptions=True)
+        return {
+            "doc_id": doc_id,
+            "search": search_result,
+            "nodes": nodes_result,
+        }
 
     results = await asyncio.gather(*(run_one(doc_id) for doc_id in doc_ids), return_exceptions=True)
-    hits: list[dict[str, Any]] = []
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def add_hit(hit: dict[str, Any], *, doc_id: str, source: str, base_score: float) -> None:
+        node_id = str(hit.get("node_id") or hit.get("id") or "")
+        if not node_id:
+            return
+        key = (doc_id, node_id)
+        score = float(hit.get("score") or base_score)
+        existing = merged.get(key)
+        text = hit.get("text")
+        props = hit.get("props") if isinstance(hit.get("props"), dict) else {}
+        if not text and props:
+            text = text_from_props(props)
+        item = {
+            "doc_id": doc_id,
+            "node_id": node_id,
+            "label": hit.get("label"),
+            "layer": hit.get("layer"),
+            "score": score,
+            "text": compact_text(str(text or ""), 500),
+            "props": props,
+            "retrieval_sources": [source],
+        }
+        if existing:
+            existing["score"] = max(float(existing.get("score") or 0), score) + 0.1
+            sources = set(existing.get("retrieval_sources") or [])
+            sources.add(source)
+            existing["retrieval_sources"] = sorted(sources)
+            if not existing.get("text") and item.get("text"):
+                existing["text"] = item["text"]
+        else:
+            merged[key] = item
+
     for doc_id, result in zip(doc_ids, results):
         if isinstance(result, Exception):
             add_warning(new_state, f"поиск по {doc_id} не выполнен: {result}")
             continue
-        for hit in result.get("hits", []):
-            item = dict(hit)
-            item["doc_id"] = doc_id
-            hits.append(item)
+        search_result = result.get("search")
+        nodes_result = result.get("nodes")
+        if isinstance(search_result, Exception):
+            add_warning(new_state, f"vector/keyword search по {doc_id} не выполнен: {search_result}")
+        else:
+            for hit in search_result.get("hits", []):
+                add_hit(dict(hit), doc_id=doc_id, source=f"agent_search:{search_result.get('mode')}", base_score=0.6)
+        if isinstance(nodes_result, Exception):
+            add_warning(new_state, f"graph nodes search по {doc_id} не выполнен: {nodes_result}")
+        else:
+            for node in nodes_result.get("nodes", []):
+                add_hit(dict(node), doc_id=doc_id, source="graph_nodes", base_score=0.55)
+
+    hits = list(merged.values())
     hits.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
     new_state["search_hits"] = hits[: settings.max_docs * settings.search_limit]
     if not hits:
         add_warning(new_state, "поиск не вернул релевантные фрагменты")
+    add_trace(
+        new_state,
+        "retrieval_search",
+        query=search_query,
+        doc_count=len(doc_ids),
+        hit_count=len(new_state["search_hits"]),
+    )
     return new_state
 
 
@@ -245,6 +315,7 @@ async def graph_context_loader(
         else:
             context.append(result)
     new_state["node_context"] = context
+    add_trace(new_state, "graph_context_loader", requested=len(unique), loaded=len(context))
     return new_state
 
 
@@ -292,6 +363,7 @@ async def evidence_collector(state: MKGAgentState) -> MKGAgentState:
         )
         seen_evidence.add(evidence_key)
     new_state["evidence"] = evidence
+    add_trace(new_state, "evidence_collector", evidence_count=len(evidence))
     return new_state
 
 
@@ -328,6 +400,12 @@ async def llm_evidence_analyzer(
         value = warning.get("value") or warning.get("message")
         if value:
             add_warning(new_state, str(value))
+    add_trace(
+        new_state,
+        "llm_evidence_analyzer",
+        needs_more_evidence=bool(new_state["analysis"].get("needs_more_evidence")),
+        confidence=new_state["analysis"].get("confidence"),
+    )
     return new_state
 
 
@@ -341,6 +419,10 @@ def choose_mode(state: MKGAgentState) -> str:
 
 def choose_loop(state: MKGAgentState) -> str:
     return str(state.get("loop_decision") or "continue")
+
+
+def choose_hypothesis_refinement(state: MKGAgentState) -> str:
+    return str(state.get("hypothesis_refinement_decision") or "continue")
 
 
 async def agent_loop_controller(state: MKGAgentState, settings: AgentSettings) -> MKGAgentState:
@@ -370,11 +452,19 @@ async def agent_loop_controller(state: MKGAgentState, settings: AgentSettings) -
             missing_text = " ".join(str(item) for item in missing[:3]) if isinstance(missing, list) else ""
             new_state["current_search_query"] = f"{new_state.get('query', '')} {missing_text}".strip()
         add_warning(new_state, f"agent loop retry {new_state['retry_count']}: уточняю поиск по evidence")
+        add_trace(
+            new_state,
+            "agent_loop_controller",
+            decision="retry",
+            retry_count=new_state["retry_count"],
+            refined_search_query=new_state.get("current_search_query"),
+        )
         return new_state
 
     new_state["loop_decision"] = "continue"
     if wants_more and not can_retry:
         add_warning(new_state, "LLM запросила больше evidence, но лимит agent loop/time budget исчерпан")
+    add_trace(new_state, "agent_loop_controller", decision="continue", retry_count=retry_count)
     return new_state
 
 
@@ -399,6 +489,7 @@ async def literature_grouper(state: MKGAgentState) -> MKGAgentState:
             for item in (new_state.get("evidence") or [])[:8]
         ]
     new_state["source_groups"] = source_groups
+    add_trace(new_state, "literature_grouper", source_group_count=len(source_groups))
     return new_state
 
 
@@ -414,6 +505,12 @@ async def technology_coverage_analyzer(state: MKGAgentState) -> MKGAgentState:
             "unknown": [],
         }
     new_state["technology_coverage"] = coverage
+    add_trace(
+        new_state,
+        "technology_coverage_analyzer",
+        domestic_only=len(coverage.get("domestic_only") or []),
+        foreign_only=len(coverage.get("foreign_only") or []),
+    )
     return new_state
 
 
@@ -422,6 +519,12 @@ async def consensus_detector(state: MKGAgentState) -> MKGAgentState:
     analysis = normalize_dict(new_state.get("analysis"))
     new_state["consensus_points"] = normalize_list(analysis.get("consensus_points"))
     new_state["disagreement_zones"] = normalize_list(analysis.get("disagreement_zones"))
+    add_trace(
+        new_state,
+        "consensus_detector",
+        consensus_count=len(new_state["consensus_points"]),
+        disagreement_count=len(new_state["disagreement_zones"]),
+    )
     return new_state
 
 
@@ -436,6 +539,58 @@ async def pattern_discovery(state: MKGAgentState) -> MKGAgentState:
         if count > 1:
             patterns.append({"pattern": key, "supporting_evidence_count": count})
     new_state["patterns"] = patterns
+    add_trace(new_state, "pattern_discovery", pattern_count=len(patterns))
+    return new_state
+
+
+async def hypothesis_critic(state: MKGAgentState, settings: AgentSettings) -> MKGAgentState:
+    new_state = dict(state)
+    result = normalize_dict(new_state.get("mode_result"))
+    hypotheses = normalize_list(result.get("hypotheses"))
+    problems: list[str] = []
+    if not hypotheses:
+        problems.append("нет гипотез")
+    for idx, item in enumerate(hypotheses, start=1):
+        if not item.get("supporting_evidence"):
+            problems.append(f"гипотеза {idx}: нет supporting_evidence")
+        if not item.get("next_experiments"):
+            problems.append(f"гипотеза {idx}: нет next_experiments")
+        try:
+            confidence = float(item.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0
+        if confidence <= 0:
+            problems.append(f"гипотеза {idx}: нет численной confidence")
+        if not item.get("rank"):
+            problems.append(f"гипотеза {idx}: нет rank")
+
+    refinement_count = int(new_state.get("hypothesis_refinement_count") or 0)
+    can_refine = refinement_count < settings.max_hypothesis_refinements and remaining_seconds(
+        new_state,
+        settings.timeout_seconds,
+        reserve=0.7,
+    ) > 0.3
+    if problems and can_refine:
+        new_state["hypothesis_refinement_count"] = refinement_count + 1
+        new_state["hypothesis_refinement_decision"] = "refine"
+        new_state["builder_feedback"] = (
+            "Critic Agent нашёл проблемы: "
+            + "; ".join(problems[:8])
+            + ". Перегенерируй гипотезы: у каждой должны быть supporting_evidence, confidence, rank и next_experiments."
+        )
+        add_trace(
+            new_state,
+            "hypothesis_critic",
+            decision="refine",
+            problem_count=len(problems),
+            refinement_count=new_state["hypothesis_refinement_count"],
+        )
+        return new_state
+
+    new_state["hypothesis_refinement_decision"] = "continue"
+    if problems:
+        add_warning(new_state, "Critic Agent нашёл проблемы, но лимит доработки/time budget исчерпан")
+    add_trace(new_state, "hypothesis_critic", decision="continue", problem_count=len(problems))
     return new_state
 
 
@@ -453,6 +608,7 @@ async def expert_finder(state: MKGAgentState) -> MKGAgentState:
                 labs.append(neighbor)
     new_state["related_experts"] = experts
     new_state["related_labs"] = labs
+    add_trace(new_state, "expert_finder", expert_count=len(experts), lab_count=len(labs))
     return new_state
 
 
@@ -504,6 +660,12 @@ async def ranking_agent(state: MKGAgentState) -> MKGAgentState:
         ]
     result["recommendations"] = recommendations
     new_state["mode_result"] = result
+    add_trace(
+        new_state,
+        "ranking_agent",
+        hypothesis_count=len(normalize_list(result.get("hypotheses"))),
+        recommendation_count=len(recommendations),
+    )
     return new_state
 
 
@@ -529,6 +691,8 @@ async def llm_mode_builder(
         "consensus_points": new_state.get("consensus_points", []),
         "disagreement_zones": new_state.get("disagreement_zones", []),
         "patterns": new_state.get("patterns", []),
+        "builder_feedback": new_state.get("builder_feedback"),
+        "previous_result": new_state.get("mode_result", {}),
         "limit": new_state.get("limit", 5),
     }
     try:
@@ -543,6 +707,14 @@ async def llm_mode_builder(
     except Exception as exc:
         return _fatal(new_state, "llm_mode_builder", f"LLM error in llm_mode_builder: {exc}")
     new_state["mode_result"] = result if isinstance(result, dict) else {}
+    add_trace(
+        new_state,
+        "llm_mode_builder",
+        mode=new_state.get("mode"),
+        hypothesis_count=len(normalize_list(new_state["mode_result"].get("hypotheses"))),
+        issue_count=len(normalize_list(new_state["mode_result"].get("issues"))),
+        recommendation_count=len(normalize_list(new_state["mode_result"].get("recommendations"))),
+    )
     return new_state
 
 
@@ -576,6 +748,9 @@ async def final_report_builder(state: MKGAgentState) -> MKGAgentState:
         "recommendations": normalize_list(result.get("recommendations")),
         "literature_review": normalize_dict(result.get("literature_review")),
         "evidence": normalize_list(new_state.get("evidence")),
+        "trace": normalize_list(new_state.get("trace")),
         "warnings": warnings,
     }
+    add_trace(new_state, "final_report_builder", warning_count=len(warnings))
+    new_state["final_response"]["trace"] = normalize_list(new_state.get("trace"))
     return new_state

@@ -22,6 +22,11 @@ def add_warning(state: MKGAgentState, message: str) -> None:
         warnings.append(message)
 
 
+def add_trace(state: MKGAgentState, step: str, **data: Any) -> None:
+    trace = state.setdefault("trace", [])
+    trace.append({"step": step, "elapsed_ms": elapsed_ms(state), **data})
+
+
 def text_from_props(props: dict[str, Any]) -> str:
     for key in ("raw_text_ru", "quote", "text", "name_ru", "title_ru", "value", "name", "title"):
         value = props.get(key)

@@ -8,6 +8,7 @@ from app.llm import AgentLLM
 from app.nodes import (
     agent_loop_controller,
     capabilities_check,
+    choose_hypothesis_refinement,
     choose_loop,
     choose_mode,
     consensus_detector,
@@ -16,6 +17,7 @@ from app.nodes import (
     expert_finder,
     final_report_builder,
     graph_context_loader,
+    hypothesis_critic,
     literature_grouper,
     llm_evidence_analyzer,
     llm_mode_builder,
@@ -64,6 +66,9 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     async def _llm_mode_builder(state: MKGAgentState) -> MKGAgentState:
         return await llm_mode_builder(state, llm, settings)
 
+    async def _hypothesis_critic(state: MKGAgentState) -> MKGAgentState:
+        return await hypothesis_critic(state, settings)
+
     graph.add_node("capabilities_check", _capabilities_check)
     graph.add_node("llm_scope_planner", _llm_scope_planner)
     graph.add_node("document_selector", _document_selector)
@@ -79,6 +84,7 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     graph.add_node("pattern_discovery", pattern_discovery)
     graph.add_node("audit_mode_builder", _llm_mode_builder)
     graph.add_node("hypothesis_mode_builder", _llm_mode_builder)
+    graph.add_node("hypothesis_critic", _hypothesis_critic)
     graph.add_node("literature_review_mode_builder", _llm_mode_builder)
     graph.add_node("recommendation_mode_builder", _llm_mode_builder)
     graph.add_node("expert_finder", expert_finder)
@@ -130,7 +136,15 @@ def build_agent_graph(settings: AgentSettings, gateway: GatewayClient, llm: Agen
     )
     graph.add_edge("pattern_discovery", "hypothesis_mode_builder")
     graph.add_edge("audit_mode_builder", "final_report_builder")
-    graph.add_edge("hypothesis_mode_builder", "expert_finder")
+    graph.add_edge("hypothesis_mode_builder", "hypothesis_critic")
+    graph.add_conditional_edges(
+        "hypothesis_critic",
+        choose_hypothesis_refinement,
+        {
+            "refine": "hypothesis_mode_builder",
+            "continue": "expert_finder",
+        },
+    )
     graph.add_edge("literature_review_mode_builder", "final_report_builder")
     graph.add_edge("recommendation_mode_builder", "expert_finder")
     graph.add_edge("expert_finder", "ranking_agent")

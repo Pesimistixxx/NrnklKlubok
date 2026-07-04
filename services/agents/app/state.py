@@ -21,9 +21,13 @@ class MKGAgentState(TypedDict, total=False):
     limit: int
     retry_count: int
     loop_decision: Literal["retry", "continue"]
+    hypothesis_refinement_count: int
+    hypothesis_refinement_decision: Literal["refine", "continue"]
     current_search_query: str | None
     used_search_queries: list[str]
+    builder_feedback: str | None
     warnings: list[str]
+    trace: list[dict[str, Any]]
     fatal_error: str | None
     timed_out_node: str | None
 

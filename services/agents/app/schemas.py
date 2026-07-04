@@ -31,6 +31,7 @@ class AgentRunOut(BaseModel):
     recommendations: list[dict[str, Any]] = Field(default_factory=list)
     literature_review: dict[str, Any] = Field(default_factory=dict)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    trace: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 

@@ -43,6 +43,14 @@ class GatewayClient:
             },
         )
 
+    async def nodes(self, doc_id: str, query: str, limit: int) -> dict[str, Any]:
+        doc = quote(doc_id, safe="")
+        return await self._get(
+            f"/api/v1/agents/documents/{doc}/nodes",
+            q=query,
+            limit=limit,
+        )
+
     async def node(self, doc_id: str, node_id: str) -> dict[str, Any]:
         doc = quote(doc_id, safe="")
         node = quote(node_id, safe="")
