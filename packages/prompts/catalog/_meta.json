@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "description": "MKG prompt catalog — этапы пайплайна ingestion / extraction",
+  "model_aliases": {
+    "yandexgpt-5.1": "yandexgpt",
+    "yandexgpt-5-lite": "yandexgpt",
+    "aliceai-llm": "yandexgpt"
+  }
+}

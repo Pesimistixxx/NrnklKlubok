@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MKG — AI-карта знаний</title>
+  <link rel="stylesheet" href="/static/css/app.css?v=15" />
+</head>
+<body>
+  <div class="app sidebar-hidden" id="appRoot">
+    <main class="main-area">
+      <nav class="main-nav" role="navigation" aria-label="Разделы">
+        <button class="page-nav-link active" data-page="home" type="button">Главная</button>
+        <button class="page-nav-link" data-page="docs" type="button">Документы</button>
+        <button class="page-nav-link" data-page="qdrant" type="button">Qdrant</button>
+        <button class="page-nav-link" data-page="settings" type="button">Настройки</button>
+      </nav>
+
+      <section class="page page-home" id="pageHome">
+        <div class="about-hero">
+          <h1>Единая карта знаний R&amp;D</h1>
+          <p class="about-lead">Загрузите документ → постройте граф → индексируйте в Qdrant.</p>
+          <p class="muted project-stage-line" id="projectStageLine">Этап: загрузка…</p>
+        </div>
+        <div class="upload-panel">
+          <h2>Загрузить документ</h2>
+          <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
+          <input type="hidden" id="classification" value="открытый" />
+          <div class="drop" id="drop" role="button" tabindex="0">
+            <div id="dropText">Перетащите файл или нажмите для выбора</div>
+          </div>
+          <div class="upload-actions">
+            <button class="btn btn-ghost btn-small" id="pickBtn" type="button">Выбрать</button>
+            <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled>Обработать</button>
+          </div>
+          <p class="muted" id="formatsHint">…</p>
+          <div class="error-box" id="uploadError"></div>
+        </div>
+      </section>
+
+      <section class="page page-docs hidden" id="pageDocs">
+        <div class="page-head">
+          <h1>Документы</h1>
+          <p class="muted page-lead">Выберите документ — откроется карточка, граф по кнопке «Посмотреть граф».</p>
+        </div>
+        <div class="docs-page-toolbar">
+          <input type="search" class="doc-list-filter" id="docListFilter" placeholder="Фильтр по имени…" autocomplete="off" />
+          <button class="btn btn-ghost btn-small" id="viewAllGraphBtn" type="button">Полный граф всех документов</button>
+        </div>
+        <div class="docs-page-list doc-nav" id="docs"><div class="muted">Загрузка…</div></div>
+      </section>
+
+      <!-- Страница документа / полный граф -->
+      <section class="page page-graph-shell hidden" id="pageGraphShell">
+        <div class="doc-page-bar" id="docPageBar">
+          <div class="doc-page-bar-top">
+            <button class="btn btn-ghost btn-small" id="docBackBtn" type="button">← Документы</button>
+            <div class="doc-page-info">
+              <h1 id="docPageTitle">—</h1>
+              <span class="badge s-uploaded" id="docPageBadge">—</span>
+              <span class="muted doc-page-meta" id="docPageMeta">0 узл · 0 св</span>
+            </div>
+          </div>
+          <div class="doc-page-actions">
+            <button class="btn btn-primary btn-small" id="docPrimaryBtn" type="button" data-action="build">Построить граф</button>
+            <button class="btn btn-ghost btn-small doc-only-action" id="docReprocessBtn" type="button">↺ OCR</button>
+            <button class="btn btn-ghost btn-small doc-only-action" id="docMdBtn" type="button">Markdown</button>
+            <button class="btn btn-ghost btn-small doc-only-action" id="docLogsBtn" type="button">Логи</button>
+            <button class="btn btn-ghost btn-small" id="docNeo4jBtn" type="button">Neo4j ↗</button>
+            <button class="btn btn-danger btn-small doc-only-action hidden" id="docStopBtn" type="button">Стоп</button>
+          </div>
+        </div>
+        <div class="doc-page-panel hidden" id="docMdPanel">
+          <h4>Markdown</h4>
+          <div class="preview md-panel doc-md-panel empty" id="previewMd">—</div>
+        </div>
+        <div class="doc-page-panel hidden" id="docLogsPanel">
+          <h4>Логи пайплайна</h4>
+          <div class="preview logs-panel doc-logs-panel empty" id="previewLogs">—</div>
+        </div>
+        <div class="page-head graph-page-head hidden" id="graphPageHead">
+          <h1 id="graphPageTitle">Граф знаний</h1>
+          <p class="muted page-lead" id="graphPageLead">Компактный режим. Перетаскивайте узлы; тяните нижний край для изменения высоты.</p>
+        </div>
+        <div class="graphs-empty hidden" id="graphsEmpty">
+          <p class="muted">Нет графа. Выберите документ во вкладке «Документы» и нажмите «Построить граф».</p>
+        </div>
+        <div class="graphs-workspace hidden" id="graphsWorkspace">
+          <div class="live-extract hidden" id="liveExtract">
+            <div class="live-pipeline" id="livePipeline"></div>
+            <div class="live-step" id="liveStep">Извлечение…</div>
+            <div class="live-rels" id="liveRels"></div>
+          </div>
+          <div class="graph-primary graph-page-primary">
+            <div class="graph-canvas-wrap" id="graphCanvasWrap">
+              <div id="graphCanvas" class="graph-canvas"></div>
+              <div class="graph-resize-handle" id="graphResizeHandle" title="Потяните для изменения высоты"></div>
+            </div>
+            <div class="graph-toolbar">
+              <div class="graph-toolbar-left">
+                <div class="graph-density-toggle">
+                  <button type="button" class="view-btn active" id="graphCompactBtn">Компактный</button>
+                  <button type="button" class="view-btn" id="graphFullBtn">Полный</button>
+                </div>
+                <div class="layer-filters" id="layerFilters"></div>
+                <button type="button" class="layer-chip cross-layer-toggle" id="crossLayerToggle">Межслойные</button>
+                <button type="button" class="layer-chip" id="toggleNodeListBtn">Список узлов</button>
+              </div>
+              <div class="graph-toolbar-right">
+                <div class="graph-view-toggle">
+                  <button type="button" class="view-btn active" id="viewMapBtn">Карта</button>
+                  <button type="button" class="view-btn" id="viewRelsBtn">Связи</button>
+                </div>
+                <button class="btn btn-ghost btn-small" id="originalGraphBtn" type="button">Сброс</button>
+                <button class="btn btn-ghost btn-small" id="headerNeo4jBtn" type="button">Neo4j ↗</button>
+              </div>
+            </div>
+            <div class="graph-map-view graph-node-list-hidden" id="graphMapView">
+              <div class="graph-node-list" id="graphNodeList"></div>
+            </div>
+            <div class="graph-rels-view hidden" id="graphRelsView">
+              <div class="graph-rels-head"><span id="graphRelsCount" class="muted">0 связей</span></div>
+              <div class="graph-rels-list" id="graphRelsList"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="page page-qdrant hidden" id="pageQdrant">
+        <div class="page-head">
+          <h1>Qdrant</h1>
+          <p class="muted page-lead">Векторный индекс L3/L4 — точки, статус, логи индексации (как Neo4j).</p>
+        </div>
+        <div class="qdrant-doc-picker">
+          <label class="small" for="qdrantDocFilter">Документ</label>
+          <select id="qdrantDocFilter"></select>
+        </div>
+        <section class="l3-section qdrant-search-section">
+          <h3>Семантический поиск</h3>
+          <form class="search-form" id="qdrantSearchForm">
+            <input type="search" id="qdrantSearchQuery" placeholder="Запрос по документу…" autocomplete="off" />
+            <button class="btn btn-primary btn-small" type="submit">Найти</button>
+          </form>
+          <p class="muted search-meta" id="qdrantSearchMeta"></p>
+          <div class="search-results qdrant-search-results" id="qdrantSearchResults"></div>
+        </section>
+        <div class="l3-panel">
+          <section class="l3-section">
+            <div class="l3-stats-grid" id="l3Stats">—</div>
+            <div class="embedding-status-line" id="l3EmbeddingStatus">Загрузка…</div>
+            <pre class="qdrant-info muted" id="l3QdrantInfo"></pre>
+            <div class="l3-actions">
+              <button class="btn btn-primary btn-small" id="l3IndexBtn" type="button">Индексировать</button>
+              <button class="btn btn-ghost btn-small" id="l3IndexAllBtn" type="button">Все документы</button>
+            </div>
+            <div class="qdrant-index-log" id="qdrantIndexLog"></div>
+          </section>
+          <section class="l3-section">
+            <h3>Карта точек Qdrant <span class="muted" id="qdrantClusterCount">(0)</span></h3>
+            <div class="qdrant-cluster-map" id="qdrantClusterMap">
+              <p class="muted">Проиндексируйте документы — точки появятся на карте кластера.</p>
+            </div>
+          </section>
+          <section class="l3-section">
+            <h3>Точки документа <span class="muted" id="qdrantPointsCount">(0)</span></h3>
+            <div class="qdrant-points-list" id="qdrantPointsList">
+              <p class="muted">Проиндексируйте документ — точки появятся здесь.</p>
+            </div>
+          </section>
+          <details class="settings-advanced qdrant-advanced">
+            <summary>Диагностика и очистка</summary>
+            <button class="btn btn-ghost btn-small" id="diagBtn" type="button">Диагностика API</button>
+            <div class="diag-list" id="diagList"></div>
+            <button class="btn btn-danger btn-small" id="clearDbBtn" type="button">Очистить базу</button>
+          </details>
+        </div>
+      </section>
+
+      <section class="page page-settings hidden" id="pageSettings">
+        <div class="settings-page">
+          <h1>Настройки моделей</h1>
+          <p class="muted page-lead">Модель для каждого сервиса пайплайна. Сохраняется в Postgres и применяется к новым задачам.</p>
+          <div class="settings-grid">
+            <div class="settings-section">
+              <h2>Извлечение графа</h2>
+              <p class="muted">LLM для extraction L1–L6 и фильтра чанков при ingestion.</p>
+              <label class="small" for="llmModel">Модель LLM</label>
+              <select id="llmModel"></select>
+            </div>
+            <div class="settings-section">
+              <h2>OCR (ingestion)</h2>
+              <p class="muted">Распознавание PDF и изображений. «auto» — выбор по типу файла.</p>
+              <label class="small" for="ocrModel">Модель OCR</label>
+              <select id="ocrModel"></select>
+            </div>
+            <div class="settings-section">
+              <h2>Qdrant — индексация</h2>
+              <p class="muted">Embedding doc при записи точек в коллекции.</p>
+              <label class="small" for="embDocModel">Embedding doc</label>
+              <select id="embDocModel"></select>
+            </div>
+            <div class="settings-section">
+              <h2>Qdrant — поиск</h2>
+              <p class="muted">Embedding query при семантическом поиске.</p>
+              <label class="small" for="embQueryModel">Embedding query</label>
+              <select id="embQueryModel"></select>
+            </div>
+          </div>
+          <div class="settings-actions">
+            <button class="btn btn-primary btn-small" id="saveConfigBtn" type="button">Сохранить</button>
+            <span class="settings-save-status muted" id="settingsSaveStatus"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="detail-panel hidden" id="detailPanel">
+      <div class="detail-head">
+        <h3>Узел</h3>
+        <button class="btn-icon" id="closeDetailBtn" type="button" aria-label="Закрыть">×</button>
+      </div>
+      <div class="detail-body" id="detailBody"></div>
+    </aside>
+  </div>
+
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="/static/js/app.js?v=15"></script>
+</body>
+</html>

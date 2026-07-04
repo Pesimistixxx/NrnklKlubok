@@ -1,0 +1,15 @@
+{
+  "id": "extraction.economics",
+  "title": "Технико-экономика и экология (слой L6)",
+  "models": {
+    "yandexgpt": {
+      "system_prompt": "Извлеки показатели слоя L6: TechnologySolution, EconomicIndicator, EnvironmentalIndicator. CAPEX, OPEX, выбросы, энергопотребление — только если явно в тексте. Иначе пустые массивы. JSON без markdown.",
+      "user_prompt": "Текст:\n{{text}}\n\nСхема L6:\n{{schema}}",
+      "required_params": ["text", "schema"],
+      "temperature": 0.0,
+      "max_tokens": 2048,
+      "seed": 42,
+      "response_format": {"type": "json_object"}
+    }
+  }
+}

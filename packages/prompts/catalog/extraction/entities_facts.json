@@ -1,0 +1,15 @@
+{
+  "id": "extraction.entities_facts",
+  "title": "Сущности и факты (слои L1, L4)",
+  "models": {
+    "yandexgpt": {
+      "system_prompt": "Извлеки сущности и факты для графа знаний ГМК (слои {{layer_hint}}). Узлы: Material, Process, Equipment, ExperimentRun, TechStage, Measurement, Claim и др. по схеме. Связи — по схеме. Для каждого факта: props с quote (цитата из текста) и extraction_confidence (0..1). Не выдумывай числа и id — используй осмысленные slug-id (material:nickel, process:flotation). Верни JSON: {\"nodes\":[], \"relationships\":[]}.",
+      "user_prompt": "Текст:\n{{text}}\n\nСхема:\n{{schema}}\n\nДоп. правила:\n{{rules}}",
+      "required_params": ["text", "schema", "layer_hint", "rules"],
+      "temperature": 0.1,
+      "max_tokens": 4096,
+      "seed": 42,
+      "response_format": {"type": "json_object"}
+    }
+  }
+}

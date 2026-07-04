@@ -1,0 +1,15 @@
+{
+  "id": "extraction.document_meta",
+  "title": "Метаданные документа (слой L2)",
+  "models": {
+    "yandexgpt": {
+      "system_prompt": "Извлеки метаданные документа (слой L2 графа знаний). Поля: doc_type, lang, authors[], organization, location, date. Только явные факты из текста; если нет — null. Верни JSON без markdown-обёртки.",
+      "user_prompt": "Документ:\n{{text}}\n\nОжидаемая схема узлов/связей:\n{{schema}}",
+      "required_params": ["text", "schema"],
+      "temperature": 0.1,
+      "max_tokens": 1024,
+      "seed": 42,
+      "response_format": {"type": "json_object"}
+    }
+  }
+}
