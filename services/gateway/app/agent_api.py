@@ -14,9 +14,9 @@ from mkg_core.annotated_md import _LABEL_LAYER, _LAYER_TITLES, inject_l3_markers
 from mkg_core.embeddings import (
     embedding_status,
     index_document_graph,
-    list_all_indexed_points,
     list_indexed_points,
     search_document,
+    search_global,
 )
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
 from mkg_core.layer_pipeline import LAYER_ORDER, L5_LABELS, build_layer_pipeline
@@ -42,6 +42,7 @@ from app.schemas import (
     AgentSearchOut,
     AgentSearchRequest,
     AgentTextOut,
+    GlobalSearchRequest,
     GraphNode,
     GraphRelationship,
     LayerPipelineOut,
@@ -553,6 +554,29 @@ async def agent_search(doc_id: str, body: AgentSearchRequest) -> AgentSearchOut:
 
 
 @router.post(
+    "/search",
+    response_model=AgentSearchOut,
+    summary="Глобальный семантический поиск по Qdrant",
+)
+async def agent_global_search(body: GlobalSearchRequest) -> AgentSearchOut:
+    """Поиск по всем проиндексированным документам (или по списку document_ids)."""
+    result = await search_global(
+        body.query,
+        limit=body.limit,
+        mode=body.mode,  # type: ignore[arg-type]
+        layers=body.layers,
+        document_ids=body.document_ids,
+    )
+    return AgentSearchOut(
+        document_id=None,
+        query=body.query,
+        mode=result["mode"],
+        hits=result["hits"],
+        note=result.get("note"),
+    )
+
+
+@router.post(
     "/documents/{doc_id}/embeddings/index",
     summary="Проиндексировать TextParagraph и Claim в Qdrant",
 )
@@ -628,7 +652,7 @@ async def get_document_qdrant_points(
 async def get_all_qdrant_points(
     limit: int = Query(500, ge=1, le=2000),
 ) -> AgentQdrantPointsOut:
-    raw = await list_all_indexed_points(limit=limit)
+    raw = await list_indexed_points(None, limit=limit)
     points = [AgentQdrantPointOut(**p) for p in raw]
     return AgentQdrantPointsOut(document_id="__all__", total=len(points), points=points)
 

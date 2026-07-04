@@ -16,6 +16,8 @@ const els = {
   pageDocs: $("pageDocs"),
   pageGraphShell: $("pageGraphShell"),
   pageQdrant: $("pageQdrant"),
+  pageChats: $("pageChats"),
+  pageSearch: $("pageSearch"),
   pageSettings: $("pageSettings"),
   projectStageLine: $("projectStageLine"),
   viewAllGraphBtn: $("viewAllGraphBtn"),
@@ -24,7 +26,9 @@ const els = {
   docPageTitle: $("docPageTitle"),
   docPageBadge: $("docPageBadge"),
   docPageMeta: $("docPageMeta"),
+  docMetaGrid: $("docMetaGrid"),
   docPrimaryBtn: $("docPrimaryBtn"),
+  docRebuildGraphBtn: $("docRebuildGraphBtn"),
   docReprocessBtn: $("docReprocessBtn"),
   docMdBtn: $("docMdBtn"),
   docLogsBtn: $("docLogsBtn"),
@@ -32,7 +36,10 @@ const els = {
   docStopBtn: $("docStopBtn"),
   docMdPanel: $("docMdPanel"),
   docLogsPanel: $("docLogsPanel"),
-  previewMd: $("previewMd"),
+  previewMdRender: $("previewMdRender"),
+  previewMdSource: $("previewMdSource"),
+  mdViewRenderBtn: $("mdViewRenderBtn"),
+  mdViewSourceBtn: $("mdViewSourceBtn"),
   previewLogs: $("previewLogs"),
   logsPreview: $("previewLogs"),
   docListFilter: $("docListFilter"),
@@ -91,6 +98,13 @@ const els = {
   detailPanel: $("detailPanel"),
   detailBody: $("detailBody"),
   closeDetailBtn: $("closeDetailBtn"),
+  globalSearchForm: $("globalSearchForm"),
+  globalSearchQuery: $("globalSearchQuery"),
+  globalSearchDoc: $("globalSearchDoc"),
+  globalSearchResults: $("globalSearchResults"),
+  globalSearchMeta: $("globalSearchMeta"),
+  homeTabQuery: $("homeTabQuery"),
+  homeTabUpload: $("homeTabUpload"),
 };
 
 /** @type {HTMLElement|null} */
@@ -121,15 +135,21 @@ const GRAPH_ALL_ID = "__all__";
 const NEO4J_BROWSER_URL = "http://localhost:7474/browser/";
 
 const STEP_RU = {
-  extraction: "запуск",
+  ingestion: "OCR / ingestion",
+  reprocess: "повтор OCR",
+  extraction: "извлечение",
   layer_L3: "текст L3",
   layer_L5: "доступ L5",
   layer_L2_L6: "контекст и ТЭП",
   layer_L2: "контекст L2",
   layer_L6: "ТЭП L6",
   layer_L1_L4: "сущности и факты",
-  neo4j_load: "Neo4j",
+  neo4j_load: "загрузка Neo4j",
+  extraction_failed: "ошибка extraction",
+  ingestion_failed: "ошибка ingestion",
   cancelling: "остановка",
+  extraction_cancelled: "остановлено",
+  extraction_empty: "пустой граф",
 };
 
 const LAYER_STATUS_RU = {
@@ -143,13 +163,16 @@ const LAYER_STATUS_RU = {
 
 let selectedFiles = [];
 let selectedDoc = null;
-let currentPage = "home";
+let currentPage = "chats";
 let graphScope = "doc";
 let docPanelMode = null;
 let docListFilterText = "";
 let graphNodeListVisible = false;
 let lastQdrantIndexLog = "";
 let markdownClean = "";
+let markdownMarked = "";
+let mdViewMode = "render";
+const ACTIVE_DOC_STATUSES = new Set(["uploaded", "processing", "extracting"]);
 let graphLayerFilter = "all";
 let showCrossLayerOnly = false;
 let graphDensityMode = "compact";
@@ -170,6 +193,89 @@ let docStatusCache = new Map();
 let indexedDocsSet = new Set(JSON.parse(localStorage.getItem("mkg_indexed_docs") || "[]"));
 let lastLogsDocId = null;
 let lastLogsKey = "";
+
+let nodeFieldHints = {};
+
+async function loadNodeFieldHints() {
+  try {
+    const r = await fetch(`${API}/ontology/node-fields`);
+    if (r.ok) nodeFieldHints = await r.json();
+  } catch { /* ignore */ }
+}
+
+function propHasValue(v) {
+  if (v === null || v === undefined) return false;
+  if (typeof v === "string") return v.trim().length > 0;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === "object") return Object.keys(v).length > 0;
+  return true;
+}
+
+function formatPropValue(v) {
+  if (!propHasValue(v)) return '<span class="prop-empty-val">— не задано</span>';
+  if (Array.isArray(v)) {
+    return v.map((x) => `<span class="prop-tag">${esc(String(x))}</span>`).join(" ");
+  }
+  if (typeof v === "object") {
+    return `<pre class="prop-json">${esc(JSON.stringify(v, null, 2))}</pre>`;
+  }
+  const s = String(v);
+  if (s.length > 400) return `<div class="prop-long">${esc(s)}</div>`;
+  return esc(s);
+}
+
+function renderNodePropsSection(label, props) {
+  const hints = nodeFieldHints[label] || [];
+  const skip = new Set(["id"]);
+  const actualKeys = Object.keys(props || {}).filter((k) => !skip.has(k) && propHasValue(props[k]));
+  const ordered = [];
+  hints.forEach((k) => { if (!skip.has(k) && !ordered.includes(k)) ordered.push(k); });
+  actualKeys.forEach((k) => { if (!ordered.includes(k)) ordered.push(k); });
+
+  if (!ordered.length) {
+    return '<p class="muted">Нет свойств в payload узла</p>';
+  }
+
+  let expectedFilled = 0;
+  const hintSet = new Set(hints);
+  const rows = ordered.map((key) => {
+    const has = propHasValue(props[key]);
+    const expected = hintSet.has(key);
+    if (expected && has) expectedFilled += 1;
+    let rowCls = "prop-row";
+    if (has && expected) rowCls += " prop-ok";
+    else if (has && !expected) rowCls += " prop-extra";
+    else if (!has && expected) rowCls += " prop-missing";
+    else rowCls += " prop-empty";
+    const badge = expected
+      ? (has ? '<span class="prop-badge ok">✓</span>' : '<span class="prop-badge miss">ожидается</span>')
+      : (has ? '<span class="prop-badge extra">+</span>' : "");
+    return `<div class="${rowCls}"><dt>${esc(key)} ${badge}</dt><dd>${formatPropValue(props[key])}</dd></div>`;
+  }).join("");
+
+  const hintCount = hints.filter((k) => !skip.has(k)).length;
+  const summary = hintCount
+    ? `<p class="detail-props-summary">Заполнено <b>${expectedFilled}/${hintCount}</b> ожидаемых · всего полей <b>${actualKeys.length}</b></p>`
+    : `<p class="detail-props-summary">Полей в узле: <b>${actualKeys.length}</b> (схема для ${esc(label)} не задана)</p>`;
+
+  return `${summary}<dl class="detail-props detail-props-full">${rows}</dl>`;
+}
+
+function renderRelBlock(rels, direction) {
+  if (!rels.length) return '<p class="muted">—</p>';
+  return rels.map((r) => {
+    const other = direction === "in" ? (r.from || r.from_) : r.to;
+    const arrow = direction === "in"
+      ? `${esc(other)} → <b>${esc(r.type)}</b>`
+      : `<b>${esc(r.type)}</b> → ${esc(r.to)}`;
+    const rp = r.props || {};
+    const rpKeys = Object.keys(rp).filter((k) => propHasValue(rp[k]));
+    const rpHtml = rpKeys.length
+      ? `<div class="detail-rel-props">${rpKeys.map((k) => `<span><i>${esc(k)}</i>: ${esc(typeof rp[k] === "object" ? JSON.stringify(rp[k]) : rp[k])}</span>`).join(" · ")}</div>`
+      : "";
+    return `<div class="detail-rel-item">${arrow}${rpHtml}</div>`;
+  }).join("");
+}
 
 function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
@@ -197,17 +303,182 @@ function stepLabel(step) {
   return STEP_RU[step] || step;
 }
 
-function setMarkdownViews(clean, _marked, isEmpty) {
-  markdownClean = clean || "";
-  const el = els.previewMd;
-  if (!el) return;
-  if (isEmpty || !markdownClean.trim()) {
-    el.textContent = clean || "—";
-    el.className = "preview md-panel doc-md-panel empty";
-  } else {
-    el.textContent = markdownClean.slice(0, 80000);
-    el.className = "preview md-panel doc-md-panel md-clean-view";
+function formatBytes(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return "—";
+  if (v < 1024) return `${v} Б`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} КБ`;
+  return `${(v / (1024 * 1024)).toFixed(2)} МБ`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString("ru-RU");
+}
+
+function renderDocMetadata(data) {
+  if (!els.docMetaGrid || !data || graphScope === "all") {
+    els.docMetaGrid?.classList.add("hidden");
+    return;
   }
+  const rows = [
+    ["Тип", data.doc_type || "—"],
+    ["MIME", data.mime_type || "—"],
+    ["Классификация", data.classification || "—"],
+    ["Организация", data.organization || "—"],
+    ["Язык", data.lang || "—"],
+    ["Размер", formatBytes(data.size_bytes)],
+    ["Загружен", formatDateTime(data.upload_date)],
+    ["SHA-256", data.hash_sum ? `${data.hash_sum.slice(0, 12)}…` : "—"],
+    ["Шаг", data.step ? (STEP_RU[data.step] || data.step) : "—"],
+  ];
+  els.docMetaGrid.innerHTML = rows.map(
+    ([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`,
+  ).join("");
+  els.docMetaGrid.classList.remove("hidden");
+}
+
+function applyMarkdownFromPreview(data) {
+  if (!data) return;
+  if (data.markdown && data.markdown.trim()) {
+    setMarkdownViews(data.markdown, data.markdown_marked || data.markdown, false);
+    return;
+  }
+  const stepHint = data.step ? ` · ${STEP_RU[data.step] || data.step}` : "";
+  if (data.status === "processing") {
+    setMarkdownViews(`OCR → Markdown${stepHint}…`, "", true);
+  } else if (data.status === "uploaded") {
+    setMarkdownViews("В очереди на обработку…", "", true);
+  } else if (data.status === "extracting") {
+    setMarkdownViews(`Извлечение графа${stepHint}…`, "", true);
+  } else if (data.status === "failed") {
+    setMarkdownViews(data.error ? `Ошибка: ${data.error}` : "Ошибка обработки.", "", true);
+  } else if (data.status === "md_ready" || data.status === "loaded") {
+    setMarkdownViews("Markdown пуст или ещё не сохранён.", "", true);
+  } else {
+    setMarkdownViews("Ожидание worker…", "", true);
+  }
+}
+
+async function reloadGraphForDoc(docId, { silent = false } = {}) {
+  if (!docId) return;
+  try {
+    const gr = await fetch(`${API}/graph/documents/${encodeURIComponent(docId)}`);
+    if (!gr.ok) return;
+    const g = await gr.json();
+    graphData = {
+      nodes: g.nodes || [],
+      relationships: (g.relationships || []).map((rel) => ({
+        type: rel.type,
+        from: rel.from || rel.from_,
+        to: rel.to,
+        props: rel.props || {},
+      })),
+    };
+    updateCrossLayerStat();
+    updatePreviewMeta(docId);
+    if (graphVisible) renderGraphViews();
+  } catch {
+    if (!silent) { /* ignore */ }
+  }
+}
+
+async function applyPreviewUpdate(data, opts = {}) {
+  if (!data) return;
+  const docId = data.document_id || data.id || selectedDoc;
+  const prevStatus = docStatusCache.get(docId);
+
+  updateExtractControls(data.status, data.step);
+  updateDocPageBar(data);
+  renderDocMetadata(data);
+  applyMarkdownFromPreview(data);
+
+  if (data.error) showBox(els.uploadError, data.error);
+  else if (opts.clearError) showBox(els.uploadError, "");
+
+  docStatusCache.set(docId, data.status);
+
+  const graphCount = data.graph_nodes || 0;
+  const hadGraph = graphData.nodes.length > 0;
+  if (graphCount > 0 && (!hadGraph || opts.forceGraph || prevStatus === "extracting")) {
+    await reloadGraphForDoc(docId, { silent: true });
+  } else if (graphCount === 0 && hadGraph && data.status === "extracting") {
+    graphData = { nodes: [], relationships: [] };
+    updateCrossLayerStat();
+    updatePreviewMeta(docId);
+  }
+
+  if (docPanelMode === "logs" && ACTIVE_DOC_STATUSES.has(data.status)) {
+    loadLogs(docId, { silent: true });
+  }
+  if (data.status === "extracting" && (currentPage === "doc" || currentPage === "graphAll")) {
+    refreshLiveExtract(docId);
+  }
+
+  const finishedExtract =
+    prevStatus === "extracting"
+    && (data.status === "loaded" || data.status === "md_ready")
+    && graphCount > 0;
+  if (finishedExtract) autoIndexAfterExtraction(docId);
+
+  if (
+    (prevStatus === "processing" || prevStatus === "uploaded")
+    && data.status === "md_ready"
+    && currentPage === "doc"
+    && graphScope === "doc"
+  ) {
+    docPanelMode = "md";
+    els.docMdPanel?.classList.remove("hidden");
+    els.docMdBtn?.classList.add("active");
+  }
+}
+
+function stripMdComments(text) {
+  return String(text || "").replace(/<!--[\s\S]*?-->/g, "");
+}
+
+function renderMarkdownHtml(text) {
+  const src = stripMdComments(text || "").slice(0, 120000);
+  if (!src.trim()) return "";
+  if (window.marked?.parse) {
+    return window.marked.parse(src, { breaks: true, gfm: true });
+  }
+  return esc(src).replace(/\n/g, "<br>");
+}
+
+function setMdViewMode(mode) {
+  mdViewMode = mode === "source" ? "source" : "render";
+  els.mdViewRenderBtn?.classList.toggle("active", mdViewMode === "render");
+  els.mdViewSourceBtn?.classList.toggle("active", mdViewMode === "source");
+  els.previewMdRender?.classList.toggle("hidden", mdViewMode !== "render");
+  els.previewMdSource?.classList.toggle("hidden", mdViewMode !== "source");
+}
+
+function updateMarkdownPreview(isEmpty) {
+  const renderEl = els.previewMdRender;
+  const sourceEl = els.previewMdSource;
+  if (!renderEl || !sourceEl) return;
+
+  if (isEmpty || !markdownClean.trim()) {
+    renderEl.innerHTML = esc(markdownClean || "—");
+    sourceEl.textContent = markdownClean || "—";
+    renderEl.className = "preview md-panel doc-md-panel md-render-view empty";
+    sourceEl.className = "preview md-panel doc-md-panel md-source-view hidden empty";
+    return;
+  }
+
+  renderEl.innerHTML = renderMarkdownHtml(markdownMarked || markdownClean);
+  sourceEl.textContent = markdownClean.slice(0, 120000);
+  renderEl.className = "preview md-panel doc-md-panel md-render-view";
+  sourceEl.className = "preview md-panel doc-md-panel md-source-view hidden";
+  setMdViewMode(mdViewMode);
+}
+
+function setMarkdownViews(clean, marked, isEmpty) {
+  markdownClean = clean || "";
+  markdownMarked = marked || clean || "";
+  updateMarkdownPreview(isEmpty);
 }
 
 function layerOf(label) {
@@ -308,11 +579,15 @@ function renderL3Stats() {
 
 function populateGraphDocFilter(items) {
   const list = items || docsListCache;
+  const docOpts = list.length
+    ? list.map((d) => `<option value="${esc(d.id)}" ${d.id === selectedDoc ? "selected" : ""}>${esc(d.file_name || d.id)}</option>`).join("")
+    : "";
   if (els.qdrantDocFilter) {
-    const docOpts = list.length
-      ? list.map((d) => `<option value="${esc(d.id)}" ${d.id === selectedDoc ? "selected" : ""}>${esc(d.file_name || d.id)}</option>`).join("")
-      : '<option value="">—</option>';
-    els.qdrantDocFilter.innerHTML = docOpts;
+    els.qdrantDocFilter.innerHTML = docOpts || '<option value="">—</option>';
+  }
+  if (els.globalSearchDoc) {
+    els.globalSearchDoc.innerHTML = `<option value="">Все документы</option>${docOpts}`;
+    if (selectedDoc) els.globalSearchDoc.value = selectedDoc;
   }
 }
 
@@ -425,36 +700,88 @@ async function runSearch(query, targetEl = els.qdrantSearchResults) {
     if (els.qdrantSearchMeta) {
       els.qdrantSearchMeta.textContent = `Режим: ${data.mode} · ${data.hits?.length ?? 0} результатов`;
     }
-    if (!data.hits?.length) {
-      targetEl.innerHTML = '<p class="muted">Ничего не найдено.</p>';
-      return;
-    }
-    targetEl.innerHTML = data.hits.map((hit) => `
-      <article class="search-hit" data-node-id="${esc(hit.node_id)}">
-        <div class="search-hit-head">
-          <span class="search-hit-layer" style="background:${LAYER_COLOR[hit.layer] || LAYER_COLOR["L?"]}">${esc(hit.layer)}</span>
-          <span class="search-hit-label">${esc(hit.label)}</span>
-          <span class="search-hit-score">${hit.score != null ? (hit.score <= 1 ? `${(hit.score * 100).toFixed(0)}%` : hit.score.toFixed(2)) : "—"}</span>
-          <span class="search-hit-mode muted">${esc(hit.mode)}</span>
-        </div>
-        <p class="search-hit-text">${esc(hit.text || "—")}</p>
-        <code class="search-hit-id">${esc(hit.node_id)}</code>
-      </article>`).join("");
-    targetEl.querySelectorAll(".search-hit").forEach((el) => {
-      el.addEventListener("click", () => {
-        const node = graphData.nodes.find((n) => n.id === el.dataset.nodeId);
-        if (node) {
-          openDetailPanel(node);
-        } else {
-          els.detailBody.innerHTML = `<p class="muted">Узел ${esc(el.dataset.nodeId)} — откройте граф документа для деталей.</p>`;
-          els.detailPanel.classList.remove("hidden");
-          els.appRoot.classList.add("has-detail");
-        }
-      });
-    });
+    renderSearchHits(data.hits || [], targetEl, { showDoc: false });
   } catch (e) {
     targetEl.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
   }
+}
+
+function renderSearchHits(hits, targetEl, opts = {}) {
+  if (!targetEl) return;
+  if (!hits.length) {
+    targetEl.innerHTML = '<p class="muted">Ничего не найдено.</p>';
+    return;
+  }
+  const docName = (docId) => {
+    const d = docsListCache.find((x) => x.id === docId);
+    return d?.file_name || docId;
+  };
+  targetEl.innerHTML = hits.map((hit) => `
+    <article class="search-hit" data-node-id="${esc(hit.node_id)}" data-doc-id="${esc(hit.document_id || selectedDoc || "")}">
+      <div class="search-hit-head">
+        ${opts.showDoc && hit.document_id ? `<span class="search-hit-doc">${esc(docName(hit.document_id))}</span>` : ""}
+        <span class="search-hit-layer" style="background:${LAYER_COLOR[hit.layer] || LAYER_COLOR["L?"]}">${esc(hit.layer)}</span>
+        <span class="search-hit-label">${esc(hit.label)}</span>
+        <span class="search-hit-score">${hit.score != null ? (hit.score <= 1 ? `${(hit.score * 100).toFixed(0)}%` : hit.score.toFixed(2)) : "—"}</span>
+        <span class="search-hit-mode muted">${esc(hit.mode)}</span>
+      </div>
+      <p class="search-hit-text">${esc(hit.text || "—")}</p>
+      <code class="search-hit-id">${esc(hit.node_id)}</code>
+    </article>`).join("");
+  targetEl.querySelectorAll(".search-hit").forEach((el) => {
+    el.addEventListener("click", async () => {
+      const docId = el.dataset.docId;
+      if (docId && docId !== selectedDoc) {
+        await openDoc(docId, { switchTo: "doc" });
+      }
+      const node = graphData.nodes.find((n) => n.id === el.dataset.nodeId);
+      if (node) openDetailPanel(node);
+      else {
+        els.detailBody.innerHTML = `<p class="muted">Узел ${esc(el.dataset.nodeId)} — откройте граф документа.</p>`;
+        els.detailPanel.classList.remove("hidden");
+        els.appRoot.classList.add("has-detail");
+      }
+    });
+  });
+}
+
+async function runGlobalSearch(query) {
+  if (!query?.trim() || !els.globalSearchResults) return;
+  els.globalSearchResults.innerHTML = '<p class="muted">Поиск…</p>';
+  const docId = els.globalSearchDoc?.value || "";
+  const body = {
+    query: query.trim(),
+    limit: 25,
+    mode: "auto",
+    document_ids: docId ? [docId] : null,
+  };
+  try {
+    const r = await fetch(`${AGENT_API}/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Ошибка поиска");
+    const scope = docId ? "по документу" : "по всей базе";
+    if (els.globalSearchMeta) {
+      els.globalSearchMeta.textContent = `${scope} · режим: ${data.mode} · ${data.hits?.length ?? 0} результатов${data.note ? ` · ${data.note}` : ""}`;
+    }
+    renderSearchHits(data.hits || [], els.globalSearchResults, { showDoc: !docId });
+  } catch (e) {
+    els.globalSearchResults.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
+  }
+}
+
+function switchHomeTab(tab) {
+  const isQuery = tab !== "upload";
+  document.querySelectorAll(".home-tab").forEach((btn) => {
+    const active = btn.dataset.homeTab === tab;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  els.homeTabQuery?.classList.toggle("hidden", !isQuery);
+  els.homeTabUpload?.classList.toggle("hidden", isQuery);
 }
 
 function appendQdrantLog(msg, isErr = false) {
@@ -580,6 +907,7 @@ function updateGraphScopeUI() {
     docPanelMode = null;
     els.docMdPanel?.classList.add("hidden");
     els.docLogsPanel?.classList.add("hidden");
+    els.docMetaGrid?.classList.add("hidden");
     els.docMdBtn?.classList.remove("active");
     els.docLogsBtn?.classList.remove("active");
     setLiveExtractVisible(false);
@@ -632,10 +960,11 @@ function updateGraphsPageState() {
 
 function renderDocCard(d) {
   const st = statusLabel(d);
+  const typeHint = d.doc_type ? ` · ${d.doc_type}` : "";
   return `
     <div class="doc ${selectedDoc === d.id ? "active" : ""}" data-id="${esc(d.id)}" role="button">
       <div class="doc-name">${esc(d.file_name)}</div>
-      <div class="doc-meta">${(d.size_bytes / 1024).toFixed(1)} КБ · ${new Date(d.upload_date).toLocaleString("ru-RU")}</div>
+      <div class="doc-meta">${formatBytes(d.size_bytes)}${esc(typeHint)} · ${formatDateTime(d.upload_date)}</div>
       <span class="badge ${st.cls}">${esc(st.text)}</span>
     </div>`;
 }
@@ -766,7 +1095,10 @@ function updateExtractControls(status, step) {
   if (extracting && selectedDoc) refreshLiveExtract(selectedDoc);
   if (selectedDoc) {
     const cached = docsListCache.find((d) => d.id === selectedDoc);
-    if (cached) updateDocPrimaryBtn(cached);
+    if (cached) {
+      updateDocPrimaryBtn(cached);
+      updateDocRebuildBtn(cached);
+    }
   }
 }
 
@@ -777,6 +1109,20 @@ function toggleDocPanel(mode) {
   els.docMdBtn?.classList.toggle("active", docPanelMode === "md");
   els.docLogsBtn?.classList.toggle("active", docPanelMode === "logs");
   if (docPanelMode === "logs" && selectedDoc) loadLogs(selectedDoc, { force: true });
+}
+
+function updateDocRebuildBtn(data) {
+  if (!els.docRebuildGraphBtn || !data) return;
+  const busy = data.status === "extracting" || data.status === "processing";
+  const hasGraph = (data.graph_nodes || 0) > 0;
+  const canRebuild = graphScope !== "all" && (
+    data.status === "failed"
+    || data.status === "loaded"
+    || (hasGraph && ["md_ready", "loaded"].includes(data.status))
+  );
+  els.docRebuildGraphBtn.classList.toggle("hidden", !canRebuild);
+  els.docRebuildGraphBtn.disabled = busy;
+  els.docRebuildGraphBtn.textContent = hasGraph ? "↺ Перестроить связи" : "↺ Построить связи";
 }
 
 function updateDocPrimaryBtn(data) {
@@ -815,25 +1161,30 @@ function updateDocPageBar(data) {
     updateDocPrimaryBtn(data);
     return;
   }
-  if (els.docPageTitle) els.docPageTitle.textContent = data.file_name || data.id;
+  if (els.docPageTitle) {
+    els.docPageTitle.textContent = data.file_name || data.document_id || data.id;
+  }
   if (els.docPageBadge) {
     els.docPageBadge.textContent = label.text;
     els.docPageBadge.className = `badge ${label.cls}`;
   }
-  updatePreviewMeta(data.id);
+  updatePreviewMeta(data.document_id || data.id);
   updateDocPrimaryBtn(data);
+  updateDocRebuildBtn(data);
 }
 
 function statusLabel(doc) {
   const nodes = doc.graph_nodes || 0;
   const synced = doc.neo4j_synced === true;
+  const stepRu = doc.step ? (STEP_RU[doc.step] || doc.step) : "";
+  const stepSuffix = stepRu ? ` · ${stepRu}` : "";
   if (doc.status === "extracting" && doc.step === "cancelling") {
-    return { text: "остановка…", cls: "s-processing" };
+    return { text: "остановка…", cls: "s-processing s-live" };
   }
   switch (doc.status) {
-    case "uploaded": return { text: "ожидает", cls: "s-uploaded" };
-    case "processing": return { text: "OCR и очистка…", cls: "s-processing" };
-    case "extracting": return { text: "извлечение…", cls: "s-extracting" };
+    case "uploaded": return { text: `в очереди${stepSuffix}`, cls: "s-uploaded s-live" };
+    case "processing": return { text: `OCR и очистка${stepSuffix}`, cls: "s-processing s-live" };
+    case "extracting": return { text: `извлечение${stepSuffix}`, cls: "s-extracting s-live" };
     case "failed": return { text: "ошибка", cls: "s-failed" };
     case "loaded":
       if (nodes > 0 && synced) return { text: `в Neo4j · ${nodes} узл.`, cls: "s-loaded" };
@@ -1033,10 +1384,12 @@ function switchPage(page) {
   els.pageDocs?.classList.toggle("hidden", page !== "docs");
   els.pageGraphShell?.classList.toggle("hidden", !isGraphView);
   els.pageQdrant?.classList.toggle("hidden", page !== "qdrant");
+  els.pageChats?.classList.toggle("hidden", page !== "chats");
+  els.pageSearch?.classList.toggle("hidden", page !== "search");
   els.pageSettings?.classList.toggle("hidden", page !== "settings");
   document.querySelectorAll(".page-nav-link").forEach((link) => {
     const p = link.dataset.page;
-    link.classList.toggle("active", p === page || (p === "docs" && isDocsArea && page !== "home"));
+    link.classList.toggle("active", p === page || (p === "docs" && isDocsArea));
   });
   if (page === "home") {
     graphVisible = false;
@@ -1076,7 +1429,18 @@ function switchPage(page) {
     loadQdrantClusterMap();
     if (selectedDoc) loadQdrantPoints(selectedDoc);
   }
+  if (page === "search") {
+    populateGraphDocFilter(docsListCache);
+  }
+  if (page === "chats") window.MKGAuth?.refreshChatsPage();
 }
+
+window.MKG = {
+  get selectedDoc() { return selectedDoc; },
+  get currentPage() { return currentPage; },
+  switchHomeTab,
+  switchPage,
+};
 
 function closeDetailPanel() {
   els.detailPanel.classList.add("hidden");
@@ -1098,23 +1462,21 @@ function openDetailPanel(node) {
   const props = node.props || {};
   const incoming = graphData.relationships.filter((r) => r.to === node.id);
   const outgoing = graphData.relationships.filter((r) => (r.from || r.from_) === node.id);
-
-  const propHtml = Object.entries(props)
-    .filter(([k, v]) => v != null && v !== "" && !Array.isArray(v) || (Array.isArray(v) && v.length))
-    .slice(0, 12)
-    .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</dd>`)
-    .join("");
+  const propsHtml = renderNodePropsSection(node.label, props);
 
   els.detailBody.innerHTML = `
     <span class="detail-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)} · ${esc(node.label)}</span>
     <div class="detail-id">${esc(node.id)}</div>
-    ${propHtml ? `<dl class="detail-props">${propHtml}</dl>` : "<p class=\"muted\">Нет доп. свойств</p>"}
-    <div class="detail-rels">
-      <h4>Входящие (${incoming.length})</h4>
-      ${incoming.slice(0, 8).map((r) => `<div class="detail-rel-item">${esc(r.from || r.from_)} → <b>${esc(r.type)}</b></div>`).join("") || "<p class=\"muted\">—</p>"}
-      <h4>Исходящие (${outgoing.length})</h4>
-      ${outgoing.slice(0, 8).map((r) => `<div class="detail-rel-item"><b>${esc(r.type)}</b> → ${esc(r.to)}</div>`).join("") || "<p class=\"muted\">—</p>"}
-    </div>`;
+    <section class="detail-section">
+      <h4 class="detail-section-title">Метаданные узла</h4>
+      ${propsHtml}
+    </section>
+    <section class="detail-section detail-rels">
+      <h4 class="detail-section-title">Входящие (${incoming.length})</h4>
+      ${renderRelBlock(incoming, "in")}
+      <h4 class="detail-section-title">Исходящие (${outgoing.length})</h4>
+      ${renderRelBlock(outgoing, "out")}
+    </section>`;
 
   els.detailPanel.classList.remove("hidden");
   els.appRoot.classList.add("has-detail");
@@ -1767,6 +2129,15 @@ async function loadLogs(docId, opts = {}) {
   }
 }
 
+async function rebuildGraphConnections() {
+  if (!selectedDoc) return;
+  if (!window.confirm(
+    "Перестроить связи и узлы графа заново?\n\n"
+    + "Будет запущено повторное извлечение из Markdown. Текущий граф заменится новым результатом.",
+  )) return;
+  await submitToGraph();
+}
+
 async function submitToGraph() {
   if (!selectedDoc) return;
   if (els.docPrimaryBtn) els.docPrimaryBtn.disabled = true;
@@ -1788,7 +2159,6 @@ function viewGraph() {
 }
 
 async function openDoc(id, opts = {}) {
-  const prevStatus = docStatusCache.get(id);
   selectedDoc = id;
   graphViewDocId = id;
   graphScope = "doc";
@@ -1802,61 +2172,46 @@ async function openDoc(id, opts = {}) {
   const data = await p.json();
 
   updateGraphScopeUI();
-  updateExtractControls(data.status, data.step);
-  updateDocPageBar(data);
-
-  if (data.markdown && data.markdown.trim()) {
-    setMarkdownViews(data.markdown, data.markdown_marked || data.markdown, false);
-  } else if (data.status === "processing") {
-    setMarkdownViews("OCR → Markdown…", "", true);
-  } else if (data.status === "failed") {
-    setMarkdownViews("Ошибка обработки.", "", true);
-  } else {
-    setMarkdownViews("Ожидание worker…", "", true);
-  }
-  if (data.error) showBox(els.uploadError, data.error);
-  docStatusCache.set(id, data.status);
-  renderDocsList();
+  await applyPreviewUpdate(data, { clearError: true, forceGraph: true });
   refreshEmbeddingStatus();
   updateSearchBadge(id);
   populateGraphDocFilter(docsListCache);
-
-  if ((data.graph_nodes || 0) > 0) {
-    try {
-      const gr = await fetch(`${API}/graph/documents/${encodeURIComponent(id)}`);
-      if (gr.ok) {
-        const g = await gr.json();
-        graphData = {
-          nodes: g.nodes || [],
-          relationships: (g.relationships || []).map((rel) => ({
-            type: rel.type,
-            from: rel.from || rel.from_,
-            to: rel.to,
-            props: rel.props || {},
-          })),
-        };
-        updateCrossLayerStat();
-        updatePreviewMeta(id);
-      }
-    } catch { /* ignore */ }
-  } else {
-    graphData = { nodes: [], relationships: [] };
-    updateCrossLayerStat();
-  }
-
   if (docPanelMode === "logs") loadLogs(id, { force: true });
-  if (data.status === "extracting") refreshLiveExtract(id);
   updateGraphsPageState();
   if (currentPage === "qdrant") {
     loadQdrantPoints(id);
     loadQdrantClusterMap();
   }
+}
 
-  const finishedExtract =
-    prevStatus === "extracting" &&
-    (data.status === "loaded" || data.status === "md_ready") &&
-    (data.graph_nodes || 0) > 0;
-  if (finishedExtract) autoIndexAfterExtraction(id);
+function docNeedsLivePreview(cur, prevStatus) {
+  if (!cur || !selectedDoc || cur.id !== selectedDoc) return false;
+  if (ACTIVE_DOC_STATUSES.has(cur.status)) return true;
+  if (cur.status !== prevStatus) return true;
+  if (
+    (currentPage === "doc" || currentPage === "graphAll")
+    && (cur.graph_nodes || 0) > 0
+    && graphData.nodes.length === 0
+  ) return true;
+  return false;
+}
+
+async function pollSelectedDocumentPreview() {
+  if (!selectedDoc || graphScope === "all") return;
+  const cur = docsListCache.find((x) => x.id === selectedDoc);
+  const prevStatus = docStatusCache.get(selectedDoc);
+  if (!docNeedsLivePreview(cur, prevStatus)) return;
+  try {
+    const prev = await fetch(`${API}/documents/${encodeURIComponent(selectedDoc)}/preview`);
+    if (!prev.ok) return;
+    const p = await prev.json();
+    await applyPreviewUpdate(p, {
+      forceGraph: p.status === "loaded" || p.status === "md_ready",
+    });
+    if ((currentPage === "doc" || currentPage === "graphAll") && graphVisible) {
+      loadGraph(graphViewDocId || selectedDoc, { silent: true });
+    }
+  } catch { /* ignore */ }
 }
 
 async function renderDocsList() {
@@ -1880,41 +2235,7 @@ async function renderDocsList() {
     }
     els.docs.innerHTML = filtered.map(renderDocCard).join("");
     bindDocCards(els.docs);
-
-    if (selectedDoc) {
-      const cur = data.items.find((x) => x.id === selectedDoc);
-      const prevStatus = docStatusCache.get(selectedDoc);
-      const extracting = cur && cur.status === "extracting";
-      const liveStatus = cur && ["processing", "extracting", "uploaded"].includes(cur.status);
-      const graphPending =
-        cur &&
-        (currentPage === "doc" || currentPage === "graphAll") &&
-        (cur.graph_nodes || 0) > 0 &&
-        graphData.nodes.length === 0;
-      if (liveStatus || graphPending || extracting) {
-        const prev = await fetch(`${API}/documents/${encodeURIComponent(selectedDoc)}/preview`);
-        if (prev.ok) {
-          const p = await prev.json();
-          const finishedExtract =
-            prevStatus === "extracting" &&
-            (p.status === "loaded" || p.status === "md_ready") &&
-            (p.graph_nodes || 0) > 0;
-          docStatusCache.set(selectedDoc, p.status);
-          updateDocPageBar(p);
-          updateExtractControls(p.status, p.step);
-          if (p.markdown && p.markdown.trim() && p.markdown !== markdownClean) {
-            setMarkdownViews(p.markdown, p.markdown_marked || p.markdown, false);
-          }
-          if (p.error) showBox(els.uploadError, p.error);
-          if (extracting && (currentPage === "doc" || currentPage === "graphAll")) refreshLiveExtract(selectedDoc);
-          if ((currentPage === "doc" || currentPage === "graphAll") && graphVisible) {
-            loadGraph(graphViewDocId || selectedDoc, { silent: true });
-          }
-          if (docPanelMode === "logs" && liveStatus) loadLogs(selectedDoc, { silent: true });
-          if (finishedExtract) autoIndexAfterExtraction(selectedDoc);
-        }
-      }
-    }
+    await pollSelectedDocumentPreview();
   } catch { /* ignore */ }
 }
 
@@ -1994,6 +2315,13 @@ function bindEvents() {
     e.preventDefault();
     runSearch(els.qdrantSearchQuery?.value, els.qdrantSearchResults);
   });
+  els.globalSearchForm?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    runGlobalSearch(els.globalSearchQuery?.value);
+  });
+  document.querySelectorAll(".home-tab").forEach((btn) => {
+    btn.addEventListener("click", () => switchHomeTab(btn.dataset.homeTab));
+  });
   els.docListFilter?.addEventListener("input", (e) => {
     docListFilterText = e.target.value;
     renderDocsList();
@@ -2013,6 +2341,7 @@ function bindEvents() {
       }
     } else submitToGraph();
   });
+  els.docRebuildGraphBtn?.addEventListener("click", rebuildGraphConnections);
   els.docReprocessBtn?.addEventListener("click", async () => {
     if (!selectedDoc) return;
     await fetch(`${API}/documents/${encodeURIComponent(selectedDoc)}/reprocess`, { method: "POST" });
@@ -2020,6 +2349,8 @@ function bindEvents() {
   });
   els.docMdBtn?.addEventListener("click", () => toggleDocPanel("md"));
   els.docLogsBtn?.addEventListener("click", () => toggleDocPanel("logs"));
+  els.mdViewRenderBtn?.addEventListener("click", () => setMdViewMode("render"));
+  els.mdViewSourceBtn?.addEventListener("click", () => setMdViewMode("source"));
   els.docNeo4jBtn?.addEventListener("click", openNeo4jBrowser);
   els.docStopBtn?.addEventListener("click", async () => {
     if (!selectedDoc) return;
@@ -2048,7 +2379,10 @@ function openFilePicker() {
 }
 
 function boot() {
-  switchPage("home");
+  if (window.marked?.setOptions) {
+    window.marked.setOptions({ breaks: true, gfm: true });
+  }
+  switchPage("chats");
   bindNavigation();
   try {
     bindEvents();
@@ -2058,12 +2392,14 @@ function boot() {
   updateDensityToggleUI();
   els.appRoot?.classList.add("js-ready");
   loadFormats();
+  loadNodeFieldHints();
   loadConfig();
   loadProjectStage();
   refreshEmbeddingStatus();
   renderDocsList();
-  setInterval(renderDocsList, 2500);
+  setInterval(renderDocsList, 1500);
   setInterval(refreshEmbeddingStatus, 30000);
+  window.MKGAuth?.init();
 }
 
 boot();

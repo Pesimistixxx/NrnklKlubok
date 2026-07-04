@@ -55,3 +55,33 @@ ON CONFLICT (component) DO NOTHING;
       ('llm_model', 'yandexgpt-5.1'),
       ('ocr_model', 'markdown')
     ON CONFLICT (key) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS mkg_users (
+  id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'team',
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+  author_id TEXT,
+  author_name TEXT NOT NULL,
+  author_role TEXT NOT NULL,
+  body TEXT NOT NULL,
+  msg_type TEXT NOT NULL DEFAULT 'user',
+  meta JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS chat_messages_thread_idx ON chat_messages(thread_id, created_at);

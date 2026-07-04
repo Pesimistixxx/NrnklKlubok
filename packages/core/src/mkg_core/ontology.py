@@ -319,6 +319,46 @@ _NAME_FIELDS: dict[str, tuple[str, ...]] = {
     "TechnologySolution": ("name_ru", "name_en", "name", "description"),
 }
 
+# Ожидаемые props по метке — для UI и проверки полноты extraction.
+_COMMON_LLM_PROPS: tuple[str, ...] = ("quote", "source_quote", "extraction_confidence")
+
+NODE_PROP_HINTS: dict[str, tuple[str, ...]] = {
+    "Material": _NAME_FIELDS["Material"] + _COMMON_LLM_PROPS + ("description",),
+    "Process": _NAME_FIELDS["Process"] + _COMMON_LLM_PROPS,
+    "Equipment": _NAME_FIELDS["Equipment"] + _COMMON_LLM_PROPS,
+    "ChemicalReagent": _NAME_FIELDS["ChemicalReagent"] + _COMMON_LLM_PROPS,
+    "StandardMetric": _NAME_FIELDS["StandardMetric"] + _COMMON_LLM_PROPS + ("unit", "min_allowed", "max_allowed"),
+    "PhaseState": _NAME_FIELDS["PhaseState"],
+    "Property": _NAME_FIELDS["Property"] + ("value", "unit"),
+    "Document": ("file_name", "hash_sum", "classification", "doc_type", "lang"),
+    "Expert": _NAME_FIELDS["Expert"] + _COMMON_LLM_PROPS + ("organization", "role"),
+    "Organization": _NAME_FIELDS["Organization"] + _COMMON_LLM_PROPS + ("country", "inn"),
+    "Location": _NAME_FIELDS["Location"] + _COMMON_LLM_PROPS,
+    "Event": _NAME_FIELDS["Event"] + _COMMON_LLM_PROPS + ("date", "description"),
+    "Timeline": ("name", "period_start", "period_end"),
+    "Facility": _NAME_FIELDS["Facility"] + _COMMON_LLM_PROPS + ("location",),
+    "TextParagraph": ("raw_text_ru", "char_start", "char_end"),
+    "HeadingContext": ("title_ru", "markdown_level"),
+    "LangContext": ("lang_code", "name"),
+    "TableMatrix": ("rows_count", "cols_count", "caption"),
+    "SynonymMap": ("canonical", "synonyms"),
+    "ExperimentRun": ("confidence", "run_date", "description") + _COMMON_LLM_PROPS,
+    "TechStage": ("stage_name", "name_ru", "stage_order", "description") + _COMMON_LLM_PROPS,
+    "Measurement": ("parameter", "numeric_value", "unit", "measurement_error", "conditions") + _COMMON_LLM_PROPS,
+    "Deviation": _NAME_FIELDS["Deviation"] + _COMMON_LLM_PROPS,
+    "TrendVector": _NAME_FIELDS["TrendVector"] + ("slope_coefficient",) + _COMMON_LLM_PROPS,
+    "Formula": _NAME_FIELDS["Formula"] + _COMMON_LLM_PROPS,
+    "EnvironmentalCondition": _NAME_FIELDS["EnvironmentalCondition"] + _COMMON_LLM_PROPS,
+    "Effect": _NAME_FIELDS["Effect"] + _COMMON_LLM_PROPS,
+    "Claim": _NAME_FIELDS["Claim"] + _COMMON_LLM_PROPS,
+    "SecurityRole": ("role_name", "clearance_level"),
+    "VerificationStatus": ("status", "verified_by", "verified_at"),
+    "AuditTrail": ("action", "actor", "timestamp"),
+    "TechnologySolution": _NAME_FIELDS["TechnologySolution"] + _COMMON_LLM_PROPS + ("trl_level",),
+    "EconomicIndicator": ("name", "value", "unit", "currency") + _COMMON_LLM_PROPS,
+    "EnvironmentalIndicator": ("name", "value", "unit") + _COMMON_LLM_PROPS,
+}
+
 # Узлы, требующие числового значения (без числа — это не факт, а мусор).
 _NUMERIC_REQUIRED: dict[str, tuple[str, ...]] = {
     "Measurement": ("numeric_value",),

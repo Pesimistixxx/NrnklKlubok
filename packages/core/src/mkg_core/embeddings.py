@@ -14,7 +14,7 @@ import logging
 import re
 from typing import Any, Literal
 
-from qdrant_client.models import FieldCondition, Filter, MatchValue, PointStruct
+from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue, PointStruct
 
 from mkg_core.annotated_md import _LABEL_LAYER
 from mkg_core.config import get_settings
@@ -141,19 +141,21 @@ async def index_document_graph(document_id: str, graph: dict[str, Any] | None) -
 
 
 async def list_indexed_points(
-    document_id: str,
+    document_id: str | None = None,
     *,
     collection: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    """Scroll Qdrant — точки документа (payload без вектора)."""
+    """Scroll Qdrant — точки документа или все (payload без вектора)."""
     settings = get_settings()
     qdrant = QdrantClientSingleton.instance().client
     names = [collection] if collection else [
         settings.qdrant_collection_chunks,
         settings.qdrant_collection_claims,
     ]
-    filt = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
+    filt: Filter | None = None
+    if document_id is not None:
+        filt = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
     out: list[dict[str, Any]] = []
     for name in names:
         if name not in (settings.qdrant_collection_chunks, settings.qdrant_collection_claims):
@@ -172,14 +174,17 @@ async def list_indexed_points(
                 )
                 for rec in records:
                     payload = dict(rec.payload or {})
-                    out.append({
+                    point: dict[str, Any] = {
                         "collection": name,
                         "point_id": str(rec.id),
                         "node_id": payload.get("node_id"),
                         "label": payload.get("label"),
                         "layer": payload.get("layer"),
                         "text": (payload.get("text") or "")[:300],
-                    })
+                    }
+                    if document_id is None:
+                        point["document_id"] = payload.get("document_id")
+                    out.append(point)
                 if offset is None or not records:
                     break
         except Exception as exc:
@@ -189,38 +194,7 @@ async def list_indexed_points(
 
 async def list_all_indexed_points(*, limit: int = 500) -> list[dict[str, Any]]:
     """Scroll Qdrant — все точки (без фильтра document_id)."""
-    settings = get_settings()
-    qdrant = QdrantClientSingleton.instance().client
-    names = [settings.qdrant_collection_chunks, settings.qdrant_collection_claims]
-    out: list[dict[str, Any]] = []
-    for name in names:
-        try:
-            offset = None
-            while len(out) < limit:
-                batch_limit = min(64, limit - len(out))
-                records, offset = await qdrant.scroll(
-                    collection_name=name,
-                    limit=batch_limit,
-                    offset=offset,
-                    with_payload=True,
-                    with_vectors=False,
-                )
-                for rec in records:
-                    payload = dict(rec.payload or {})
-                    out.append({
-                        "collection": name,
-                        "point_id": str(rec.id),
-                        "node_id": payload.get("node_id"),
-                        "document_id": payload.get("document_id"),
-                        "label": payload.get("label"),
-                        "layer": payload.get("layer"),
-                        "text": (payload.get("text") or "")[:300],
-                    })
-                if offset is None or not records:
-                    break
-        except Exception as exc:
-            log.warning("qdrant scroll all %s: %s", name, exc)
-    return out[:limit]
+    return await list_indexed_points(None, limit=limit)
 
 
 def keyword_search(
@@ -325,6 +299,95 @@ async def semantic_search(
 
     hits.sort(key=lambda h: -h["score"])
     return hits[:limit]
+
+
+async def semantic_search_global(
+    query: str,
+    *,
+    limit: int = 10,
+    layers: list[str] | None = None,
+    document_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Семантический поиск по всем документам (или по списку document_ids)."""
+    settings = get_settings()
+    if not settings.yandex_api_key or not settings.yandex_folder_id:
+        return []
+
+    await ensure_qdrant_collections()
+    llm = YandexLLMClient.instance()
+    qdrant = QdrantClientSingleton.instance().client
+    query_vector = await llm.embed(query, kind="query")
+
+    doc_filter: Filter | None = None
+    if document_ids:
+        doc_filter = Filter(
+            must=[FieldCondition(key="document_id", match=MatchAny(any=document_ids))],
+        )
+
+    hits: list[dict[str, Any]] = []
+    for collection in (settings.qdrant_collection_chunks, settings.qdrant_collection_claims):
+        try:
+            results = await qdrant.search(
+                collection_name=collection,
+                query_vector=query_vector,
+                query_filter=doc_filter,
+                limit=limit,
+                with_payload=True,
+            )
+        except Exception as exc:
+            log.warning("qdrant global search %s: %s", collection, exc)
+            continue
+        for point in results:
+            payload = point.payload or {}
+            layer = str(payload.get("layer") or "L?")
+            if layers and layer not in layers:
+                continue
+            hits.append(
+                {
+                    "node_id": str(payload.get("node_id") or ""),
+                    "document_id": str(payload.get("document_id") or ""),
+                    "label": str(payload.get("label") or ""),
+                    "layer": layer,
+                    "score": float(point.score or 0),
+                    "text": str(payload.get("text") or "")[:500],
+                    "props": {},
+                    "mode": "semantic",
+                }
+            )
+
+    hits.sort(key=lambda h: -h["score"])
+    return hits[:limit]
+
+
+async def search_global(
+    query: str,
+    *,
+    limit: int = 10,
+    mode: SearchMode = "auto",
+    layers: list[str] | None = None,
+    document_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Поиск по всей базе Qdrant (semantic). Keyword по всем графам не поддерживается."""
+    settings = get_settings()
+    can_semantic = bool(settings.yandex_api_key and settings.yandex_folder_id)
+    used_mode: SearchMode = mode
+
+    if mode in ("auto", "semantic") and can_semantic:
+        semantic_hits = await semantic_search_global(
+            query, limit=limit, layers=layers, document_ids=document_ids,
+        )
+        if semantic_hits or mode == "semantic":
+            used_mode = "semantic"
+            return {"mode": used_mode, "hits": semantic_hits}
+
+    if mode == "semantic":
+        return {"mode": "semantic", "hits": []}
+
+    return {
+        "mode": "unavailable",
+        "hits": [],
+        "note": "Глобальный keyword-поиск недоступен. Настройте Yandex embeddings или выберите документ.",
+    }
 
 
 async def search_document(

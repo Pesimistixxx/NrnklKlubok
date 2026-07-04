@@ -258,14 +258,27 @@ class AgentSearchHit(BaseModel):
     text: str
     props: dict[str, Any] = Field(default_factory=dict)
     mode: str = "keyword"
+    document_id: str | None = None
 
 
 class AgentSearchOut(BaseModel):
-    document_id: str
+    document_id: str | None = None
     query: str
     mode: str
     hits: list[AgentSearchHit]
     index: dict[str, Any] | None = None
+    note: str | None = None
+
+
+class GlobalSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    limit: int = Field(default=20, ge=1, le=100)
+    mode: str = Field(default="auto", description="auto | semantic")
+    layers: list[str] | None = None
+    document_ids: list[str] | None = Field(
+        default=None,
+        description="Ограничить поиск указанными документами",
+    )
 
 
 class AgentOntologyLayer(BaseModel):
@@ -333,3 +346,112 @@ class AgentCapabilitiesOut(BaseModel):
     project_stage: str
     stage_label_ru: str
     agents: list[AgentCapabilityOut]
+
+
+class RoleOut(BaseModel):
+    id: str
+    name_ru: str
+    agent_id: str
+    agents_user_role: str
+    can_upload: bool
+    can_extract: bool
+    can_admin: bool
+    can_run_agents: bool
+    description: str
+
+
+class RolesOut(BaseModel):
+    roles: list[RoleOut]
+
+
+class UserSessionIn(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=120)
+    role_id: str = Field(..., min_length=1, max_length=32)
+    user_id: str | None = None
+
+
+class UserOut(BaseModel):
+    id: str
+    display_name: str
+    role_id: str
+    created_at: datetime | None = None
+    last_seen_at: datetime | None = None
+
+
+class ChatThreadCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    kind: str = Field(default="team", pattern="^(team|agent)$")
+    created_by: str | None = None
+
+
+class ChatThreadOut(BaseModel):
+    id: str
+    title: str
+    kind: str
+    created_by: str | None = None
+    created_at: datetime | None = None
+    message_count: int = 0
+    last_message_at: datetime | None = None
+
+
+class ChatThreadsOut(BaseModel):
+    items: list[ChatThreadOut]
+    total: int
+
+
+class MessageCreate(BaseModel):
+    author_id: str | None = None
+    author_name: str = Field(..., min_length=1, max_length=120)
+    author_role: str
+    body: str = Field(..., min_length=1, max_length=20000)
+    msg_type: str = Field(default="user", pattern="^(user|agent|system)$")
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatMessageOut(BaseModel):
+    id: str
+    thread_id: str
+    author_id: str | None = None
+    author_name: str
+    author_role: str
+    body: str
+    msg_type: str
+    meta: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+
+
+class ChatMessagesOut(BaseModel):
+    thread_id: str
+    items: list[ChatMessageOut]
+    total: int
+
+
+class AgentServiceRunIn(BaseModel):
+    query: str = Field(..., min_length=1)
+    mode: str | None = None
+    doc_ids: list[str] = Field(default_factory=list)
+    user_role: str = "researcher"
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+class AgentServiceRunOut(BaseModel):
+    mode: str
+    query: str
+    elapsed_ms: int = 0
+    summary: str = ""
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    hypotheses: list[dict[str, Any]] = Field(default_factory=list)
+    recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    literature_review: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AgentServiceModeInfo(BaseModel):
+    id: str
+    title: str
+    description: str
+
+
+class AgentServiceModesOut(BaseModel):
+    modes: list[AgentServiceModeInfo]

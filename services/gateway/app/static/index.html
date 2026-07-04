@@ -4,37 +4,101 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=15" />
+  <link rel="stylesheet" href="/static/css/app.css?v=24" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
     <main class="main-area">
       <nav class="main-nav" role="navigation" aria-label="Разделы">
-        <button class="page-nav-link active" data-page="home" type="button">Главная</button>
+        <button class="page-nav-link active" data-page="chats" type="button">Чат</button>
+        <button class="page-nav-link" data-page="home" type="button">Главная</button>
         <button class="page-nav-link" data-page="docs" type="button">Документы</button>
+        <button class="page-nav-link" data-page="search" type="button">Поиск</button>
         <button class="page-nav-link" data-page="qdrant" type="button">Qdrant</button>
         <button class="page-nav-link" data-page="settings" type="button">Настройки</button>
       </nav>
 
-      <section class="page page-home" id="pageHome">
+      <section class="page page-chats" id="pageChats">
+        <div class="chat-shell">
+          <header class="chat-shell-head">
+            <div class="chat-identity-row">
+              <label class="chat-field-label" for="chatUserName">Имя</label>
+              <input type="text" id="chatUserName" maxlength="120" placeholder="Как вас называть" autocomplete="name" />
+              <span class="chat-identity-status" id="chatIdentityStatus"></span>
+            </div>
+            <div class="chat-roles-block">
+              <span class="chat-field-label">Роль</span>
+              <div class="role-card-grid role-card-grid-compact" id="roleCardGrid">
+                <span class="muted small">Загрузка ролей…</span>
+              </div>
+            </div>
+          </header>
+          <div class="chats-layout">
+            <aside class="chats-sidebar">
+              <h3 class="chats-sidebar-title">История</h3>
+              <div class="chats-sidebar-actions">
+                <button class="btn btn-primary btn-small" id="chatNewBtn" type="button">+ Новый</button>
+                <button class="btn btn-ghost btn-small" id="chatNewAgentBtn" type="button">+ Агент</button>
+              </div>
+              <div class="chats-thread-list" id="chatThreadList">
+                <p class="muted small">Пока нет чатов</p>
+              </div>
+            </aside>
+            <section class="chats-main">
+              <div class="chats-main-head">
+                <h2 id="chatActiveTitle">Новый диалог</h2>
+              </div>
+              <div class="chats-messages" id="chatMessages">
+                <p class="muted chat-empty-hint">Выберите роль выше и напишите сообщение — или создайте чат слева.</p>
+              </div>
+              <div class="chats-compose">
+                <textarea id="chatMessageInput" rows="2" placeholder="Сообщение…"></textarea>
+                <button class="btn btn-primary btn-small" id="chatSendBtn" type="button">Отправить</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="page page-home hidden" id="pageHome">
         <div class="about-hero">
           <h1>Единая карта знаний R&amp;D</h1>
           <p class="about-lead">Загрузите документ → постройте граф → индексируйте в Qdrant.</p>
           <p class="muted project-stage-line" id="projectStageLine">Этап: загрузка…</p>
         </div>
-        <div class="upload-panel">
-          <h2>Загрузить документ</h2>
-          <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
-          <input type="hidden" id="classification" value="открытый" />
-          <div class="drop" id="drop" role="button" tabindex="0">
-            <div id="dropText">Перетащите файл или нажмите для выбора</div>
+        <div class="home-tabs" role="tablist" aria-label="Разделы главной">
+          <button class="home-tab active" type="button" data-home-tab="query" role="tab" aria-selected="true">Запрос</button>
+          <button class="home-tab" type="button" data-home-tab="upload" role="tab" aria-selected="false">Загрузка</button>
+        </div>
+        <div class="home-tab-panel" id="homeTabQuery" role="tabpanel">
+          <div class="home-query-panel" id="homeQueryPanel">
+            <h2>Запрос к карте знаний</h2>
+            <p class="muted small" id="homeAgentStatus">Agents: проверка…</p>
+            <p class="small muted">Режим анализа</p>
+            <div class="mode-chip-grid" id="homeAgentModes"></div>
+            <textarea id="homeAgentQuery" rows="4" placeholder="Спросите аналитику: гипотезы, audit, обзор, связи между сущностями…"></textarea>
+            <div class="home-query-actions">
+              <button class="btn btn-primary btn-small" id="homeAgentRunBtn" type="button">Спросить</button>
+              <span class="muted small home-query-hint">Ctrl+Enter · по проиндексированным документам</span>
+            </div>
+            <pre class="home-agent-result empty" id="homeAgentResult">Ответ появится здесь…</pre>
           </div>
-          <div class="upload-actions">
-            <button class="btn btn-ghost btn-small" id="pickBtn" type="button">Выбрать</button>
-            <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled>Обработать</button>
+        </div>
+        <div class="home-tab-panel hidden" id="homeTabUpload" role="tabpanel">
+          <div class="upload-panel">
+            <h2>Загрузить документ</h2>
+            <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
+            <input type="hidden" id="classification" value="открытый" />
+            <div class="drop" id="drop" role="button" tabindex="0">
+              <div id="dropText">Перетащите файл или нажмите для выбора</div>
+            </div>
+            <div class="upload-actions">
+              <button class="btn btn-ghost btn-small" id="pickBtn" type="button">Выбрать</button>
+              <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled>Обработать</button>
+            </div>
+            <p class="muted" id="formatsHint">…</p>
+            <div class="error-box" id="uploadError"></div>
           </div>
-          <p class="muted" id="formatsHint">…</p>
-          <div class="error-box" id="uploadError"></div>
         </div>
       </section>
 
@@ -61,18 +125,29 @@
               <span class="muted doc-page-meta" id="docPageMeta">0 узл · 0 св</span>
             </div>
           </div>
+          <dl class="doc-meta-grid hidden" id="docMetaGrid"></dl>
           <div class="doc-page-actions">
             <button class="btn btn-primary btn-small" id="docPrimaryBtn" type="button" data-action="build">Построить граф</button>
-            <button class="btn btn-ghost btn-small doc-only-action" id="docReprocessBtn" type="button">↺ OCR</button>
-            <button class="btn btn-ghost btn-small doc-only-action" id="docMdBtn" type="button">Markdown</button>
-            <button class="btn btn-ghost btn-small doc-only-action" id="docLogsBtn" type="button">Логи</button>
-            <button class="btn btn-ghost btn-small" id="docNeo4jBtn" type="button">Neo4j ↗</button>
+            <div class="doc-page-actions-row">
+              <button class="btn btn-rebuild btn-small doc-only-action hidden" id="docRebuildGraphBtn" type="button" title="Заново извлечь узлы и связи из Markdown">↺ Перестроить связи</button>
+              <button class="btn btn-ghost btn-small doc-only-action" id="docReprocessBtn" type="button" title="Повторить OCR и сборку Markdown">↺ OCR</button>
+              <button class="btn btn-ghost btn-small doc-only-action" id="docMdBtn" type="button">Markdown</button>
+              <button class="btn btn-ghost btn-small doc-only-action" id="docLogsBtn" type="button">Логи</button>
+              <button class="btn btn-ghost btn-small" id="docNeo4jBtn" type="button">Neo4j ↗</button>
+            </div>
             <button class="btn btn-danger btn-small doc-only-action hidden" id="docStopBtn" type="button">Стоп</button>
           </div>
         </div>
         <div class="doc-page-panel hidden" id="docMdPanel">
-          <h4>Markdown</h4>
-          <div class="preview md-panel doc-md-panel empty" id="previewMd">—</div>
+          <div class="md-panel-head">
+            <h4>Markdown</h4>
+            <div class="md-view-toggle">
+              <button type="button" class="view-btn active" id="mdViewRenderBtn">Просмотр</button>
+              <button type="button" class="view-btn" id="mdViewSourceBtn">Исходник</button>
+            </div>
+          </div>
+          <div class="preview md-panel doc-md-panel md-render-view empty" id="previewMdRender">—</div>
+          <div class="preview md-panel doc-md-panel md-source-view hidden empty" id="previewMdSource">—</div>
         </div>
         <div class="doc-page-panel hidden" id="docLogsPanel">
           <h4>Логи пайплайна</h4>
@@ -122,6 +197,26 @@
               <div class="graph-rels-head"><span id="graphRelsCount" class="muted">0 связей</span></div>
               <div class="graph-rels-list" id="graphRelsList"></div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="page page-search hidden" id="pageSearch">
+        <div class="page-head">
+          <h1>Поиск по базе знаний</h1>
+          <p class="muted page-lead">Семантический поиск по Qdrant — по всем документам или по выбранному.</p>
+        </div>
+        <div class="search-page-panel">
+          <form class="search-form search-page-form" id="globalSearchForm">
+            <input type="search" id="globalSearchQuery" placeholder="Что ищем? термины, формулировки, факты…" autocomplete="off" />
+            <select id="globalSearchDoc" aria-label="Документ">
+              <option value="">Все документы</option>
+            </select>
+            <button class="btn btn-primary btn-small" type="submit">Найти</button>
+          </form>
+          <p class="muted search-meta" id="globalSearchMeta"></p>
+          <div class="search-results search-page-results" id="globalSearchResults">
+            <p class="muted">Введите запрос — поиск по проиндексированным абзацам L3 и Claim L4.</p>
           </div>
         </div>
       </section>
@@ -224,6 +319,8 @@
   </div>
 
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-  <script src="/static/js/app.js?v=15"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="/static/js/app.js?v=24"></script>
+  <script src="/static/js/chats.js?v=24"></script>
 </body>
 </html>

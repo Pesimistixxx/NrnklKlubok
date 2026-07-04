@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     llm_concurrency: int = Field(default=3, alias="LLM_CONCURRENCY")
     llm_cache_enabled: bool = Field(default=True, alias="LLM_CACHE_ENABLED")
     llm_cache_embeddings: bool = Field(default=True, alias="LLM_CACHE_EMBEDDINGS")
+    agents_url: str = Field(default="http://agents:8010", alias="AGENTS_URL")
+    agents_timeout_seconds: float = Field(default=30.0, alias="AGENTS_TIMEOUT_SECONDS")
 
     # helpers ------------------------------------------------------------
     def gpt_uri(self, model_name: str) -> str:

@@ -30,8 +30,11 @@ from mkg_core.llm_cache import LLMResponseCache
 from mkg_ingestion.formats import formats_public, is_binary
 from mkg_ingestion import process as run_ingestion_process
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
+from mkg_core.ontology import NODE_PROP_HINTS
 
 from app.agent_api import router as agent_router
+from app.agents_proxy import router as agents_proxy_router
+from app.collab_api import router as collab_router
 from app.schemas import (
     BatchUploadItem,
     BatchUploadOut,
@@ -66,6 +69,8 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(agent_router, prefix=API)
+app.include_router(collab_router, prefix=API)
+app.include_router(agents_proxy_router, prefix=API)
 
 app.add_middleware(
     CORSMiddleware,
@@ -92,6 +97,7 @@ def _merge_repo(rec: dict) -> dict:
         return rec
     merged = {**rec}
     for key in (
+        "status",
         "doc_type",
         "mime_type",
         "step",
@@ -216,6 +222,12 @@ async def update_models_config(body: RuntimeConfigUpdate) -> RuntimeConfigOut:
 @app.get(f"{API}/formats", response_model=FormatsOut)
 async def get_formats() -> FormatsOut:
     return FormatsOut(**formats_public())
+
+
+@app.get(f"{API}/ontology/node-fields")
+async def get_node_field_hints() -> dict[str, list[str]]:
+    """Ожидаемые props по метке узла — для UI и проверки extraction."""
+    return {label: list(fields) for label, fields in NODE_PROP_HINTS.items()}
 
 
 @app.post(f"{API}/documents", response_model=DocumentOut)
@@ -372,6 +384,13 @@ async def get_preview(doc_id: str) -> dict:
         "status": rec["status"],
         "file_name": file_name,
         "doc_type": rec.get("doc_type"),
+        "mime_type": rec.get("mime_type"),
+        "classification": rec.get("classification"),
+        "organization": rec.get("organization"),
+        "hash_sum": rec.get("hash_sum"),
+        "size_bytes": rec.get("size_bytes"),
+        "upload_date": rec.get("upload_date"),
+        "lang": rec.get("lang"),
         "step": rec.get("step"),
         "source_kind": source_kind,
         "source_text": source_text,
