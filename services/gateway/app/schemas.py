@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -364,8 +364,20 @@ class RolesOut(BaseModel):
     roles: list[RoleOut]
 
 
+class RolePromptOut(BaseModel):
+    role_id: str
+    name_ru: str
+    system_prompt: str
+    default_prompt: str
+    is_custom: bool
+
+
+class RolePromptUpdate(BaseModel):
+    system_prompt: str = Field(..., min_length=1, max_length=12000)
+
+
 class UserSessionIn(BaseModel):
-    display_name: str = Field(..., min_length=1, max_length=120)
+    display_name: str | None = Field(default=None, max_length=120)
     role_id: str = Field(..., min_length=1, max_length=32)
     user_id: str | None = None
 
@@ -424,6 +436,22 @@ class ChatMessagesOut(BaseModel):
     thread_id: str
     items: list[ChatMessageOut]
     total: int
+
+
+class ChatHistoryTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=8000)
+
+
+class ChatCompleteIn(BaseModel):
+    message: str = Field(..., min_length=1, max_length=8000)
+    role_id: str
+    history: list[ChatHistoryTurn] = Field(default_factory=list, max_length=20)
+    system_prompt: str | None = Field(default=None, max_length=12000)
+
+
+class ChatCompleteOut(BaseModel):
+    reply: str
 
 
 class AgentServiceRunIn(BaseModel):

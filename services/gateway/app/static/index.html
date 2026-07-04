@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=24" />
+  <link rel="stylesheet" href="/static/css/app.css?v=29" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
@@ -20,40 +20,45 @@
 
       <section class="page page-chats" id="pageChats">
         <div class="chat-shell">
-          <header class="chat-shell-head">
-            <div class="chat-identity-row">
-              <label class="chat-field-label" for="chatUserName">Имя</label>
-              <input type="text" id="chatUserName" maxlength="120" placeholder="Как вас называть" autocomplete="name" />
-              <span class="chat-identity-status" id="chatIdentityStatus"></span>
+          <header class="chat-toolbar">
+            <div class="chat-toolbar-row">
+              <span class="chat-toolbar-label">Роль</span>
+              <div class="chip-row" id="roleCardGrid"></div>
             </div>
-            <div class="chat-roles-block">
-              <span class="chat-field-label">Роль</span>
-              <div class="role-card-grid role-card-grid-compact" id="roleCardGrid">
-                <span class="muted small">Загрузка ролей…</span>
+            <div class="chat-toolbar-row">
+              <span class="chat-toolbar-label">AI</span>
+              <div class="chip-row" id="chatAgentModes"></div>
+              <span class="chat-toolbar-hint muted" id="chatAgentStatus"></span>
+            </div>
+            <p class="chat-notice hidden" id="chatIdentityStatus"></p>
+            <details class="role-prompt-panel hidden" id="rolePromptPanel">
+              <summary>Промпт роли <span class="role-prompt-badge muted" id="rolePromptBadge"></span></summary>
+              <p class="muted small role-prompt-hint">Системная инструкция для выбранной роли. Используется при запросах к AI.</p>
+              <textarea id="rolePromptText" rows="5" placeholder="Системный промпт…"></textarea>
+              <div class="role-prompt-actions">
+                <button class="btn btn-primary btn-small" id="rolePromptSave" type="button">Сохранить</button>
+                <button class="btn btn-small" id="rolePromptReset" type="button">По умолчанию</button>
               </div>
-            </div>
+            </details>
           </header>
           <div class="chats-layout">
             <aside class="chats-sidebar">
+              <button class="btn btn-primary btn-small chat-new-btn" id="chatNewBtn" type="button">+ Новый чат</button>
               <h3 class="chats-sidebar-title">История</h3>
-              <div class="chats-sidebar-actions">
-                <button class="btn btn-primary btn-small" id="chatNewBtn" type="button">+ Новый</button>
-                <button class="btn btn-ghost btn-small" id="chatNewAgentBtn" type="button">+ Агент</button>
-              </div>
-              <div class="chats-thread-list" id="chatThreadList">
-                <p class="muted small">Пока нет чатов</p>
-              </div>
+              <div class="chats-thread-list" id="chatThreadList"></div>
             </aside>
             <section class="chats-main">
-              <div class="chats-main-head">
-                <h2 id="chatActiveTitle">Новый диалог</h2>
-              </div>
+              <h2 class="chats-main-title" id="chatActiveTitle">Диалог</h2>
               <div class="chats-messages" id="chatMessages">
-                <p class="muted chat-empty-hint">Выберите роль выше и напишите сообщение — или создайте чат слева.</p>
+                <p class="chat-empty-hint">Выберите роль и напишите сообщение — AI ответит в режиме «Диалог».</p>
+              </div>
+              <div class="chat-typing hidden" id="chatTyping" aria-live="polite">
+                <span class="chat-typing-dots"><i></i><i></i><i></i></span>
+                MKG AI печатает…
               </div>
               <div class="chats-compose">
-                <textarea id="chatMessageInput" rows="2" placeholder="Сообщение…"></textarea>
-                <button class="btn btn-primary btn-small" id="chatSendBtn" type="button">Отправить</button>
+                <textarea id="chatMessageInput" rows="2" placeholder="Вопрос или сообщение…"></textarea>
+                <button class="btn btn-primary" id="chatSendBtn" type="button">Отправить</button>
               </div>
             </section>
           </div>
@@ -320,7 +325,7 @@
 
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=24"></script>
-  <script src="/static/js/chats.js?v=24"></script>
+  <script src="/static/js/app.js?v=29"></script>
+  <script src="/static/js/chats.js?v=29"></script>
 </body>
 </html>

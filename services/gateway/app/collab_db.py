@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS chat_messages_thread_idx ON chat_messages(thread_id, created_at);
+
+CREATE TABLE IF NOT EXISTS role_prompts (
+  role_id TEXT PRIMARY KEY,
+  system_prompt TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -193,3 +199,46 @@ async def add_message(
     if item.get("meta") and isinstance(item["meta"], str):
         item["meta"] = json.loads(item["meta"])
     return item
+
+
+async def delete_thread(thread_id: str) -> bool:
+    await init_collab_schema()
+    p = await pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("DELETE FROM chat_threads WHERE id = $1", thread_id)
+    return result.endswith("1")
+
+
+async def get_role_prompt(role_id: str) -> str | None:
+    await init_collab_schema()
+    p = await pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow("SELECT system_prompt FROM role_prompts WHERE role_id = $1", role_id)
+    return str(row["system_prompt"]) if row else None
+
+
+async def set_role_prompt(role_id: str, system_prompt: str) -> None:
+    await init_collab_schema()
+    text = system_prompt.strip()
+    if not text:
+        raise ValueError("empty_prompt")
+    p = await pool()
+    async with p.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO role_prompts (role_id, system_prompt, updated_at)
+            VALUES ($1, $2, now())
+            ON CONFLICT (role_id) DO UPDATE SET
+              system_prompt = EXCLUDED.system_prompt,
+              updated_at = now()
+            """,
+            role_id,
+            text[:12000],
+        )
+
+
+async def delete_role_prompt(role_id: str) -> None:
+    await init_collab_schema()
+    p = await pool()
+    async with p.acquire() as conn:
+        await conn.execute("DELETE FROM role_prompts WHERE role_id = $1", role_id)
