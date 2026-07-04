@@ -371,7 +371,22 @@ def _add_unique_node(nodes: list[dict[str, Any]], seen: set[tuple[str, str]], no
     nodes.append(node)
 
 
-def _build_l3(document_id: str, markdown: str, lang: str | None) -> GraphPayload:
+def _split_long_block(text: str, max_chars: int) -> list[str]:
+    if len(text) <= max_chars:
+        return [text]
+    parts: list[str] = []
+    while len(text) > max_chars:
+        split_at = text.rfind(" ", 0, max_chars)
+        if split_at < max_chars // 2:
+            split_at = max_chars
+        parts.append(text[:split_at].strip())
+        text = text[split_at:].strip()
+    if text:
+        parts.append(text)
+    return parts
+
+
+def _build_l3(document_id: str, markdown: str, lang: str | None, min_chars: int = 1200) -> GraphPayload:
     nodes: list[dict[str, Any]] = []
     rels: list[dict[str, Any]] = []
     seen_nodes: set[tuple[str, str]] = set()
@@ -388,10 +403,46 @@ def _build_l3(document_id: str, markdown: str, lang: str | None) -> GraphPayload
         },
     )
 
+    raw_blocks = [b.strip() for b in re.split(r"\n\s*\n", markdown) if b.strip()]
+    blocks: list[tuple[str, str]] = []
+    for block in raw_blocks:
+        kind = "heading" if block.startswith("#") else "paragraph"
+        if block.startswith("|") and "|" in block:
+            kind = "table"
+        if kind == "paragraph" and len(block) > min_chars:
+            for sub in _split_long_block(block, min_chars):
+                blocks.append((sub, kind))
+        else:
+            blocks.append((block, kind))
+
+    groups: list[tuple[str, str, bool]] = []
+    buffer: list[str] = []
+    buffer_len = 0
+    for text, kind in blocks:
+        if kind in ("heading", "table"):
+            if buffer:
+                groups.append(("\n\n".join(buffer), "paragraph", False))
+                buffer = []
+                buffer_len = 0
+            groups.append((text, kind, kind == "heading"))
+        else:
+            add_len = len(text) + 2
+            if buffer and buffer_len + add_len > min_chars:
+                groups.append(("\n\n".join(buffer), "paragraph", False))
+                buffer = []
+                buffer_len = 0
+
+            buffer.append(text)
+            buffer_len += len(text) + 2
+    if buffer:
+        groups.append(("\n\n".join(buffer), "paragraph", False))
+
     heading_id: str | None = None
-    blocks = [b.strip() for b in re.split(r"\n\s*\n", markdown) if b.strip()]
-    for idx, block in enumerate(blocks):
-        para_id = f"{document_id}:p:{idx}"
+    para_count = 0
+    for idx, (text, kind, is_heading) in enumerate(groups):
+        para_id = f"{document_id}:p:{para_count}"
+        para_count += 1
+
         _add_unique_node(
             nodes,
             seen_nodes,
@@ -400,9 +451,9 @@ def _build_l3(document_id: str, markdown: str, lang: str | None) -> GraphPayload
                 "label": "TextParagraph",
                 "props": {
                     "id": para_id,
-                    "raw_text_ru": block,
+                    "raw_text_ru": text,
                     "char_start": 0,
-                    "char_end": len(block),
+                    "char_end": len(text),
                 },
             },
         )
@@ -423,7 +474,7 @@ def _build_l3(document_id: str, markdown: str, lang: str | None) -> GraphPayload
             seen_rels.add(rel_key)
 
         if idx > 0:
-            prev_id = f"{document_id}:p:{idx - 1}"
+            prev_id = f"{document_id}:p:{para_count - 2}"
             rel_key = (prev_id, "NEXT_PARAGRAPH", para_id)
             if rel_key not in seen_rels:
                 rels.append(
@@ -436,10 +487,10 @@ def _build_l3(document_id: str, markdown: str, lang: str | None) -> GraphPayload
                 )
                 seen_rels.add(rel_key)
 
-        if block.startswith("#"):
-            title = block.lstrip("#").strip()
+        if is_heading:
+            title = text.lstrip("#").strip()
             heading_id = f"{document_id}:h:{_slug(title) or idx}"
-            level = len(block) - len(block.lstrip("#"))
+            level = len(text) - len(text.lstrip("#"))
             _add_unique_node(
                 nodes,
                 seen_nodes,

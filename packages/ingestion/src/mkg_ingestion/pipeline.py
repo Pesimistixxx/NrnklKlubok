@@ -66,9 +66,23 @@ def repair_encoding(text: str) -> str:
     return text.strip()
 
 
-def chunk_markdown(text: str) -> list[Chunk]:
-    chunks: list[Chunk] = []
-    idx = 0
+def _split_long_block(text: str, max_chars: int) -> list[str]:
+    if len(text) <= max_chars:
+        return [text]
+    parts: list[str] = []
+    while len(text) > max_chars:
+        split_at = text.rfind(" ", 0, max_chars)
+        if split_at < max_chars // 2:
+            split_at = max_chars
+        parts.append(text[:split_at].strip())
+        text = text[split_at:].strip()
+    if text:
+        parts.append(text)
+    return parts
+
+
+def chunk_markdown(text: str, min_chars: int = 1200) -> list[Chunk]:
+    blocks: list[tuple[str, str]] = []
     for block in re.split(r"\n\s*\n", text):
         block = block.strip()
         if not block:
@@ -76,8 +90,42 @@ def chunk_markdown(text: str) -> list[Chunk]:
         kind = "heading" if block.startswith("#") else "paragraph"
         if block.startswith("|") and "|" in block:
             kind = "table"
-        chunks.append(Chunk(index=idx, text=block, kind=kind))
-        idx += 1
+
+        if kind == "paragraph" and len(block) > min_chars:
+            for sub in _split_long_block(block, min_chars):
+                blocks.append((sub, kind))
+        else:
+            blocks.append((block, kind))
+
+    chunks: list[Chunk] = []
+    idx = 0
+    buffer: list[str] = []
+    buffer_len = 0
+
+    for block_text, kind in blocks:
+        if kind == "heading" or kind == "table":
+            if buffer:
+                chunks.append(Chunk(index=idx, text="\n\n".join(buffer), kind="paragraph"))
+                idx += 1
+                buffer = []
+                buffer_len = 0
+            chunks.append(Chunk(index=idx, text=block_text, kind=kind))
+            idx += 1
+            continue
+
+        add_len = len(block_text) + 2
+        if buffer and buffer_len + add_len > min_chars:
+            chunks.append(Chunk(index=idx, text="\n\n".join(buffer), kind="paragraph"))
+            idx += 1
+            buffer = []
+            buffer_len = 0
+
+        buffer.append(block_text)
+        buffer_len += len(block_text) + 2
+
+    if buffer:
+        chunks.append(Chunk(index=idx, text="\n\n".join(buffer), kind="paragraph"))
+
     return chunks
 
 
