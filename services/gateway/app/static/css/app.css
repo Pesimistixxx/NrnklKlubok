@@ -3007,6 +3007,29 @@ input.input-error { border-color: #ef4444 !important; box-shadow: 0 0 0 2px #fec
   height: 28px !important;
 }
 
+@media (max-width: 720px) {
+  .graph-toolbar-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .graph-toolbar-primary {
+    width: 100%;
+  }
+  .graph-toolbar-actions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .graph-toolbar-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .graph-toolbar-filter-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
 .graph-canvas.graph-compact {
   background: #f8f9fa;
 }

@@ -61,9 +61,15 @@ def _indexable_labels() -> frozenset[str]:
     return frozenset({"TextParagraph"}) | L4_LABELS
 
 
-def _search_hit(payload: dict[str, Any], *, score: float, mode: str) -> dict[str, Any]:
+def _search_hit(
+    payload: dict[str, Any],
+    *,
+    score: float,
+    mode: str,
+    retrieval_factors: list[str] | None = None,
+) -> dict[str, Any]:
     node_id = str(payload.get("neo4j_node_id") or payload.get("node_id") or "")
-    return {
+    hit: dict[str, Any] = {
         "node_id": node_id,
         "neo4j_node_id": node_id,
         "label": str(payload.get("label") or ""),
@@ -77,6 +83,83 @@ def _search_hit(payload: dict[str, Any], *, score: float, mode: str) -> dict[str
         "props": {},
         "mode": mode,
     }
+    if retrieval_factors:
+        hit["retrieval_factors"] = list(retrieval_factors)
+    return hit
+
+
+def _hit_key(hit: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(hit.get("document_id") or ""),
+        str(hit.get("node_id") or hit.get("neo4j_node_id") or ""),
+    )
+
+
+def _merge_hit(existing: dict[str, Any] | None, new: dict[str, Any]) -> dict[str, Any]:
+    if not existing:
+        return dict(new)
+    merged = dict(existing)
+    merged["score"] = max(float(existing.get("score") or 0), float(new.get("score") or 0))
+    factors = set(existing.get("retrieval_factors") or [])
+    factors.update(new.get("retrieval_factors") or [])
+    if factors:
+        merged["retrieval_factors"] = sorted(factors)
+    return merged
+
+
+def _graph_hit_from_node(node: dict[str, Any], *, document_id: str, score: float) -> dict[str, Any]:
+    props = node.get("props") or {}
+    payload = {
+        "document_id": document_id,
+        "node_id": str(node.get("id") or ""),
+        "neo4j_node_id": str(node.get("id") or ""),
+        "label": str(node.get("label") or ""),
+        "layer": _node_layer(node),
+        "text": _node_text(node) or str(props.get("text") or ""),
+        "cluster_id": props.get("cluster_id"),
+        "is_anomaly": props.get("is_anomaly"),
+        "anomaly_score": props.get("anomaly_score"),
+    }
+    return _search_hit(
+        payload,
+        score=score,
+        mode="graph_bridge",
+        retrieval_factors=["l4_graph_bridge"],
+    )
+
+
+def _linked_l4_from_graph(graph: dict[str, Any], l3_ids: set[str]) -> list[dict[str, Any]]:
+    """L4-узлы, связанные с L3 TextParagraph через связи графа."""
+    if not l3_ids:
+        return []
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    l4_labels = set(L4_LABELS)
+    found: dict[str, dict[str, Any]] = {}
+
+    def _add_l4(nid: str) -> None:
+        if nid not in nodes:
+            return
+        n = nodes[nid]
+        if str(n.get("label")) not in l4_labels:
+            return
+        props = n.get("props") or {}
+        found[nid] = {
+            "node_id": nid,
+            "label": str(n.get("label") or ""),
+            "cluster_id": props.get("cluster_id"),
+            "is_anomaly": props.get("is_anomaly"),
+            "anomaly_score": props.get("anomaly_score"),
+            "text": _node_text(n),
+        }
+
+    for rel in graph.get("relationships") or []:
+        f, t = str(rel.get("from") or ""), str(rel.get("to") or "")
+        for l3_id in l3_ids:
+            if f == l3_id:
+                _add_l4(t)
+            elif t == l3_id:
+                _add_l4(f)
+    return list(found.values())
 
 
 async def ensure_qdrant_collections() -> None:
