@@ -162,6 +162,27 @@ class DocumentRepository:
         if path.exists():
             path.unlink(missing_ok=True)
 
+    def delete(self, doc_id: str) -> bool:
+        """Удалить документ из реестра и все связанные файлы на диске."""
+        with self._lock:
+            data = self._load()
+            rec = data.pop(doc_id, None)
+            if not rec:
+                return False
+            self._save(data)
+        stored = rec.get("stored_name")
+        if stored:
+            (self.files / stored).unlink(missing_ok=True)
+        for path in (
+            self.md / self.markdown_filename(doc_id),
+            self.md_raw / self.markdown_filename(doc_id),
+            self.base / "md_marked" / self.markdown_filename(doc_id),
+            self.graph / f"{doc_id.replace(':', '_')}.json",
+            self.base / "logs" / f"{doc_id.replace(':', '_')}.log",
+        ):
+            path.unlink(missing_ok=True)
+        return True
+
     def request_cancel_extraction(self, doc_id: str) -> None:
         with self._lock:
             data = self._load()

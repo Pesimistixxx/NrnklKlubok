@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=137" />
+  <link rel="stylesheet" href="/static/css/app.css?v=147" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
@@ -145,50 +145,51 @@
       <section class="page page-docs hidden" id="pageDocs">
         <div class="docs-layout">
           <aside class="docs-sidebar">
-            <div class="upload-panel upload-panel-prominent" id="homeTabUpload">
-              <div class="upload-panel-head">
-                <span class="upload-panel-icon" aria-hidden="true"><svg class="icon-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>
-                <h2 data-i18n="docs_upload_title">Загрузить документ</h2>
-              </div>
-              <p class="muted small upload-pipeline-hint" data-i18n="docs_upload_hint">Upload → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация — автоматически после загрузки</p>
-              <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
-              <input type="hidden" id="classification" value="открытый" />
-              <div class="drop" id="drop" role="button" tabindex="0" aria-label="Зона загрузки файлов">
-                <div id="dropText" data-i18n="docs_drop_text">Перетащите файл сюда</div>
-                <div class="drop-hint muted small" data-i18n="docs_drop_hint">или нажмите для выбора</div>
-              </div>
-              <div class="upload-actions">
-                <button class="btn btn-ghost btn-small" id="pickBtn" type="button" data-i18n="docs_pick">Выбрать</button>
-                <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled data-i18n="docs_upload_btn">Загрузить и обработать</button>
-              </div>
-              <details class="upload-meta" id="uploadMetaPanel">
-                <summary data-i18n="docs_upload_meta_toggle">Метаданные (необязательно)</summary>
-                <div class="upload-meta-fields">
-                  <label class="upload-meta-field">
-                    <span data-i18n="docs_meta_geography">География / источник</span>
-                    <select id="uploadGeography" aria-label="Geography">
-                      <option value="" data-i18n="docs_meta_geo_unset">— не указано —</option>
-                      <option value="RU" data-i18n="docs_meta_geo_ru">Россия (RU / domestic)</option>
-                      <option value="foreign" data-i18n="docs_meta_geo_foreign">Зарубежная (foreign)</option>
-                      <option value="international" data-i18n="docs_meta_geo_intl">Международная</option>
-                    </select>
-                  </label>
-                  <label class="upload-meta-field">
-                    <span data-i18n="docs_meta_source">Откуда (текст)</span>
-                    <input type="text" id="uploadSourceLocation" maxlength="200" autocomplete="off" data-i18n-placeholder="docs_meta_source_ph" placeholder="организация, страна, URL…" />
-                  </label>
-                  <label class="upload-meta-field">
-                    <span data-i18n="docs_meta_date">Дата материала</span>
-                    <input type="date" id="uploadMaterialDate" />
-                  </label>
+            <details class="docs-upload-drawer upload-panel upload-panel-prominent" id="homeTabUpload">
+              <summary class="docs-upload-drawer-summary">
+                <span class="docs-upload-drawer-title" data-i18n="docs_upload_title">Загрузить документ</span>
+                <span class="muted small docs-upload-drawer-hint" data-i18n="docs_upload_short_hint">PDF, DOCX, MD · полный пайплайн автоматически</span>
+              </summary>
+              <div class="docs-upload-drawer-body">
+                <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
+                <input type="hidden" id="classification" value="открытый" />
+                <div class="drop drop-compact" id="drop" role="button" tabindex="0" aria-label="Зона загрузки файлов">
+                  <div id="dropText" data-i18n="docs_drop_text">Перетащите файл сюда</div>
+                  <div class="drop-hint muted small" data-i18n="docs_drop_hint">или нажмите для выбора</div>
                 </div>
-              </details>
-              <p class="muted small" id="formatsHint">…</p>
-              <div class="error-box" id="uploadError"></div>
-            </div>
+                <div class="upload-actions upload-actions-compact">
+                  <button class="btn btn-ghost btn-small" id="pickBtn" type="button" data-i18n="docs_pick">Выбрать</button>
+                  <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled data-i18n="docs_upload_btn">Загрузить и обработать</button>
+                </div>
+                <details class="upload-meta" id="uploadMetaPanel">
+                  <summary data-i18n="docs_upload_meta_toggle">Метаданные (необязательно)</summary>
+                  <div class="upload-meta-fields">
+                    <label class="upload-meta-field">
+                      <span data-i18n="docs_meta_geography">География / источник</span>
+                      <select id="uploadGeography" aria-label="Geography">
+                        <option value="" data-i18n="docs_meta_geo_unset">— не указано —</option>
+                        <option value="RU" data-i18n="docs_meta_geo_ru">Россия (RU / domestic)</option>
+                        <option value="foreign" data-i18n="docs_meta_geo_foreign">Зарубежная (foreign)</option>
+                        <option value="international" data-i18n="docs_meta_geo_intl">Международная</option>
+                      </select>
+                    </label>
+                    <label class="upload-meta-field">
+                      <span data-i18n="docs_meta_source">Откуда (текст)</span>
+                      <input type="text" id="uploadSourceLocation" maxlength="200" autocomplete="off" data-i18n-placeholder="docs_meta_source_ph" placeholder="организация, страна, URL…" />
+                    </label>
+                    <label class="upload-meta-field">
+                      <span data-i18n="docs_meta_date">Дата материала</span>
+                      <input type="date" id="uploadMaterialDate" />
+                    </label>
+                  </div>
+                </details>
+                <p class="muted small" id="formatsHint">…</p>
+                <div class="error-box" id="uploadError"></div>
+              </div>
+            </details>
             <div class="docs-sidebar-scroll">
               <div class="docs-sidebar-head">
-                <h2 data-i18n="docs_list_title">Документы</h2>
+                <h2 class="docs-sidebar-title"><span data-i18n="docs_list_title">Документы</span> <span class="docs-count muted" id="docsCount"></span></h2>
                 <input type="search" class="doc-list-filter" id="docListFilter" data-i18n-placeholder="docs_filter_placeholder" placeholder="Фильтр по имени…" autocomplete="off" />
                 <div class="doc-list-meta-filters">
                   <select id="docGeoFilter" class="doc-list-filter-select" aria-label="Geography filter">
@@ -202,7 +203,7 @@
               </div>
               <div class="docs-page-list doc-nav" id="docs"><div class="muted" data-i18n="docs_loading">Загрузка…</div></div>
               <div class="docs-sidebar-footer">
-                <button class="btn btn-ghost btn-small" id="viewAllGraphBtn" type="button" data-i18n="docs_view_all_graph">Полный граф всех документов</button>
+                <button class="btn btn-ghost btn-small docs-footer-link" id="viewAllGraphBtn" type="button" data-i18n="docs_view_all_graph">Полный граф всех документов</button>
               </div>
             </div>
           </aside>
@@ -261,6 +262,8 @@
             <h2 class="doc-work-title" id="docWorkTitle">Документ</h2>
             <span class="badge s-uploaded" id="docWorkBadge">—</span>
             <span class="muted doc-work-meta" id="docWorkMeta"></span>
+            <button type="button" class="btn btn-warning btn-small doc-work-stop-btn hidden" id="docWorkStopBtn" data-i18n="docs_stop">Стоп</button>
+            <button type="button" class="btn btn-danger btn-small doc-work-delete-btn hidden" id="docWorkDeleteBtn" data-i18n="docs_delete">Удалить</button>
             <div class="doc-upload-fallback hidden" id="docUploadFallback">
               <button class="btn btn-primary btn-small btn-with-icon" id="docUploadFallbackBtn" type="button" data-i18n-title="docs_upload_title" title="Загрузить документ"><svg class="icon-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span data-i18n="graph_upload_fallback">Загрузить</span></button>
             </div>
@@ -812,9 +815,9 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
-  <script src="/static/js/icons.js?v=137"></script>
-  <script src="/static/js/graph-mini.js?v=137"></script>
-  <script src="/static/js/app.js?v=137"></script>
-  <script src="/static/js/chats.js?v=137"></script>
+  <script src="/static/js/icons.js?v=142"></script>
+  <script src="/static/js/graph-mini.js?v=142"></script>
+  <script src="/static/js/app.js?v=147"></script>
+  <script src="/static/js/chats.js?v=147"></script>
 </body>
 </html>

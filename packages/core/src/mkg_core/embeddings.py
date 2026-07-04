@@ -15,7 +15,7 @@ import logging
 import re
 from typing import Any, Literal
 
-from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue, PointStruct
+from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchAny, MatchValue, PointStruct
 
 from mkg_core.annotated_md import _LABEL_LAYER
 from mkg_core.config import get_settings
@@ -373,6 +373,30 @@ async def count_indexed_points(*, document_id: str | None = None) -> dict[str, i
         except Exception as exc:
             log.warning("qdrant count %s: %s", name, exc)
             out[name] = 0
+    return out
+
+
+async def delete_document_points(document_id: str) -> dict[str, int]:
+    """Удалить все Qdrant-точки, привязанные к document_id."""
+    settings = get_settings()
+    qdrant = QdrantClientSingleton.instance().client
+    filt = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
+    selector = FilterSelector(filter=filt)
+    out: dict[str, int] = {}
+    for name in (
+        settings.qdrant_collection_chunks,
+        settings.qdrant_collection_claims,
+        settings.qdrant_collection_entities,
+    ):
+        deleted = 0
+        try:
+            before = await count_indexed_points(document_id=document_id)
+            await qdrant.delete(collection_name=name, points_selector=selector)
+            after = await count_indexed_points(document_id=document_id)
+            deleted = max(0, int(before.get(name, 0)) - int(after.get(name, 0)))
+        except Exception as exc:
+            log.warning("qdrant delete %s doc=%s: %s", name, document_id, exc)
+        out[name] = deleted
     return out
 
 

@@ -31,6 +31,7 @@ from mkg_core import (
     upsert_document,
 )
 from mkg_core.meta_db import count_restricted_documents as db_count_restricted_documents
+from mkg_core.meta_db import delete_document as db_delete_document
 from mkg_core.config import get_settings
 from mkg_core.queue import enqueue, abort_job
 from mkg_core.layer_pipeline import build_layer_pipeline
@@ -78,6 +79,7 @@ from app.upload import accept_upload
 from app.roles import get_role
 
 _GRAPH_EDIT_ROLES = frozenset({"admin", "engineer"})
+_DELETE_DOC_ROLES = frozenset({"admin", "engineer", "researcher"})
 
 log = setup_logging("gateway")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -511,24 +513,15 @@ async def reprocess_full_pipeline(doc_id: str, background: BackgroundTasks) -> d
     st = rec.get("status", "")
     if md and st in (DocStatus.md_ready.value, DocStatus.loaded.value, DocStatus.failed.value):
         get_repo().clear_cancel_extraction(doc_id)
-        job_id = await enqueue("run_extraction", doc_id)
-        get_repo().set_status(
-            doc_id,
-            DocStatus.extracting.value,
-            step="extraction",
-            extraction_job_id=job_id,
-            cancel_requested=False,
-            processing_mode="full",
-        )
-        try:
-            await update_document_status(doc_id, DocStatus.extracting.value, step="extraction")
-        except Exception:
-            pass
+        from mkg_core.extraction_schedule import schedule_document_extraction
+
+        result = await schedule_document_extraction(doc_id)
         return {
             "document_id": doc_id,
-            "status": DocStatus.extracting.value,
+            "status": result.get("status", DocStatus.extracting.value),
             "processing_mode": "full",
-            "job_id": job_id or "",
+            "job_id": result.get("job_id", ""),
+            "mode": result.get("mode", "queue"),
         }
     get_repo().set_status(
         doc_id,
@@ -661,6 +654,55 @@ async def get_document(request: Request, doc_id: str) -> DocumentOut:
     return _to_out(rec)
 
 
+@app.delete(f"{API}/documents/{{doc_id}}")
+async def delete_document(request: Request, doc_id: str) -> dict[str, Any]:
+    """Удалить документ: реестр, файлы, Qdrant; узлы Neo4j с id, начинающимся с doc_id."""
+    role_id = role_from_request(request)
+    if role_id not in _DELETE_DOC_ROLES:
+        raise HTTPException(status_code=403, detail="Удаление доступно ролям admin, engineer и researcher")
+    rec = await _load_document_record(doc_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(role_id, rec.get("classification"))
+    if rec.get("status") in ("uploaded", "processing", "extracting"):
+        raise HTTPException(status_code=409, detail="Дождитесь завершения обработки или нажмите «Стоп»")
+
+    from mkg_core.embeddings import delete_document_points
+
+    qdrant_stats: dict[str, int] = {}
+    try:
+        qdrant_stats = await delete_document_points(doc_id)
+    except Exception:
+        pass
+    neo4j_deleted = 0
+    try:
+        client = Neo4jClient()
+        prefix = doc_id.replace("'", "")
+        rows = await client.run_write(
+            "MATCH (n) WHERE n.id = $doc_id OR n.id STARTS WITH $prefix "
+            "WITH collect(n) AS nodes "
+            "UNWIND nodes AS n "
+            "DETACH DELETE n "
+            "RETURN size(nodes) AS c",
+            {"doc_id": doc_id, "prefix": f"{prefix}:"},
+        )
+        if rows:
+            neo4j_deleted = int(rows[0].get("c", 0))
+    except Exception:
+        pass
+    get_repo().delete(doc_id)
+    try:
+        await db_delete_document(doc_id)
+    except Exception:
+        pass
+    return {
+        "document_id": doc_id,
+        "deleted": True,
+        "qdrant": qdrant_stats,
+        "neo4j_nodes_removed": neo4j_deleted,
+    }
+
+
 @app.get(f"{API}/documents/{{doc_id}}/markdown")
 async def get_markdown(
     request: Request,
@@ -723,7 +765,7 @@ async def get_source(request: Request, doc_id: str) -> Response:
 
 
 @app.post(f"{API}/documents/{{doc_id}}/submit")
-async def submit_document(doc_id: str) -> dict[str, str]:
+async def submit_document(doc_id: str, background: BackgroundTasks) -> dict[str, str]:
     rec = get_repo().get(doc_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
@@ -731,36 +773,218 @@ async def submit_document(doc_id: str) -> dict[str, str]:
         raise HTTPException(status_code=409, detail="Дождитесь md_ready")
     if (rec.get("processing_mode") or "full") == "answers_only":
         get_repo().set_status(doc_id, rec.get("status"), processing_mode="full")
-    get_repo().clear_cancel_extraction(doc_id)
-    job_id = await enqueue("run_extraction", doc_id)
-    get_repo().set_status(
-        doc_id,
-        DocStatus.extracting.value,
-        step="extraction",
-        extraction_job_id=job_id,
-        cancel_requested=False,
-    )
+    from mkg_core.extraction_schedule import schedule_document_extraction
+
+    async def _run() -> None:
+        await schedule_document_extraction(doc_id)
+
+    # Быстрый ответ UI; extraction может идти inline в gateway.
+    background.add_task(_run)
+    get_repo().set_status(doc_id, DocStatus.extracting.value, step="extraction", cancel_requested=False)
     try:
         await update_document_status(doc_id, DocStatus.extracting.value, step="extraction")
     except Exception:
         pass
-    return {"document_id": doc_id, "status": DocStatus.extracting.value, "job_id": job_id or ""}
+    return {"document_id": doc_id, "status": DocStatus.extracting.value, "job_id": ""}
+
+
+@app.post(f"{API}/documents/{{doc_id}}/refresh-embeddings")
+async def refresh_document_embeddings(request: Request, doc_id: str) -> dict[str, Any]:
+    """Пересоздать эмбеддинги документа в Qdrant (удалить старые точки → переиндекс)."""
+    rec = await _load_document_record(doc_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(role_from_request(request), rec.get("classification"))
+    from mkg_core.embeddings import delete_document_points, index_document_graph, index_document_markdown
+
+    repo = get_repo()
+    await delete_document_points(doc_id)
+    graph = repo.read_graph(doc_id)
+    if graph and graph.get("nodes"):
+        stats = await index_document_graph(doc_id, graph)
+        mode = (rec.get("processing_mode") or "full")
+        if mode != "answers_only":
+            from mkg_core.l4_clustering import apply_document_l4_cluster
+
+            l4 = await apply_document_l4_cluster(doc_id)
+            stats = {**stats, "l4": l4}
+    else:
+        md = repo.read_markdown(doc_id)
+        if not md:
+            raise HTTPException(status_code=409, detail="Нет Markdown и графа для индексации")
+        stats = await index_document_markdown(doc_id, md)
+    repo.set_status(doc_id, rec.get("status", DocStatus.loaded.value), step="qdrant_reindexed")
+    return {"document_id": doc_id, **stats}
+
+
+async def _abort_document_jobs(rec: dict[str, Any]) -> None:
+    await abort_job(rec.get("extraction_job_id"))
+    await abort_job(rec.get("job_id"))
+
+
+async def _wipe_neo4j_document(doc_id: str) -> int:
+    try:
+        client = Neo4jClient()
+        prefix = doc_id.replace("'", "")
+        rows = await client.run_write(
+            "MATCH (n) WHERE n.id = $doc_id OR n.id STARTS WITH $prefix "
+            "WITH collect(n) AS nodes "
+            "UNWIND nodes AS n "
+            "DETACH DELETE n "
+            "RETURN size(nodes) AS c",
+            {"doc_id": doc_id, "prefix": f"{prefix}:"},
+        )
+        if rows:
+            return int(rows[0].get("c", 0))
+    except Exception:
+        pass
+    return 0
+
+
+def _clear_markdown_and_graph(doc_id: str) -> None:
+    repo = get_repo()
+    repo.delete_graph(doc_id)
+    for path in (
+        repo.md / repo.markdown_filename(doc_id),
+        repo.md_raw / repo.markdown_filename(doc_id),
+        repo.base / "md_marked" / repo.markdown_filename(doc_id),
+    ):
+        path.unlink(missing_ok=True)
+
+
+@app.post(f"{API}/documents/{{doc_id}}/reset")
+async def reset_document(
+    request: Request,
+    doc_id: str,
+    background: BackgroundTasks,
+    mode: str = Query(default="soft", pattern="^(soft|hard)$"),
+) -> dict[str, Any]:
+    """Сброс пайплайна: soft → md_ready (сохранить MD), hard → uploaded + очистка графа/Qdrant/Neo4j."""
+    rec = await _load_document_record(doc_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(role_from_request(request), rec.get("classification"))
+    repo = get_repo()
+    live = repo.get(doc_id) or rec
+    if live.get("status") == DocStatus.extracting.value:
+        repo.request_cancel_extraction(doc_id)
+    await _abort_document_jobs(live)
+    repo.clear_cancel_extraction(doc_id)
+
+    if mode == "soft":
+        if not repo.read_markdown(doc_id):
+            raise HTTPException(status_code=409, detail="Markdown не готов — используйте hard reset")
+        repo.delete_graph(doc_id)
+        repo.set_status(
+            doc_id,
+            DocStatus.md_ready.value,
+            step="reset_soft",
+            error=None,
+            extraction_job_id=None,
+            job_id=None,
+            graph_nodes=0,
+            graph_relationships=0,
+            neo4j_synced=False,
+            cancel_requested=False,
+        )
+        try:
+            await update_document_status(doc_id, DocStatus.md_ready.value, step="reset_soft", error=None)
+        except Exception:
+            pass
+        return {"document_id": doc_id, "status": DocStatus.md_ready.value, "mode": "soft"}
+
+    from mkg_core.embeddings import delete_document_points
+
+    qdrant_stats: dict[str, int] = {}
+    try:
+        qdrant_stats = await delete_document_points(doc_id)
+    except Exception:
+        pass
+    neo4j_deleted = await _wipe_neo4j_document(doc_id)
+    _clear_markdown_and_graph(doc_id)
+    if repo.read_source(doc_id) is None:
+        raise HTTPException(status_code=409, detail="Исходный файл не найден")
+    repo.set_status(
+        doc_id,
+        DocStatus.uploaded.value,
+        step="reset_hard",
+        error=None,
+        extraction_job_id=None,
+        job_id=None,
+        graph_nodes=0,
+        graph_relationships=0,
+        neo4j_synced=False,
+        cancel_requested=False,
+    )
+    try:
+        await update_document_status(doc_id, DocStatus.uploaded.value, step="reset_hard", error=None)
+    except Exception:
+        pass
+    job_id = await enqueue("run_ingestion", doc_id)
+    if job_id is None:
+        background.add_task(_run_ingestion_inline, doc_id)
+    return {
+        "document_id": doc_id,
+        "status": DocStatus.processing.value,
+        "mode": "hard",
+        "qdrant": qdrant_stats,
+        "neo4j_nodes_removed": neo4j_deleted,
+    }
 
 
 @app.post(f"{API}/documents/{{doc_id}}/cancel-extraction")
 async def cancel_extraction(doc_id: str) -> dict[str, str]:
+    """Остановить extraction (legacy alias)."""
+    return await cancel_document_pipeline(doc_id)
+
+
+@app.post(f"{API}/documents/{{doc_id}}/cancel")
+async def cancel_document_pipeline(doc_id: str) -> dict[str, str]:
+    """Остановить активный пайплайн: OCR/ingestion или extraction."""
     rec = get_repo().get(doc_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
-    if rec.get("status") != DocStatus.extracting.value:
-        raise HTTPException(status_code=409, detail="Извлечение не выполняется")
-    get_repo().request_cancel_extraction(doc_id)
-    await abort_job(rec.get("extraction_job_id"))
-    try:
-        await update_document_status(doc_id, DocStatus.extracting.value, step="cancelling")
-    except Exception:
-        pass
-    return {"document_id": doc_id, "status": "cancelling"}
+    status = rec.get("status")
+    if status == DocStatus.extracting.value:
+        get_repo().request_cancel_extraction(doc_id)
+        await abort_job(rec.get("extraction_job_id"))
+        try:
+            await update_document_status(doc_id, DocStatus.extracting.value, step="cancelling")
+        except Exception:
+            pass
+        return {"document_id": doc_id, "status": "cancelling", "phase": "extraction"}
+    if status in (DocStatus.uploaded.value, DocStatus.processing.value):
+        await _abort_document_jobs(rec)
+        get_repo().clear_cancel_extraction(doc_id)
+        repo = get_repo()
+        if repo.read_markdown(doc_id):
+            repo.set_status(
+                doc_id,
+                DocStatus.md_ready.value,
+                step="ingestion_cancelled",
+                error=None,
+                job_id=None,
+                extraction_job_id=None,
+            )
+            new_status = DocStatus.md_ready.value
+            new_step = "ingestion_cancelled"
+        else:
+            repo.set_status(
+                doc_id,
+                DocStatus.uploaded.value,
+                step="cancelled",
+                error=None,
+                job_id=None,
+                extraction_job_id=None,
+            )
+            new_status = DocStatus.uploaded.value
+            new_step = "cancelled"
+        try:
+            await update_document_status(doc_id, new_status, step=new_step, error=None)
+        except Exception:
+            pass
+        return {"document_id": doc_id, "status": new_status, "phase": "ingestion"}
+    raise HTTPException(status_code=409, detail="Документ не обрабатывается")
 
 
 @app.get(f"{API}/documents/{{doc_id}}/preview")

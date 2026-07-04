@@ -6,7 +6,6 @@ from typing import Literal
 
 from mkg_core.config import get_settings
 from mkg_core.meta_db import update_document_status
-from mkg_core.queue import enqueue
 from mkg_core.store import get_repo
 
 log = logging.getLogger(__name__)
@@ -65,15 +64,6 @@ async def after_ingestion_done(document_id: str) -> None:
     if not settings.auto_extract_after_ingest:
         return
 
-    job_id = await enqueue("run_extraction", document_id)
-    repo.set_status(
-        document_id,
-        "extracting",
-        step="extraction",
-        extraction_job_id=job_id,
-        cancel_requested=False,
-    )
-    try:
-        await update_document_status(document_id, "extracting", step="extraction")
-    except Exception as exc:
-        log.warning("postgres update failed extraction schedule: %s", exc)
+    from mkg_core.extraction_schedule import schedule_document_extraction
+
+    await schedule_document_extraction(document_id)

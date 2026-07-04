@@ -22,6 +22,7 @@ RUN python -c "\
 from mkg_core.comparison import merge_repo_comparison, run_comparison_analysis; \
 from mkg_core.embeddings import compute_embedding_viz, embedding_status, index_document_graph, list_indexed_points, reindex_corpus, reindex_corpus_entities, search_document, search_entities, search_global; \
 from mkg_extraction.loader import load_graph; \
+from mkg_core.document_extraction import run_document_extraction; \
 from app.main import app; \
 import numpy; \
 print('gateway import ok:', app.title)"

@@ -221,12 +221,20 @@ const MKG_I18N = {
     lang_en: "English",
     docs_upload_title: "Загрузить документ",
     docs_upload_hint: "Upload → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация — автоматически после загрузки",
+    docs_upload_short_hint: "PDF, DOCX, MD · полный пайплайн автоматически",
     docs_drop_text: "Перетащите файл сюда",
     docs_drop_hint: "или нажмите для выбора",
     docs_drop_reset: "Перетащите файл или нажмите",
     docs_drop_formats: "PDF · DOCX · XLSX · MD · TXT",
     docs_pick: "Выбрать",
     docs_upload_btn: "Загрузить и обработать",
+    docs_upload_quick: "+ Загрузить",
+    docs_upload_sticky: "+ Загрузить файл",
+    docs_refresh_embeddings: "↺ Обновить Qdrant",
+    docs_reset_soft: "↺ Сброс к MD",
+    docs_reset_hard: "Жёсткий сброс",
+    docs_reset_soft_confirm: "Сбросить к Markdown? Граф и индексы будут очищены, MD сохранится.",
+    docs_reset_hard_confirm: "Жёсткий сброс? Удалятся MD, граф, Neo4j и Qdrant; OCR запустится заново из исходного файла.",
     docs_uploading: "Загрузка…",
     docs_upload_meta_toggle: "Метаданные (необязательно)",
     docs_meta_geography: "География / источник",
@@ -256,6 +264,10 @@ const MKG_I18N = {
     docs_list_no_match: "Нет документов по фильтру",
     docs_list_error: "Не удалось загрузить документы",
     docs_retry: "Повторить",
+    docs_delete: "Удалить",
+    docs_delete_busy: "Нельзя удалить во время OCR/extraction — дождитесь или остановите",
+    docs_delete_confirm: "Удалить документ «{name}»? Файл, граф и индекс Qdrant будут удалены безвозвратно.",
+    docs_extract_graph: "↺ В граф",
     docs_back: "← Документы",
     docs_build_graph: "Построить граф",
     docs_rebuild_rels: "↺ Перестроить связи",
@@ -439,6 +451,8 @@ const MKG_I18N = {
     step_extraction_default: "извлечение",
     step_layer_facts: "факты {current}/{total}",
     step_ingestion: "OCR / ingestion",
+    step_ingestion_done: "MD готов",
+    step_extraction_pending: "ожидание извлечения",
     step_reprocess: "повтор OCR",
     step_extraction: "извлечение",
     step_layer_L3: "текст L3",
@@ -458,6 +472,8 @@ const MKG_I18N = {
     step_l4_failed: "ошибка L4",
     step_cancelling: "остановка",
     step_extraction_cancelled: "остановлено",
+    step_ingestion_cancelled: "OCR остановлен",
+    step_cancelled: "остановлено",
     step_extraction_empty: "пустой граф",
     layer_status_pending: "ожид.",
     layer_status_running: "идёт",
@@ -710,12 +726,20 @@ const MKG_I18N = {
     lang_en: "English",
     docs_upload_title: "Upload document",
     docs_upload_hint: "Upload → OCR → MD → graph → Neo4j → Qdrant → global L4 clustering — runs automatically after upload",
+    docs_upload_short_hint: "PDF, DOCX, MD · full pipeline runs automatically",
     docs_drop_text: "Drop file here",
     docs_drop_hint: "or click to browse",
     docs_drop_reset: "Drop file or click",
     docs_drop_formats: "PDF · DOCX · XLSX · MD · TXT",
     docs_pick: "Browse",
     docs_upload_btn: "Upload and process",
+    docs_upload_quick: "+ Upload",
+    docs_upload_sticky: "+ Upload file",
+    docs_refresh_embeddings: "↺ Refresh Qdrant",
+    docs_reset_soft: "↺ Reset to MD",
+    docs_reset_hard: "Hard reset",
+    docs_reset_soft_confirm: "Reset to Markdown? Graph and indexes will be cleared; MD is kept.",
+    docs_reset_hard_confirm: "Hard reset? MD, graph, Neo4j and Qdrant will be wiped; OCR will restart from the source file.",
     docs_uploading: "Uploading…",
     docs_upload_meta_toggle: "Metadata (optional)",
     docs_meta_geography: "Geography / source",
@@ -745,6 +769,10 @@ const MKG_I18N = {
     docs_list_no_match: "No documents match filter",
     docs_list_error: "Failed to load documents",
     docs_retry: "Retry",
+    docs_delete: "Delete",
+    docs_delete_busy: "Cannot delete during OCR/extraction — wait or stop first",
+    docs_delete_confirm: "Delete «{name}»? File, graph, and Qdrant index will be removed permanently.",
+    docs_extract_graph: "↺ To graph",
     docs_back: "← Documents",
     docs_build_graph: "Build graph",
     docs_rebuild_rels: "↺ Rebuild relationships",
@@ -928,6 +956,8 @@ const MKG_I18N = {
     step_extraction_default: "extraction",
     step_layer_facts: "facts {current}/{total}",
     step_ingestion: "OCR / ingestion",
+    step_ingestion_done: "MD ready",
+    step_extraction_pending: "awaiting extraction",
     step_reprocess: "OCR retry",
     step_extraction: "extraction",
     step_layer_L3: "L3 text",
@@ -947,6 +977,8 @@ const MKG_I18N = {
     step_l4_failed: "L4 error",
     step_cancelling: "stopping",
     step_extraction_cancelled: "stopped",
+    step_ingestion_cancelled: "OCR stopped",
+    step_cancelled: "stopped",
     step_extraction_empty: "empty graph",
     layer_status_pending: "pending",
     layer_status_running: "running",
@@ -1144,6 +1176,7 @@ const els = {
   drop: $("drop"),
   dropText: $("dropText"),
   pickBtn: $("pickBtn"),
+  docsCount: $("docsCount"),
   uploadBtn: $("uploadBtn"),
   uploadError: $("uploadError"),
   formatsHint: $("formatsHint"),
@@ -1294,6 +1327,8 @@ const els = {
   liveRels: $("liveRels"),
   docWorkHeader: $("docWorkHeader"),
   docWorkTitle: $("docWorkTitle"),
+  docWorkDeleteBtn: $("docWorkDeleteBtn"),
+  docWorkStopBtn: $("docWorkStopBtn"),
   docWorkBadge: $("docWorkBadge"),
   docWorkMeta: $("docWorkMeta"),
   docWorkTabJourney: $("docWorkTabJourney"),
@@ -1650,7 +1685,7 @@ const STAGE_RETRY = {
   layers: { action: "extract", labelKey: "pipe_retry_extract", showOn: ["failed", "done"] },
   graph: { action: "extract", labelKey: "pipe_retry_extract", showOn: ["failed", "done"] },
   neo4j: { action: "neo4j", labelKey: "pipe_retry_neo4j", showOn: ["failed", "done"] },
-  qdrant: { action: "index", labelKey: "pipe_retry_index", showOn: ["failed", "done"] },
+  qdrant: { action: "refresh_embeddings", labelKey: "docs_refresh_embeddings", showOn: ["failed", "done", "pending", "active"] },
   l4: { action: "l4_cluster", labelKey: "pipe_retry_l4", showOn: ["failed", "done"] },
 };
 
@@ -1660,6 +1695,30 @@ function isAnswersOnlyMode(doc) {
 
 function isDocPipelineBusy(doc) {
   return doc && ["uploaded", "processing", "extracting"].includes(doc.status);
+}
+
+/** MD готов, граф ещё не построен — нужен submit / schedule extraction */
+function isDocAwaitingExtraction(doc) {
+  if (!doc || isAnswersOnlyMode(doc)) return false;
+  if (doc.status !== "md_ready") return false;
+  if ((doc.graph_nodes || 0) > 0) return false;
+  if (isDocPipelineBusy(doc)) return false;
+  const step = doc.step || "";
+  return !step || step === "ingestion_done" || step === "extraction_cancelled";
+}
+
+function pipelineStepHint(doc, stageId) {
+  const step = doc?.step || "";
+  if (!step) return "";
+  if (step === "ingestion_done" || step === "extraction_cancelled") {
+    if (stageId === "md") return t("step_ingestion_done");
+    if (stageId === "layers" || stageId === "graph") return t("step_extraction_pending");
+    return "";
+  }
+  if (["ocr", "layers", "graph", "neo4j", "l4"].includes(stageId)) {
+    return stepLabel(step);
+  }
+  return "";
 }
 
 function needsFullGraphBuild(doc) {
@@ -1892,15 +1951,27 @@ function bindFullPipelineButtons(root = document) {
 }
 
 function shouldShowStageRetry(stageId, state, doc) {
-  if (!doc || state === "active" || state === "pending") return false;
+  if (!doc) return false;
   if (isAnswersOnlyMode(doc) && stageId === "graph" && state === "skipped") return true;
+  if (isAnswersOnlyMode(doc) && ["neo4j", "l4"].includes(stageId)) return false;
   if (state === "skipped") return false;
   const cfg = STAGE_RETRY[stageId];
-  if (!cfg || !cfg.showOn.includes(state)) return false;
-  if (isAnswersOnlyMode(doc) && ["layers", "neo4j", "l4"].includes(stageId)) return false;
+  if (!cfg) return false;
+  const nodes = doc.graph_nodes || 0;
+  const st = doc.status || "";
+  // Застрял на MD без графа — можно принудительно запустить extraction
+  if (["graph", "layers"].includes(stageId) && isDocAwaitingExtraction(doc) && (state === "active" || state === "pending")) {
+    return true;
+  }
+  // Граф готов — перезапуск извлечения / Neo4j / индекса
+  if (stageId === "graph" && (state === "done" || state === "failed")) return true;
+  if (stageId === "neo4j" && nodes > 0 && (state === "done" || state === "failed" || state === "pending")) return true;
+  if (stageId === "qdrant" && nodes > 0 && (state === "done" || state === "failed" || state === "pending" || state === "active")) return true;
+  if (stageId === "l4" && nodes > 0 && cfg.showOn.includes(state)) return true;
+  if (state === "active" || state === "pending") return false;
+  if (!cfg.showOn.includes(state)) return false;
   if (stageId === "md" && state !== "done") return false;
-  if (stageId === "layers" && state === "done" && (doc.graph_nodes || 0) === 0) return false;
-  if (stageId === "l4" && (doc.graph_nodes || 0) === 0) return false;
+  if (stageId === "l4" && nodes === 0) return false;
   return true;
 }
 
@@ -2038,20 +2109,21 @@ function getDocPipelineStates(doc) {
   return states;
 }
 
-function renderDocPipelineHtml(doc, { compact = true, showRetry = true } = {}) {
+function renderDocPipelineHtml(doc, { compact = true, showRetry = true, suppressGraphRetry = false } = {}) {
   const states = getDocPipelineStates(doc);
   const docId = doc.id || doc.document_id;
   const chips = DOC_PIPELINE.map((s, i) => {
     const state = states[s.id] || "pending";
     const label = compact ? pipeShort(s.id) : pipeLabel(s.id);
-    const stepHint = doc.step && state === "active" ? stepLabel(doc.step) : "";
+    const stepHint = state === "active" ? pipelineStepHint(doc, s.id) : "";
     const title = stepHint ? `${pipeLabel(s.id)} · ${stepHint}` : pipeLabel(s.id);
     const retryAction = (isAnswersOnlyMode(doc) && s.id === "graph" && state === "skipped")
       ? "full"
       : (STAGE_RETRY[s.id]?.action || "");
     const retryLabel = retryAction === "full" ? "↺" : (STAGE_RETRY[s.id] ? t(STAGE_RETRY[s.id].labelKey) : "↺");
     const showGraphFull = isAnswersOnlyMode(doc) && s.id === "graph" && state === "skipped";
-    const retry = showRetry && docId && (shouldShowStageRetry(s.id, state, doc) || showGraphFull)
+    const hideDupRetry = suppressGraphRetry && s.id === "graph" && isDocAwaitingExtraction(doc);
+    const retry = showRetry && docId && !hideDupRetry && (shouldShowStageRetry(s.id, state, doc) || showGraphFull)
       ? `<button type="button" class="doc-pipe-retry" data-retry-doc="${esc(docId)}" data-retry-action="${esc(retryAction)}" data-retry-stage="${esc(s.id)}" title="${showGraphFull ? esc(t("pipe_retry_full")) : esc(t("pipe_retry"))}">${esc(retryLabel)}</button>`
       : "";
     return `<span class="doc-pipe-step ${state}" title="${esc(title)}">${esc(label)}${retry}</span>`;
@@ -2085,6 +2157,33 @@ function journeyMarkerIcon(state) {
   if (state === "skipped") return "—";
   if (state === "active") return "●";
   return "○";
+}
+
+function shouldShowJourneyReset(doc) {
+  if (!doc) return false;
+  const st = doc.status || "";
+  return !["uploaded", "processing"].includes(st);
+}
+
+function renderJourneyActionsBar(doc) {
+  if (!doc) return "";
+  const docId = doc.id || doc.document_id;
+  const canDelete = window.MKGAuth?.canDeleteDocument?.() !== false;
+  const busy = ["uploaded", "processing", "extracting"].includes(doc.status || "");
+  const cancelling = isPipelineCancelling(doc);
+  const parts = [];
+  if (isPipelineActive(doc)) {
+    parts.push(`<button type="button" class="btn btn-warning btn-small" data-stop-doc="${esc(docId)}" ${cancelling ? "disabled" : ""} title="${esc(t("docs_stop"))}">${esc(cancelling ? t("status_cancelling") : t("docs_stop"))}</button>`);
+  }
+  if (shouldShowJourneyReset(doc)) {
+    parts.push(`<button type="button" class="btn btn-ghost btn-small" data-reset-doc="${esc(docId)}" data-reset-mode="soft" title="${esc(t("docs_reset_soft"))}">${esc(t("docs_reset_soft"))}</button>`);
+    parts.push(`<button type="button" class="btn btn-danger btn-small" data-reset-doc="${esc(docId)}" data-reset-mode="hard" title="${esc(t("docs_reset_hard"))}">${esc(t("docs_reset_hard"))}</button>`);
+  }
+  if (canDelete) {
+    parts.push(`<button type="button" class="btn btn-danger btn-small" data-delete-doc="${esc(docId)}" ${busy ? "disabled" : ""} title="${esc(busy ? t("docs_delete_busy") : t("docs_delete"))}">${esc(t("docs_delete"))}</button>`);
+  }
+  if (!parts.length) return "";
+  return `<div class="journey-actions-bar">${parts.join("")}</div>`;
 }
 
 function renderJourneyLayerGrid(layers) {
@@ -2125,7 +2224,6 @@ function renderDocJourneyHtml(doc, layerPayload) {
   const states = getDocPipelineStates(doc);
   const layers = layerPayload?.layers || [];
   const layersState = getLayersJourneyState(doc, layers);
-  const stepHint = doc.step ? stepLabel(doc.step) : "";
   const showLayerBlock = ["md_ready", "extracting", "loaded", "failed"].includes(doc.status);
 
   const steps = JOURNEY_STAGES.map((stage) => {
@@ -2135,8 +2233,9 @@ function renderDocJourneyHtml(doc, layerPayload) {
     if (stage.id === "neo4j" && isAnswersOnlyMode(doc)) state = "skipped";
     if (stage.id === "l4" && isAnswersOnlyMode(doc)) state = "skipped";
     let detail = "";
-    if (state === "active" && stepHint && (stage.id === "ocr" || stage.id === "layers" || stage.id === "graph" || stage.id === "neo4j" || stage.id === "l4")) {
-      detail = `<div class="journey-step-detail">${esc(stepHint)}</div>`;
+    const stageHint = pipelineStepHint(doc, stage.isLayers ? "layers" : stage.id);
+    if (state === "active" && stageHint) {
+      detail = `<div class="journey-step-detail">${esc(stageHint)}</div>`;
     } else if (stage.id === "upload" && doc.size_bytes) {
       detail = `<div class="journey-step-detail">${esc(formatBytes(doc.size_bytes))} · ${esc(formatDateTime(doc.upload_date))}</div>`;
     } else if (stage.id === "md" && state === "done") {
@@ -2177,7 +2276,7 @@ function renderDocJourneyHtml(doc, layerPayload) {
       </div>`;
   });
 
-  return `<div class="doc-journey-timeline">${renderAnswersOnlyBanner(doc)}${renderQdrantPendingBanner(doc)}${steps.join("")}</div>`;
+  return `<div class="doc-journey-timeline">${renderAnswersOnlyBanner(doc)}${renderQdrantPendingBanner(doc)}${steps.join("")}${renderJourneyActionsBar(doc)}</div>`;
 }
 
 let docWorkTab = "journey";
@@ -2206,6 +2305,42 @@ async function refreshDocJourney(docId) {
   return layerPayload;
 }
 
+function isPipelineActive(doc) {
+  if (!doc) return false;
+  const st = doc.status || "";
+  const step = doc.step || "";
+  if (step === "cancelling") return true;
+  return ACTIVE_DOC_STATUSES.has(st);
+}
+
+function isPipelineCancelling(doc) {
+  if (!doc) return false;
+  return doc.step === "cancelling" || (doc.status === "extracting" && doc.step === "cancelling");
+}
+
+function syncDocWorkStopBtn(doc) {
+  const btn = els.docWorkStopBtn;
+  if (!btn) return;
+  const active = isPipelineActive(doc);
+  const cancelling = isPipelineCancelling(doc);
+  btn.classList.toggle("hidden", !active);
+  btn.disabled = !!cancelling;
+  btn.textContent = cancelling ? t("status_cancelling") : t("docs_stop");
+  btn.dataset.stopDoc = doc?.id || doc?.document_id || "";
+}
+
+function syncDocWorkDeleteBtn(doc) {
+  const btn = els.docWorkDeleteBtn;
+  if (!btn) return;
+  const canDelete = window.MKGAuth?.canDeleteDocument?.() !== false;
+  const docId = doc?.id || doc?.document_id;
+  const busy = doc && ["uploaded", "processing", "extracting"].includes(doc.status || "");
+  btn.classList.toggle("hidden", !canDelete || !docId);
+  btn.disabled = !!busy;
+  btn.dataset.deleteDoc = docId || "";
+  btn.title = busy ? t("docs_delete_busy") : t("docs_delete");
+}
+
 function updateDocWorkHeader(doc) {
   const isAll = graphScope === "all";
   const show = isInlineGraphPage() && (isAll || (graphScope === "doc" && doc));
@@ -2224,6 +2359,8 @@ function updateDocWorkHeader(doc) {
       const n = docsWithGraph().length;
       els.docWorkMeta.textContent = n ? tf("docs_with_graph_count", { count: n }) : "";
     }
+    syncDocWorkDeleteBtn(null);
+    syncDocWorkStopBtn(null);
   } else if (doc) {
     const label = statusLabel(doc);
     if (els.docWorkTitle) {
@@ -2240,6 +2377,8 @@ function updateDocWorkHeader(doc) {
       const step = doc.step ? stepLabel(doc.step) : "";
       els.docWorkMeta.textContent = step ? tf("docs_step_prefix", { step }) : "";
     }
+    syncDocWorkDeleteBtn(doc);
+    syncDocWorkStopBtn(doc);
   }
   els.docWorkTabJourney?.classList.toggle("hidden", isAll);
   els.docWorkTabMd?.classList.toggle("hidden", isAll);
@@ -2303,6 +2442,9 @@ async function updateDocWorkArea(doc, previewData) {
   if (els.docJourneyContent) {
     els.docJourneyContent.innerHTML = renderDocJourneyHtml(data, layerPayload);
     bindRetryButtons(els.docJourneyContent);
+    bindResetButtons(els.docJourneyContent);
+    bindDeleteButtons(els.docJourneyContent);
+    bindStopButtons(els.docJourneyContent);
     bindFullPipelineButtons(els.docJourneyContent);
     bindQdrantPendingBanner(els.docJourneyContent);
     bindRelChipClicks(els.docJourneyContent, docId);
@@ -2331,6 +2473,27 @@ let mdViewMode = "clean";
 const ACTIVE_DOC_STATUSES = new Set(["uploaded", "processing", "extracting"]);
 /** Документы, ожидающие автозапуск extraction после ingestion */
 const pipelineQueue = new Set();
+const pipelineSubmitCooldown = new Map();
+const PIPELINE_SUBMIT_COOLDOWN_MS = 8000;
+
+async function triggerDocumentExtraction(docId) {
+  if (!docId) return false;
+  const now = Date.now();
+  const last = pipelineSubmitCooldown.get(docId) || 0;
+  if (now - last < PIPELINE_SUBMIT_COOLDOWN_MS) return false;
+  pipelineSubmitCooldown.set(docId, now);
+  try {
+    const r = await fetch(`${API}/documents/${encodeURIComponent(docId)}/submit`, { method: "POST" });
+    if (!r.ok) {
+      pipelineSubmitCooldown.delete(docId);
+      return false;
+    }
+    return true;
+  } catch {
+    pipelineSubmitCooldown.delete(docId);
+    return false;
+  }
+}
 let graphLayerFilter = "all";
 let highlightCrossLayer = false;
 let graphAdvancedFilters = defaultGraphAdvancedFilters();
@@ -2569,12 +2732,9 @@ function classificationBadgeHtml(doc) {
   return `<span class="doc-classification-badge doc-classification-${esc(level)}" title="${esc(t("classification_label"))}">${esc(classificationLabel(level))}</span>`;
 }
 
-function renderDocTagsHtml(doc) {
+function renderDocTagsHtml(doc, { maxTags = 2 } = {}) {
   const tags = Array.isArray(doc?.tags) ? doc.tags.filter(Boolean) : [];
   const classBadge = classificationBadgeHtml(doc);
-  if (!tags.length && !doc?.geography && !doc?.material_date) {
-    return `<div class="doc-tags">${classBadge}</div>`;
-  }
   const chips = [];
   if (doc.geography) chips.push(`#geography:${esc(doc.geography)}`);
   if (doc.material_date) {
@@ -2585,8 +2745,11 @@ function renderDocTagsHtml(doc) {
     const label = String(tag).startsWith("#") ? String(tag).slice(1) : String(tag);
     if (!chips.some((c) => c.includes(label))) chips.push(`#${esc(label)}`);
   });
-  if (!chips.length) return `<div class="doc-tags">${classBadge}</div>`;
-  return `<div class="doc-tags">${classBadge}${chips.map((c) => `<span class="doc-tag">${c}</span>`).join("")}</div>`;
+  const visible = chips.slice(0, maxTags);
+  const overflow = chips.length - visible.length;
+  const overflowHtml = overflow > 0 ? `<span class="doc-tag doc-tag-more">+${overflow}</span>` : "";
+  if (!visible.length) return `<div class="doc-tags">${classBadge}</div>`;
+  return `<div class="doc-tags">${classBadge}${visible.map((c) => `<span class="doc-tag">${c}</span>`).join("")}${overflowHtml}</div>`;
 }
 
 async function uploadFiles() {
@@ -2665,9 +2828,12 @@ async function ensurePipeline(docId) {
         pipelineQueue.delete(docId);
         return;
       }
-      await fetch(`${API}/documents/${encodeURIComponent(docId)}/submit`, { method: "POST" });
+      if (isDocAwaitingExtraction(data)) {
+        await triggerDocumentExtraction(docId);
+      }
       return;
     }
+    if (st === "extracting") return;
     if (st === "loaded" || st === "md_ready" || st === "failed") {
       const needsL4 = data.processing_mode !== "answers_only" && (data.graph_nodes > 0);
       const l4Ready = !needsL4 || isL4Done(data) || data.step === "l4_failed";
@@ -2687,6 +2853,7 @@ async function retryPipelineStage(docId, action, btn) {
     else if (action === "extract") url = `${API}/documents/${encodeURIComponent(docId)}/submit`;
     else if (action === "neo4j") url = `${API}/documents/${encodeURIComponent(docId)}/neo4j-sync`;
     else if (action === "index") url = `${API}/documents/${encodeURIComponent(docId)}/index`;
+    else if (action === "refresh_embeddings") url = `${API}/documents/${encodeURIComponent(docId)}/refresh-embeddings`;
     else if (action === "l4_cluster") url = `${API}/documents/${encodeURIComponent(docId)}/l4-cluster`;
     else return;
     const r = await fetch(url, { method: "POST" });
@@ -2694,7 +2861,7 @@ async function retryPipelineStage(docId, action, btn) {
       const data = await r.json().catch(() => ({}));
       throw new Error(data.detail || "Ошибка перезапуска");
     }
-    if (action === "index") {
+    if (action === "index" || action === "refresh_embeddings") {
       const data = await r.json();
       if ((data.indexed ?? 0) > 0 || !data.error) {
         indexedDocsSet.add(docId);
@@ -2721,7 +2888,119 @@ async function retryPipelineStage(docId, action, btn) {
   }
 }
 
+async function resetDocument(docId, mode, btn) {
+  if (!docId || !mode) return;
+  const msg = mode === "hard" ? t("docs_reset_hard_confirm") : t("docs_reset_soft_confirm");
+  if (!window.confirm(msg)) return;
+  const prev = btn?.textContent;
+  if (btn) { btn.disabled = true; if (prev) btn.textContent = "…"; }
+  try {
+    const r = await fetch(`${API}/documents/${encodeURIComponent(docId)}/reset?mode=${encodeURIComponent(mode)}`, { method: "POST" });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.detail || "Ошибка сброса");
+    }
+    indexedDocsSet.delete(docId);
+    saveIndexedDocs();
+    pipelineQueue.add(docId);
+    if (docId === selectedDoc) await openDoc(docId, { keepPage: true });
+    else await renderDocsList();
+  } catch (e) {
+    if (btn) btn.title = e.message || "Ошибка";
+    window.alert(e.message || String(e));
+  } finally {
+    if (btn) { btn.disabled = false; if (prev) btn.textContent = prev; }
+  }
+}
+
+async function cancelDocumentPipeline(docId, btn) {
+  if (!docId) return;
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/documents/${encodeURIComponent(docId)}/cancel`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || "Не удалось остановить");
+    pipelineQueue.delete(docId);
+    await renderDocsList({ silent: true });
+    if (selectedDoc === docId) {
+      await openDoc(docId, { keepPage: true });
+    }
+  } catch (e) {
+    window.alert(e.message || String(e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function deleteDocument(docId, btn) {
+  if (!docId) return;
+  const doc = docsListCache.find((d) => d.id === docId);
+  const name = doc?.file_name || docId;
+  if (!window.confirm(tf("docs_delete_confirm", { name }, t("docs_delete_confirm").replace("{name}", name)))) return;
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/documents/${encodeURIComponent(docId)}`, { method: "DELETE" });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.detail || "Ошибка удаления");
+    }
+    indexedDocsSet.delete(docId);
+    saveIndexedDocs();
+    pipelineQueue.delete(docId);
+    if (selectedDoc === docId) {
+      selectedDoc = null;
+      graphViewDocId = null;
+      updateDocWorkArea(null);
+    }
+    await renderDocsList();
+    if (currentPage === "docs") {
+      updateGraphsPageState();
+      refreshGraphViewport({ fit: true, force: true });
+    }
+  } catch (e) {
+    window.alert(e.message || String(e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 let pollUploadDocExternal = null;
+
+function bindDeleteButtons(root = document) {
+  root.querySelectorAll("[data-delete-doc]").forEach((btn) => {
+    if (btn.dataset.deleteBound) return;
+    btn.dataset.deleteBound = "1";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      deleteDocument(btn.dataset.deleteDoc, btn);
+    });
+  });
+}
+
+function bindStopButtons(root = document) {
+  root.querySelectorAll("[data-stop-doc]").forEach((btn) => {
+    if (btn.dataset.stopBound) return;
+    btn.dataset.stopBound = "1";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelDocumentPipeline(btn.dataset.stopDoc, btn);
+    });
+  });
+}
+
+function bindResetButtons(root = document) {
+  root.querySelectorAll("[data-reset-mode]").forEach((btn) => {
+    if (btn.dataset.resetBound) return;
+    btn.dataset.resetBound = "1";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resetDocument(btn.dataset.resetDoc, btn.dataset.resetMode, btn);
+    });
+  });
+}
 
 function bindRetryButtons(root = document) {
   root.querySelectorAll("[data-retry-action]").forEach((btn) => {
@@ -3908,25 +4187,46 @@ function updateGraphsPageState() {
 
 function renderDocCard(d) {
   const st = statusLabel(d);
-  const typeHint = d.doc_type ? ` · ${d.doc_type}` : "";
-  const matHint = d.material_date ? ` · ${String(d.material_date).slice(0, 10)}` : "";
-  const geoHint = d.geography ? ` · ${d.geography}` : "";
   const isLive = ["uploaded", "processing", "extracting"].includes(d.status);
+  const docId = d.id || d.document_id;
   const modeBadge = isAnswersOnlyMode(d)
     ? `<span class="doc-mode-badge" title="${esc(t("docs_mode_chat_badge"))}">${esc(t("docs_mode_chat_only"))}</span>`
     : "";
+  const canDelete = window.MKGAuth?.canDeleteDocument?.() !== false;
+  const showExtract = isDocAwaitingExtraction(d);
+  const busy = ["uploaded", "processing", "extracting"].includes(d.status || "");
+  const footerBtns = [];
+  if (isLive) {
+    footerBtns.push(`<button type="button" class="btn btn-warning btn-small doc-card-stop-btn" data-stop-doc="${esc(docId)}" ${isPipelineCancelling(d) ? "disabled" : ""} title="${esc(t("docs_stop"))}">${esc(isPipelineCancelling(d) ? t("status_cancelling") : t("docs_stop"))}</button>`);
+  }
+  if (showExtract) {
+    footerBtns.push(`<button type="button" class="btn btn-ghost btn-small doc-card-action" data-retry-doc="${esc(docId)}" data-retry-action="extract" title="${esc(t("pipe_retry_extract"))}">↺ ${esc(t("docs_extract_graph"))}</button>`);
+  }
+  if (canDelete) {
+    footerBtns.push(`<button type="button" class="btn btn-danger btn-small doc-card-delete-btn" data-delete-doc="${esc(docId)}" ${busy ? "disabled" : ""} title="${esc(busy ? t("docs_delete_busy") : t("docs_delete"))}">${esc(t("docs_delete"))}</button>`);
+  }
+  const footer = footerBtns.length
+    ? `<div class="doc-card-footer">${footerBtns.join("")}</div>`
+    : "";
+  const dateShort = d.upload_date ? formatDateTime(d.upload_date).replace(/,\s*\d{2}:\d{2}:\d{2}$/, "") : "—";
   return `
-    <div class="doc ${selectedDoc === d.id ? "active" : ""} ${isLive ? "doc-live" : ""}" data-id="${esc(d.id)}" role="button">
-      <div class="doc-name">${esc(d.file_name)}${modeBadge}</div>
-      <div class="doc-meta">${formatBytes(d.size_bytes)}${esc(typeHint)}${esc(geoHint)}${esc(matHint)} · ${formatDateTime(d.upload_date)}</div>
-      ${renderDocTagsHtml(d)}
-      ${renderDocPipelineHtml(d)}
-      <span class="badge ${st.cls}">${esc(st.text)}</span>
+    <div class="doc doc-card-compact ${selectedDoc === d.id ? "active" : ""} ${isLive ? "doc-live" : ""}" data-id="${esc(d.id)}" role="button" title="${esc(d.file_name)}">
+      <div class="doc-card-body">
+        <div class="doc-name-row">
+          <div class="doc-name">${esc(d.file_name)}${modeBadge}</div>
+          <span class="badge ${st.cls} doc-card-status">${esc(st.text)}</span>
+        </div>
+        <div class="doc-meta">${formatBytes(d.size_bytes)} · ${esc(dateShort)}</div>
+        ${renderDocTagsHtml(d, { maxTags: 2 })}
+        ${footer}
+      </div>
     </div>`;
 }
 
 function bindDocCards(container) {
   bindRetryButtons(container);
+  bindDeleteButtons(container);
+  bindStopButtons(container);
   container?.querySelectorAll(".doc").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.dataset.id;
@@ -5510,13 +5810,19 @@ function setGraphViewMode(mode) {
 
 function updateExtractControls(status, step) {
   const extracting = status === "extracting";
-  const cancelling = extracting && step === "cancelling";
+  const processing = status === "processing" || status === "uploaded";
+  const cancelling = (extracting || processing) && step === "cancelling";
+  const active = ACTIVE_DOC_STATUSES.has(status) || step === "cancelling";
   if (els.docPrimaryBtn) els.docPrimaryBtn.disabled = extracting;
   if (els.docStopBtn) {
-    els.docStopBtn.classList.toggle("hidden", !extracting || cancelling);
+    els.docStopBtn.classList.toggle("hidden", !active);
     els.docStopBtn.disabled = cancelling;
-    els.docStopBtn.textContent = cancelling ? "Останавливаем…" : "Стоп";
+    els.docStopBtn.textContent = cancelling ? t("status_cancelling") : t("docs_stop");
   }
+  const doc = selectedDoc
+    ? { ...(docsListCache.find((d) => d.id === selectedDoc) || {}), status, step }
+    : null;
+  syncDocWorkStopBtn(doc);
   setLiveExtractVisible(extracting && !cancelling);
   if (extracting && selectedDoc) refreshLiveExtract(selectedDoc);
   if (selectedDoc) {
@@ -6721,6 +7027,9 @@ window.MKG = {
   showQdrantToast,
   isDocQdrantIndexed,
   trackPipelineDoc(docId) { if (docId) pipelineQueue.add(docId); },
+  syncDocWorkDeleteBtn,
+  get docsListCache() { return docsListCache; },
+  refreshDocsList: (opts) => renderDocsList(opts),
   retryPipelineStage,
   bindRetryButtons,
   setPollUploadHook(fn) { pollUploadDocExternal = fn; },
@@ -7807,7 +8116,12 @@ async function submitToGraph() {
     return;
   }
   if (els.docPrimaryBtn) els.docPrimaryBtn.disabled = true;
-  await fetch(`${API}/documents/${encodeURIComponent(selectedDoc)}/submit`, { method: "POST" });
+  const ok = await triggerDocumentExtraction(selectedDoc);
+  if (!ok) {
+    showBox(els.uploadError, "Не удалось запустить извлечение графа");
+    if (els.docPrimaryBtn) els.docPrimaryBtn.disabled = false;
+    return;
+  }
   pipelineQueue.add(selectedDoc);
   await openDoc(selectedDoc, { switchTo: "doc" });
   if (els.docPrimaryBtn) els.docPrimaryBtn.disabled = false;
@@ -7860,6 +8174,8 @@ async function openDoc(id, opts = {}) {
 function docNeedsLivePreview(cur, prevStatus) {
   if (!cur || !selectedDoc || cur.id !== selectedDoc) return false;
   if (ACTIVE_DOC_STATUSES.has(cur.status)) return true;
+  if (isDocAwaitingExtraction(cur)) return true;
+  if (pipelineQueue.has(selectedDoc)) return true;
   if (cur.status !== prevStatus) return true;
   if (
     (currentPage === "doc" || currentPage === "graphAll")
@@ -7954,6 +8270,9 @@ async function renderDocsList({ silent = false } = {}) {
     docsListLoaded = true;
     docsListCache = data.items || [];
     docsTotalCount = typeof data.total === "number" ? data.total : docsListCache.length;
+    if (els.docsCount) {
+      els.docsCount.textContent = docsTotalCount ? `(${docsTotalCount})` : "";
+    }
     notifyWatchlistMatches(docsListCache);
     updateGraphsPageState();
     renderL3Stats();
@@ -7962,6 +8281,8 @@ async function renderDocsList({ silent = false } = {}) {
     }
     if (!data.items?.length) {
       els.docs.innerHTML = `<div class="muted">${esc(t("docs_list_empty"))}</div>`;
+      const drawer = document.getElementById("homeTabUpload");
+      if (drawer && drawer.tagName === "DETAILS") drawer.open = true;
       window.MKGAuth?.syncDocsUploadFallback?.();
       return;
     }
@@ -7979,6 +8300,11 @@ async function renderDocsList({ silent = false } = {}) {
       : "";
     els.docs.innerHTML = `${restrictedBanner}${filtered.map(renderDocCard).join("")}`;
     bindDocCards(els.docs);
+    filtered.forEach((d) => {
+      if (isDocAwaitingExtraction(d)) {
+        pipelineQueue.add(d.id);
+      }
+    });
     const sel = docsListCache.find((x) => x.id === selectedDoc);
     updateDocWorkArea(sel || null);
     await pollSelectedDocumentPreview();
@@ -8001,9 +8327,23 @@ function bindNavigation() {
   });
 }
 
+function openDocsUploadDrawer() {
+  const drawer = document.getElementById("homeTabUpload");
+  if (drawer && drawer.tagName === "DETAILS") drawer.open = true;
+  drawer?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
 function bindEvents() {
   els.file?.addEventListener("change", (e) => pickFiles(e.target.files));
   els.pickBtn?.addEventListener("click", (e) => { e.stopPropagation(); openFilePicker(); });
+  els.docWorkDeleteBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    deleteDocument(els.docWorkDeleteBtn.dataset.deleteDoc, els.docWorkDeleteBtn);
+  });
+  els.docWorkStopBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cancelDocumentPipeline(els.docWorkStopBtn.dataset.stopDoc, els.docWorkStopBtn);
+  });
   els.docUploadFallbackBtn?.addEventListener("click", (e) => { e.stopPropagation(); openFilePicker(); });
   els.drop?.addEventListener("click", (e) => {
     if (e.target.closest(".upload-actions")) return;
@@ -8115,8 +8455,7 @@ function bindEvents() {
   els.docNeo4jBtn?.addEventListener("click", openNeo4jBrowser);
   els.docStopBtn?.addEventListener("click", async () => {
     if (!selectedDoc) return;
-    await fetch(`${API}/documents/${encodeURIComponent(selectedDoc)}/cancel-extraction`, { method: "POST" });
-    await openDoc(selectedDoc, { keepPage: true });
+    await cancelDocumentPipeline(selectedDoc, els.docStopBtn);
   });
   els.graphCompactBtn?.addEventListener("click", () => setGraphDensityMode("compact"));
   els.graphFullBtn?.addEventListener("click", () => setGraphDensityMode("full"));

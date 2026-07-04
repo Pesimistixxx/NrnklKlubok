@@ -1396,20 +1396,34 @@
     return ["admin", "researcher", "engineer"].includes(role.id);
   }
 
+  function canDeleteDocument(role) {
+    if (!role) return true;
+    if (role.id === "admin" || role.can_admin) return true;
+    if (role.can_upload === false) return false;
+    return ["admin", "engineer", "researcher"].includes(role.id);
+  }
+
   function applyPermissions() {
     const roleId = currentUser?.role_id || selectedRoleId;
-    if (!roleId) return;
-    const role = roleMeta(roleId);
+    const role = roleId ? roleMeta(roleId) : null;
     const uploadPanel = document.getElementById("homeTabUpload");
     const uploadBtn = $("uploadBtn");
     const clearBtn = $("clearDbBtn");
     const homeRun = $("homeAgentRunBtn");
-    const showUpload = canShowUpload(role);
+    const showUpload = role ? canShowUpload(role) : true;
     if (uploadPanel) {
       uploadPanel.classList.toggle("upload-hidden", !showUpload);
       uploadPanel.style.display = "";
     }
     if (uploadBtn) uploadBtn.disabled = !showUpload;
+    if (typeof window.MKG?.syncDocWorkDeleteBtn === "function") {
+      const sel = window.MKG?.selectedDoc;
+      const doc = sel ? (window.MKG?.docsListCache || []).find((d) => d.id === sel) : null;
+      window.MKG.syncDocWorkDeleteBtn(doc || null);
+    }
+    if (typeof window.MKG?.refreshDocsList === "function" && window.MKG?.currentPage === "docs") {
+      window.MKG.refreshDocsList({ silent: true });
+    }
     if (clearBtn) clearBtn.style.display = role.can_admin ? "" : "none";
     if (homeRun) homeRun.disabled = role.can_run_agents === false;
     const chatAttach = $("chatAttachBtn");
@@ -1434,12 +1448,11 @@
       return;
     }
     const onDocs = window.MKG?.currentPage === "docs";
-    const sidebarEl = uploadPanel?.closest(".docs-sidebar");
-    const sidebarWideEnough = !sidebarEl || sidebarEl.getBoundingClientRect().width >= 200;
-    const sidebarVisible = uploadPanel
-      && !uploadPanel.classList.contains("upload-hidden")
-      && uploadPanel.offsetParent !== null
-      && sidebarWideEnough;
+    let sidebarVisible = false;
+    if (uploadPanel && !uploadPanel.classList.contains("upload-hidden") && uploadPanel.offsetParent !== null) {
+      const rect = uploadPanel.getBoundingClientRect();
+      sidebarVisible = rect.height > 40 && rect.bottom > 80 && rect.top >= 0;
+    }
     fallback.classList.toggle("hidden", !onDocs || sidebarVisible);
   }
 
@@ -4552,6 +4565,7 @@
     getRole: () => roleMeta(currentUser?.role_id),
     getActiveThreadId: () => activeThreadId,
     canShowUpload,
+    canDeleteDocument: () => canDeleteDocument(roleMeta(currentUser?.role_id || selectedRoleId)),
     applyPermissions,
     syncDocsUploadFallback,
   };

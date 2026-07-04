@@ -30,8 +30,9 @@ except Exception:  # pragma: no cover
     fitz = None  # type: ignore[assignment]
 
 _OCR_BASE = "https://ocr.api.cloud.yandex.net/ocr/v1"
-_POLL_INTERVAL_S = 2.0
-_MAX_POLL_ATTEMPTS = 90
+_POLL_INTERVAL_S = 5.0
+_MAX_POLL_ATTEMPTS = 120
+_OCR_RETRY_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
 _EXT_MIME: dict[str, str] = {
     ".pdf": "application/pdf",
@@ -245,28 +246,90 @@ def _load_ocr_json(resp: httpx.Response) -> Any:
     return text
 
 
+def _retry_after_seconds(resp: httpx.Response | None, fallback: float) -> float:
+    if resp is not None:
+        raw = resp.headers.get("retry-after")
+        if raw:
+            try:
+                return max(float(raw), fallback)
+            except ValueError:
+                pass
+    return fallback
+
+
+def _http_status(exc: BaseException) -> int | None:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code
+    return None
+
+
+def _is_rate_limited_or_transient(exc: BaseException) -> bool:
+    status = _http_status(exc)
+    if status in _OCR_RETRY_STATUS:
+        return True
+    msg = str(exc).lower()
+    return "too many requests" in msg or "429" in msg or "timeout" in msg
+
+
 async def _ocr_sync(client: httpx.AsyncClient, content: bytes, mime_type: str, *, model: str) -> str:
     url = f"{_ocr_base_url()}/recognizeText"
     req = {"url": url, "mime_type": mime_type, "model": model, "bytes": len(content)}
-    try:
-        resp = await client.post(url, headers=_ocr_auth_headers(), json=_build_body(content, mime_type, model=model))
-        resp.raise_for_status()
-        text = _text_from_payload(_load_ocr_json(resp))
-        log_event("ocr_sync", request=req, response={"chars": len(text), "preview": text[:500]})
-        return text
-    except Exception as exc:
-        log_event("ocr_sync", request=req, error=str(exc))
-        raise
+    delay = 8.0
+    last_exc: Exception | None = None
+    for attempt in range(1, 6):
+        try:
+            resp = await client.post(url, headers=_ocr_auth_headers(), json=_build_body(content, mime_type, model=model))
+            if resp.status_code in _OCR_RETRY_STATUS:
+                wait = _retry_after_seconds(resp, delay)
+                log_event("ocr_sync_retry", request=req | {"attempt": attempt}, error=f"HTTP {resp.status_code}; sleep {wait:.1f}s")
+                await asyncio.sleep(wait)
+                delay = min(delay * 1.8, 90.0)
+                continue
+            resp.raise_for_status()
+            text = _text_from_payload(_load_ocr_json(resp))
+            log_event("ocr_sync", request=req, response={"chars": len(text), "preview": text[:500]})
+            return text
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            if exc.response.status_code not in _OCR_RETRY_STATUS:
+                log_event("ocr_sync", request=req, error=str(exc))
+                raise
+            wait = _retry_after_seconds(exc.response, delay)
+            log_event("ocr_sync_retry", request=req | {"attempt": attempt}, error=f"{exc}; sleep {wait:.1f}s")
+            await asyncio.sleep(wait)
+            delay = min(delay * 1.8, 90.0)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_exc = exc
+            log_event("ocr_sync_retry", request=req | {"attempt": attempt}, error=f"{exc}; sleep {delay:.1f}s")
+            await asyncio.sleep(delay)
+            delay = min(delay * 1.8, 90.0)
+    err = last_exc or TimeoutError("OCR sync retry limit exceeded")
+    log_event("ocr_sync", request=req, error=str(err))
+    raise err
 
 
 async def _ocr_async(client: httpx.AsyncClient, content: bytes, mime_type: str, *, model: str) -> str:
     base = _ocr_base_url()
     req = {"mime_type": mime_type, "model": model, "bytes": len(content)}
-    submit = await client.post(
-        f"{base}/recognizeTextAsync",
-        headers=_ocr_auth_headers(),
-        json=_build_body(content, mime_type, model=model),
-    )
+    submit_url = f"{base}/recognizeTextAsync"
+    delay = 10.0
+    submit: httpx.Response | None = None
+    for attempt in range(1, 6):
+        submit = await client.post(
+            submit_url,
+            headers=_ocr_auth_headers(),
+            json=_build_body(content, mime_type, model=model),
+        )
+        if submit.status_code in _OCR_RETRY_STATUS:
+            wait = _retry_after_seconds(submit, delay)
+            log_event("ocr_async_submit_retry", request=req | {"attempt": attempt}, error=f"HTTP {submit.status_code}; sleep {wait:.1f}s")
+            await asyncio.sleep(wait)
+            delay = min(delay * 1.8, 120.0)
+            continue
+        submit.raise_for_status()
+        break
+    if submit is None:
+        raise RuntimeError("recognizeTextAsync не вернул ответ")
     submit.raise_for_status()
     payload = submit.json()
     operation_id = payload.get("id") or payload.get("operationId")
@@ -275,22 +338,31 @@ async def _ocr_async(client: httpx.AsyncClient, content: bytes, mime_type: str, 
     req["operation_id"] = operation_id
 
     poll_url = f"{base}/getRecognition"
-    for _ in range(_MAX_POLL_ATTEMPTS):
+    not_found_count = 0
+    for attempt in range(_MAX_POLL_ATTEMPTS):
         resp = await client.get(
             poll_url,
             headers=_ocr_auth_headers(),
             params={"operationId": operation_id},
         )
         if resp.status_code in (404, 425, 429):
-            await asyncio.sleep(_POLL_INTERVAL_S)
+            if resp.status_code == 404:
+                not_found_count += 1
+            wait = _retry_after_seconds(resp, min(_POLL_INTERVAL_S + attempt * 0.5, 30.0))
+            log_event(
+                "ocr_async_poll_wait",
+                request=req | {"attempt": attempt + 1, "status": resp.status_code},
+                error=f"operation not ready; sleep {wait:.1f}s",
+            )
+            await asyncio.sleep(wait)
             continue
         resp.raise_for_status()
         text = _text_from_payload(_load_ocr_json(resp))
         if text.strip():
             log_event("ocr_async", request=req, response={"chars": len(text), "preview": text[:500]})
             return text
-        await asyncio.sleep(_POLL_INTERVAL_S)
-    err = f"OCR timeout для operation {operation_id}"
+        await asyncio.sleep(min(_POLL_INTERVAL_S + attempt * 0.5, 30.0))
+    err = f"OCR timeout для operation {operation_id}; 404 polls={not_found_count}"
     log_event("ocr_async", request=req, error=err)
     raise TimeoutError(err)
 
@@ -358,6 +430,9 @@ async def _ocr_pdf_pages(
                 page_text = await _ocr_sync(client, img, "image", model=model)
                 if page_text.strip():
                     parts.append(page_text.strip())
+                # Yandex OCR легко уходит в 429 при постраничном распознавании больших PDF.
+                if page_idx < doc.page_count - 1:
+                    await asyncio.sleep(3.0)
     except Exception as exc:
         log_event("ocr_pdf_pages", error=str(exc))
         return await _ocr_async(client, content, "application/pdf", model=model)
@@ -446,6 +521,15 @@ async def ocr_file(file_name: str, content: bytes) -> str:
                         )
                         return local
                 raise RuntimeError(f"OCR остановлен ({ocr_model}): {exc}") from exc
+            if ext == ".pdf" and _is_rate_limited_or_transient(exc):
+                local = extract_pdf_local(content)
+                if local.strip():
+                    log_event(
+                        "ocr_fallback_local",
+                        request={"reason": str(exc), "model": ocr_model, "fallback": "rate_limit_or_timeout"},
+                        response={"chars": len(local), "preview": local[:500]},
+                    )
+                    return local
             if ext == ".pdf":
                 try:
                     text = await _ocr_async(client, content, "application/pdf", model=ocr_model)
@@ -462,6 +546,15 @@ async def ocr_file(file_name: str, content: bytes) -> str:
                             )
                             return local
                         raise RuntimeError(f"OCR остановлен ({ocr_model}): {exc2}") from exc2
+                    if _is_rate_limited_or_transient(exc2):
+                        local = extract_pdf_local(content)
+                        if local.strip():
+                            log_event(
+                                "ocr_fallback_local",
+                                request={"reason": str(exc2), "model": ocr_model, "fallback": "rate_limit_or_timeout"},
+                                response={"chars": len(local), "preview": local[:500]},
+                            )
+                            return local
                     raise RuntimeError(f"OCR не удался ({ocr_model}): {exc2}") from exc2
             raise RuntimeError(f"OCR не удался ({ocr_model}): {exc}") from exc
 

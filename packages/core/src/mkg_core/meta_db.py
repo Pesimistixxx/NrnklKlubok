@@ -243,6 +243,17 @@ async def count_restricted_documents(
     return int(total or 0)
 
 
+async def delete_document(doc_id: str) -> bool:
+    await init_schema()
+    p = await pool()
+    async with p.acquire() as conn:
+        result = await conn.execute("DELETE FROM documents WHERE id = $1", doc_id)
+    try:
+        return int(str(result).split()[-1]) > 0
+    except Exception:
+        return False
+
+
 async def clear_all_documents() -> int:
     await init_schema()
     p = await pool()
