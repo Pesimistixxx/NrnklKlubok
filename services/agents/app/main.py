@@ -92,8 +92,12 @@ async def run_agents(body: AgentRunRequest) -> AgentRunOut:
         "limit": body.limit,
         "retry_count": 0,
         "loop_decision": "continue",
+        "hypothesis_refinement_count": 0,
+        "hypothesis_refinement_decision": "continue",
         "current_search_query": None,
         "used_search_queries": [],
+        "builder_feedback": None,
+        "trace": [],
         "warnings": [],
     }
     try:
@@ -114,6 +118,7 @@ async def run_agents(body: AgentRunRequest) -> AgentRunOut:
                 "recommendations": [],
                 "literature_review": {},
                 "evidence": [],
+                "trace": initial_state["trace"],
                 "warnings": ["timeout: общий лимит времени agents service превышен"],
             },
         }
@@ -129,6 +134,7 @@ async def run_agents(body: AgentRunRequest) -> AgentRunOut:
                 "recommendations": [],
                 "literature_review": {},
                 "evidence": [],
+                "trace": initial_state["trace"],
                 "warnings": [f"agents service error: {exc}"],
             },
         }

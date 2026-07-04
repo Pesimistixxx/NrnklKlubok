@@ -19,6 +19,7 @@ class _AgentEnv(BaseSettings):
     search_limit: int = Field(default=6, alias="AGENTS_SEARCH_LIMIT")
     max_context_nodes: int = Field(default=10, alias="AGENTS_MAX_CONTEXT_NODES")
     max_agent_loops: int = Field(default=1, alias="AGENTS_MAX_AGENT_LOOPS")
+    max_hypothesis_refinements: int = Field(default=1, alias="AGENTS_MAX_HYPOTHESIS_REFINEMENTS")
     planner_timeout: float = Field(default=1.2, alias="AGENTS_LLM_PLANNER_TIMEOUT")
     analyzer_timeout: float = Field(default=1.8, alias="AGENTS_LLM_ANALYZER_TIMEOUT")
     builder_timeout: float = Field(default=1.8, alias="AGENTS_LLM_BUILDER_TIMEOUT")
@@ -54,6 +55,7 @@ class AgentSettings:
     search_limit: int
     max_context_nodes: int
     max_agent_loops: int
+    max_hypothesis_refinements: int
     planner_timeout: float
     analyzer_timeout: float
     builder_timeout: float
@@ -77,6 +79,7 @@ def get_agent_settings() -> AgentSettings:
         search_limit=_int_env("AGENTS_SEARCH_LIMIT", env.search_limit),
         max_context_nodes=_int_env("AGENTS_MAX_CONTEXT_NODES", env.max_context_nodes),
         max_agent_loops=_int_env("AGENTS_MAX_AGENT_LOOPS", env.max_agent_loops),
+        max_hypothesis_refinements=_int_env("AGENTS_MAX_HYPOTHESIS_REFINEMENTS", env.max_hypothesis_refinements),
         planner_timeout=_float_env("AGENTS_LLM_PLANNER_TIMEOUT", env.planner_timeout),
         analyzer_timeout=_float_env("AGENTS_LLM_ANALYZER_TIMEOUT", env.analyzer_timeout),
         builder_timeout=_float_env("AGENTS_LLM_BUILDER_TIMEOUT", env.builder_timeout),
