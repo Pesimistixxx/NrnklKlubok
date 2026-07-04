@@ -4,16 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=29" />
+  <link rel="stylesheet" href="/static/css/app.css?v=30" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
-    <main class="main-area">
+    <main class="main-area" id="mainArea">
       <nav class="main-nav" role="navigation" aria-label="Разделы">
         <button class="page-nav-link active" data-page="chats" type="button">Чат</button>
         <button class="page-nav-link" data-page="home" type="button">Главная</button>
         <button class="page-nav-link" data-page="docs" type="button">Документы</button>
-        <button class="page-nav-link" data-page="search" type="button">Поиск</button>
         <button class="page-nav-link" data-page="qdrant" type="button">Qdrant</button>
         <button class="page-nav-link" data-page="settings" type="button">Настройки</button>
       </nav>
@@ -66,57 +65,39 @@
       </section>
 
       <section class="page page-home hidden" id="pageHome">
-        <div class="about-hero">
+        <div class="about-hero about-hero-compact">
           <h1>Единая карта знаний R&amp;D</h1>
-          <p class="about-lead">Загрузите документ → постройте граф → индексируйте в Qdrant.</p>
           <p class="muted project-stage-line" id="projectStageLine">Этап: загрузка…</p>
-        </div>
-        <div class="home-tabs" role="tablist" aria-label="Разделы главной">
-          <button class="home-tab active" type="button" data-home-tab="query" role="tab" aria-selected="true">Запрос</button>
-          <button class="home-tab" type="button" data-home-tab="upload" role="tab" aria-selected="false">Загрузка</button>
-        </div>
-        <div class="home-tab-panel" id="homeTabQuery" role="tabpanel">
-          <div class="home-query-panel" id="homeQueryPanel">
-            <h2>Запрос к карте знаний</h2>
-            <p class="muted small" id="homeAgentStatus">Agents: проверка…</p>
-            <p class="small muted">Режим анализа</p>
-            <div class="mode-chip-grid" id="homeAgentModes"></div>
-            <textarea id="homeAgentQuery" rows="4" placeholder="Спросите аналитику: гипотезы, audit, обзор, связи между сущностями…"></textarea>
-            <div class="home-query-actions">
-              <button class="btn btn-primary btn-small" id="homeAgentRunBtn" type="button">Спросить</button>
-              <span class="muted small home-query-hint">Ctrl+Enter · по проиндексированным документам</span>
-            </div>
-            <pre class="home-agent-result empty" id="homeAgentResult">Ответ появится здесь…</pre>
-          </div>
-        </div>
-        <div class="home-tab-panel hidden" id="homeTabUpload" role="tabpanel">
-          <div class="upload-panel">
-            <h2>Загрузить документ</h2>
-            <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
-            <input type="hidden" id="classification" value="открытый" />
-            <div class="drop" id="drop" role="button" tabindex="0">
-              <div id="dropText">Перетащите файл или нажмите для выбора</div>
-            </div>
-            <div class="upload-actions">
-              <button class="btn btn-ghost btn-small" id="pickBtn" type="button">Выбрать</button>
-              <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled>Обработать</button>
-            </div>
-            <p class="muted" id="formatsHint">…</p>
-            <div class="error-box" id="uploadError"></div>
-          </div>
         </div>
       </section>
 
       <section class="page page-docs hidden" id="pageDocs">
-        <div class="page-head">
-          <h1>Документы</h1>
-          <p class="muted page-lead">Выберите документ — откроется карточка, граф по кнопке «Посмотреть граф».</p>
+        <div class="docs-layout">
+          <aside class="docs-sidebar">
+            <div class="upload-panel upload-panel-compact" id="homeTabUpload">
+              <h2>Загрузить документ</h2>
+              <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
+              <input type="hidden" id="classification" value="открытый" />
+              <div class="drop drop-compact" id="drop" role="button" tabindex="0">
+                <div id="dropText">Перетащите файл или нажмите</div>
+              </div>
+              <div class="upload-actions upload-actions-compact">
+                <button class="btn btn-ghost btn-small" id="pickBtn" type="button">Выбрать</button>
+                <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled>Обработать</button>
+              </div>
+              <p class="muted small" id="formatsHint">…</p>
+              <div class="error-box" id="uploadError"></div>
+            </div>
+            <div class="docs-sidebar-head">
+              <h2>Документы</h2>
+              <input type="search" class="doc-list-filter" id="docListFilter" placeholder="Фильтр по имени…" autocomplete="off" />
+            </div>
+            <div class="docs-page-list doc-nav" id="docs"><div class="muted">Загрузка…</div></div>
+            <div class="docs-sidebar-footer">
+              <button class="btn btn-ghost btn-small" id="viewAllGraphBtn" type="button">Полный граф всех документов</button>
+            </div>
+          </aside>
         </div>
-        <div class="docs-page-toolbar">
-          <input type="search" class="doc-list-filter" id="docListFilter" placeholder="Фильтр по имени…" autocomplete="off" />
-          <button class="btn btn-ghost btn-small" id="viewAllGraphBtn" type="button">Полный граф всех документов</button>
-        </div>
-        <div class="docs-page-list doc-nav" id="docs"><div class="muted">Загрузка…</div></div>
       </section>
 
       <!-- Страница документа / полный граф -->
@@ -158,7 +139,10 @@
           <h4>Логи пайплайна</h4>
           <div class="preview logs-panel doc-logs-panel empty" id="previewLogs">—</div>
         </div>
-        <div class="page-head graph-page-head hidden" id="graphPageHead">
+      </section>
+
+      <section class="graph-panel hidden" id="graphPanel">
+        <div class="page-head graph-page-head" id="graphPageHead">
           <h1 id="graphPageTitle">Граф знаний</h1>
           <p class="muted page-lead" id="graphPageLead">Компактный режим. Перетаскивайте узлы; тяните нижний край для изменения высоты.</p>
         </div>
@@ -202,26 +186,6 @@
               <div class="graph-rels-head"><span id="graphRelsCount" class="muted">0 связей</span></div>
               <div class="graph-rels-list" id="graphRelsList"></div>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="page page-search hidden" id="pageSearch">
-        <div class="page-head">
-          <h1>Поиск по базе знаний</h1>
-          <p class="muted page-lead">Семантический поиск по Qdrant — по всем документам или по выбранному.</p>
-        </div>
-        <div class="search-page-panel">
-          <form class="search-form search-page-form" id="globalSearchForm">
-            <input type="search" id="globalSearchQuery" placeholder="Что ищем? термины, формулировки, факты…" autocomplete="off" />
-            <select id="globalSearchDoc" aria-label="Документ">
-              <option value="">Все документы</option>
-            </select>
-            <button class="btn btn-primary btn-small" type="submit">Найти</button>
-          </form>
-          <p class="muted search-meta" id="globalSearchMeta"></p>
-          <div class="search-results search-page-results" id="globalSearchResults">
-            <p class="muted">Введите запрос — поиск по проиндексированным абзацам L3 и Claim L4.</p>
           </div>
         </div>
       </section>
@@ -325,7 +289,7 @@
 
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="/static/js/app.js?v=29"></script>
-  <script src="/static/js/chats.js?v=29"></script>
+  <script src="/static/js/app.js?v=30"></script>
+  <script src="/static/js/chats.js?v=30"></script>
 </body>
 </html>

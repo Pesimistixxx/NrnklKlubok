@@ -5,19 +5,23 @@ const $ = (id) => document.getElementById(id);
 
 const els = {
   appRoot: $("appRoot"),
+  mainArea: $("mainArea"),
   file: $("file"),
   drop: $("drop"),
   dropText: $("dropText"),
   pickBtn: $("pickBtn"),
   uploadBtn: $("uploadBtn"),
+  uploadError: $("uploadError"),
+  formatsHint: $("formatsHint"),
+  classification: $("classification"),
   clearDbBtn: $("clearDbBtn"),
   docs: $("docs"),
   pageHome: $("pageHome"),
   pageDocs: $("pageDocs"),
   pageGraphShell: $("pageGraphShell"),
+  graphPanel: $("graphPanel"),
   pageQdrant: $("pageQdrant"),
   pageChats: $("pageChats"),
-  pageSearch: $("pageSearch"),
   pageSettings: $("pageSettings"),
   projectStageLine: $("projectStageLine"),
   viewAllGraphBtn: $("viewAllGraphBtn"),
@@ -80,8 +84,6 @@ const els = {
   l3IndexAllBtn: $("l3IndexAllBtn"),
   graphCompactBtn: $("graphCompactBtn"),
   graphFullBtn: $("graphFullBtn"),
-  uploadError: $("uploadError"),
-  formatsHint: $("formatsHint"),
   llmModel: $("llmModel"),
   ocrModel: $("ocrModel"),
   embDocModel: $("embDocModel"),
@@ -90,7 +92,6 @@ const els = {
   settingsSaveStatus: $("settingsSaveStatus"),
   diagBtn: $("diagBtn"),
   diagList: $("diagList"),
-  classification: $("classification"),
   liveExtract: $("liveExtract"),
   livePipeline: $("livePipeline"),
   liveStep: $("liveStep"),
@@ -98,13 +99,6 @@ const els = {
   detailPanel: $("detailPanel"),
   detailBody: $("detailBody"),
   closeDetailBtn: $("closeDetailBtn"),
-  globalSearchForm: $("globalSearchForm"),
-  globalSearchQuery: $("globalSearchQuery"),
-  globalSearchDoc: $("globalSearchDoc"),
-  globalSearchResults: $("globalSearchResults"),
-  globalSearchMeta: $("globalSearchMeta"),
-  homeTabQuery: $("homeTabQuery"),
-  homeTabUpload: $("homeTabUpload"),
 };
 
 /** @type {HTMLElement|null} */
@@ -161,7 +155,6 @@ const LAYER_STATUS_RU = {
   failed: "ошибка",
 };
 
-let selectedFiles = [];
 let selectedDoc = null;
 let currentPage = "chats";
 let graphScope = "doc";
@@ -189,6 +182,7 @@ let embeddingStatusCache = null;
 let graphViewDocId = null;
 let graphVisible = false;
 let docsListCache = [];
+let selectedFiles = [];
 let docStatusCache = new Map();
 let indexedDocsSet = new Set(JSON.parse(localStorage.getItem("mkg_indexed_docs") || "[]"));
 let lastLogsDocId = null;
@@ -282,6 +276,7 @@ function esc(s) {
 }
 
 function showBox(el, msg) {
+  if (!el) return;
   if (!msg) {
     el.style.display = "none";
     el.textContent = "";
@@ -289,6 +284,92 @@ function showBox(el, msg) {
   }
   el.style.display = "block";
   el.textContent = msg;
+}
+
+function pickFiles(fileList) {
+  selectedFiles = Array.from(fileList || []);
+  if (!selectedFiles.length) {
+    if (els.uploadBtn) els.uploadBtn.disabled = true;
+    return;
+  }
+  showBox(els.uploadError, "");
+  const names = selectedFiles.map((f) => f.name).slice(0, 2).join(", ");
+  const more = selectedFiles.length > 2 ? ` +${selectedFiles.length - 2}` : "";
+  const totalKb = selectedFiles.reduce((s, f) => s + f.size, 0) / 1024;
+  if (els.dropText) {
+    els.dropText.innerHTML = `<b>${selectedFiles.length} файл(ов)</b><br><span class="muted">${esc(names)}${esc(more)} · ${totalKb.toFixed(1)} КБ</span>`;
+  }
+  if (els.uploadBtn) els.uploadBtn.disabled = false;
+}
+
+function resetDropZone() {
+  selectedFiles = [];
+  if (els.file) els.file.value = "";
+  if (els.dropText) {
+    els.dropText.innerHTML = 'Перетащите файл или нажмите<br><span class="muted">PDF · DOCX · XLSX · MD · TXT</span>';
+  }
+  if (els.uploadBtn) els.uploadBtn.disabled = true;
+}
+
+function openFilePicker() {
+  if (!els.file) return;
+  els.file.value = "";
+  els.file.click();
+}
+
+async function loadFormats() {
+  if (!els.formatsHint) return;
+  try {
+    const r = await fetch(`${API}/formats`);
+    if (!r.ok) return;
+    const f = await r.json();
+    els.formatsHint.textContent = `${f.extensions.join(" · ")} · до ${(f.max_size_bytes / (1024 * 1024)).toFixed(0)} МБ`;
+  } catch {
+    els.formatsHint.textContent = "PDF, DOCX, XLSX, MD, TXT…";
+  }
+}
+
+async function uploadFiles() {
+  if (!selectedFiles.length || !els.uploadBtn) return;
+  els.uploadBtn.disabled = true;
+  els.uploadBtn.textContent = "Загрузка…";
+  showBox(els.uploadError, "");
+  const fd = new FormData();
+  const useBatch = selectedFiles.length > 1;
+  if (useBatch) {
+    selectedFiles.forEach((f) => fd.append("files", f));
+  } else {
+    fd.append("file", selectedFiles[0]);
+  }
+  fd.append("classification", els.classification?.value || "открытый");
+  let ok = false;
+  try {
+    const url = useBatch ? `${API}/documents/batch` : `${API}/documents`;
+    const r = await fetch(url, { method: "POST", body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Ошибка загрузки");
+    ok = true;
+    if (useBatch) {
+      const items = (data.items || []).filter((x) => x.document);
+      const bad = (data.items || []).filter((x) => x.error);
+      if (bad.length) showBox(els.uploadError, bad.map((x) => `${x.file_name}: ${x.error}`).join("\n"));
+      if (items.length) {
+        switchPage("docs");
+        await openDoc(items[0].document.id, { keepPage: true, showGraph: true });
+      }
+    } else {
+      switchPage("docs");
+      await openDoc(data.id, { keepPage: true, showGraph: true });
+    }
+    resetDropZone();
+  } catch (e) {
+    showBox(els.uploadError, e.message);
+    if (selectedFiles.length) els.uploadBtn.disabled = false;
+  } finally {
+    els.uploadBtn.textContent = "Обработать";
+    if (!ok && selectedFiles.length) els.uploadBtn.disabled = false;
+    renderDocsList();
+  }
 }
 
 function setPreview(el, text, isEmpty) {
@@ -394,8 +475,6 @@ async function applyPreviewUpdate(data, opts = {}) {
   renderDocMetadata(data);
   applyMarkdownFromPreview(data);
 
-  if (data.error) showBox(els.uploadError, data.error);
-  else if (opts.clearError) showBox(els.uploadError, "");
 
   docStatusCache.set(docId, data.status);
 
@@ -585,10 +664,6 @@ function populateGraphDocFilter(items) {
   if (els.qdrantDocFilter) {
     els.qdrantDocFilter.innerHTML = docOpts || '<option value="">—</option>';
   }
-  if (els.globalSearchDoc) {
-    els.globalSearchDoc.innerHTML = `<option value="">Все документы</option>${docOpts}`;
-    if (selectedDoc) els.globalSearchDoc.value = selectedDoc;
-  }
 }
 
 async function refreshEmbeddingStatus() {
@@ -651,26 +726,19 @@ async function autoIndexAfterExtraction(docId) {
 
 async function indexAllEmbeddings() {
   const btn = els.l3IndexAllBtn;
-  if (!docsListCache.length) {
-    showBox(els.uploadError, "Нет документов для индексации");
-    setTimeout(() => showBox(els.uploadError, ""), 3000);
-    return;
-  }
+  if (!docsListCache.length) return;
   btn.disabled = true;
   const prev = btn.textContent;
   btn.textContent = "Индексация…";
-  let total = 0;
   try {
     for (const d of docsListCache) {
       if ((d.graph_nodes || 0) === 0) continue;
-      const data = await indexEmbeddings(d.id, { silent: true, btn: null });
-      if (data) total += data.indexed ?? 0;
+      await indexEmbeddings(d.id, { silent: true, btn: null });
     }
     await refreshEmbeddingStatus();
-    showBox(els.uploadError, `Индексация завершена: ${total} узлов`);
-    setTimeout(() => showBox(els.uploadError, ""), 4000);
+    appendQdrantLog("Индексация всех документов завершена");
   } catch (e) {
-    showBox(els.uploadError, e.message);
+    appendQdrantLog(e.message, true);
   } finally {
     btn.disabled = false;
     btn.textContent = prev;
@@ -743,45 +811,6 @@ function renderSearchHits(hits, targetEl, opts = {}) {
       }
     });
   });
-}
-
-async function runGlobalSearch(query) {
-  if (!query?.trim() || !els.globalSearchResults) return;
-  els.globalSearchResults.innerHTML = '<p class="muted">Поиск…</p>';
-  const docId = els.globalSearchDoc?.value || "";
-  const body = {
-    query: query.trim(),
-    limit: 25,
-    mode: "auto",
-    document_ids: docId ? [docId] : null,
-  };
-  try {
-    const r = await fetch(`${AGENT_API}/search`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "Ошибка поиска");
-    const scope = docId ? "по документу" : "по всей базе";
-    if (els.globalSearchMeta) {
-      els.globalSearchMeta.textContent = `${scope} · режим: ${data.mode} · ${data.hits?.length ?? 0} результатов${data.note ? ` · ${data.note}` : ""}`;
-    }
-    renderSearchHits(data.hits || [], els.globalSearchResults, { showDoc: !docId });
-  } catch (e) {
-    els.globalSearchResults.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
-  }
-}
-
-function switchHomeTab(tab) {
-  const isQuery = tab !== "upload";
-  document.querySelectorAll(".home-tab").forEach((btn) => {
-    const active = btn.dataset.homeTab === tab;
-    btn.classList.toggle("active", active);
-    btn.setAttribute("aria-selected", active ? "true" : "false");
-  });
-  els.homeTabQuery?.classList.toggle("hidden", !isQuery);
-  els.homeTabUpload?.classList.toggle("hidden", isQuery);
 }
 
 function appendQdrantLog(msg, isErr = false) {
@@ -888,6 +917,14 @@ function setLiveExtractVisible(show) {
   if (els.liveExtract) els.liveExtract.classList.toggle("hidden", !visible);
 }
 
+function isGraphHostPage(page = currentPage) {
+  return page === "home" || page === "docs" || page === "doc" || page === "graphAll";
+}
+
+function isInlineGraphPage(page = currentPage) {
+  return page === "home" || page === "docs";
+}
+
 function docsWithGraph(items) {
   return (items || docsListCache).filter((d) => (d.graph_nodes || 0) > 0);
 }
@@ -915,14 +952,16 @@ function updateGraphScopeUI() {
 }
 
 function updateGraphVisibility() {
-  const isGraphPage = currentPage === "doc" || currentPage === "graphAll";
-  const isDocDetail = graphScope === "doc" && !graphVisible;
-  const showGraphArea = isGraphPage && (graphScope === "all" || graphVisible);
+  const isDocPage = currentPage === "doc" || currentPage === "graphAll";
+  const isInlineGraph = isInlineGraphPage();
+  const isDocDetail = graphScope === "doc" && !graphVisible && isDocPage;
+  const showGraphArea = isInlineGraph || (isDocPage && (graphScope === "all" || graphVisible));
 
-  els.pageGraphShell?.classList.toggle("doc-detail-only", isGraphPage && isDocDetail);
-  els.graphPageHead?.classList.toggle("hidden", !showGraphArea);
+  els.graphPanel?.classList.toggle("hidden", !showGraphArea);
+  els.pageGraphShell?.classList.toggle("doc-detail-only", isDocPage && isDocDetail);
+  els.graphPageHead?.classList.toggle("hidden", !showGraphArea || (isDocPage && isDocDetail));
 
-  if (!isGraphPage) return;
+  if (!isGraphHostPage()) return;
 
   const withGraph = docsWithGraph();
   const hasGraph = graphScope === "all"
@@ -934,22 +973,26 @@ function updateGraphVisibility() {
 
   const emptyMsg = els.graphsEmpty?.querySelector("p");
   if (emptyMsg) {
-    emptyMsg.textContent = graphScope === "all"
-      ? "Нет документов с графом. Постройте граф хотя бы для одного документа."
-      : "Нет графа. Выберите документ во вкладке «Документы» и нажмите «Построить граф».";
+    if (currentPage === "home") {
+      emptyMsg.textContent = "Нет документов с графом. Откройте «Документы» и постройте граф.";
+    } else {
+      emptyMsg.textContent = graphScope === "all"
+        ? "Нет документов с графом. Постройте граф хотя бы для одного документа."
+        : "Нет графа. Выберите документ и нажмите «Построить граф».";
+    }
   }
 }
 
 function updateGraphsPageState() {
   updateGraphVisibility();
-  if (graphScope === "doc" && !graphVisible) return;
+  if (graphScope === "doc" && !graphVisible && !isInlineGraphPage()) return;
 
   const withGraph = docsWithGraph();
   const hasGraph = graphScope === "all"
     ? withGraph.length > 0
     : withGraph.some((d) => d.id === selectedDoc);
 
-  if ((currentPage === "doc" || currentPage === "graphAll") && (hasGraph || graphScope === "all")) {
+  if (isGraphHostPage() && (hasGraph || graphScope === "all" || isInlineGraphPage())) {
     const docId = graphScope === "all" ? GRAPH_ALL_ID : (graphViewDocId || selectedDoc || pickGraphDocId());
     if (docId) {
       graphViewDocId = docId;
@@ -972,7 +1015,16 @@ function renderDocCard(d) {
 function bindDocCards(container) {
   container?.querySelectorAll(".doc").forEach((el) => {
     el.addEventListener("click", () => {
-      openDoc(el.dataset.id, { switchTo: "doc" });
+      const id = el.dataset.id;
+      if (currentPage === "docs") {
+        openDoc(id, { keepPage: true, showGraph: true });
+        graphScope = "doc";
+        updateGraphsPageState();
+        refreshGraphViewport();
+        renderDocsList();
+        return;
+      }
+      openDoc(id, { switchTo: "doc" });
     });
   });
 }
@@ -1017,7 +1069,15 @@ function viewAllGraph() {
   graphScope = "all";
   graphDensityMode = "full";
   graphVisible = true;
-  switchPage("graphAll");
+  graphViewDocId = GRAPH_ALL_ID;
+  if (!isGraphHostPage()) {
+    switchPage("docs");
+    return;
+  }
+  updateGraphScopeUI();
+  updateDensityToggleUI();
+  updateGraphsPageState();
+  refreshGraphViewport();
 }
 
 function openNeo4jBrowser() {
@@ -1197,27 +1257,6 @@ function statusLabel(doc) {
   }
 }
 
-function pickFiles(fileList) {
-  selectedFiles = Array.from(fileList || []);
-  if (!selectedFiles.length) {
-    els.uploadBtn.disabled = true;
-    return;
-  }
-  showBox(els.uploadError, "");
-  const names = selectedFiles.map((f) => f.name).slice(0, 2).join(", ");
-  const more = selectedFiles.length > 2 ? ` +${selectedFiles.length - 2}` : "";
-  const totalKb = selectedFiles.reduce((s, f) => s + f.size, 0) / 1024;
-  els.dropText.innerHTML = `<b>${selectedFiles.length} файл(ов)</b><br><span class="muted">${esc(names)}${esc(more)} · ${totalKb.toFixed(1)} КБ</span>`;
-  els.uploadBtn.disabled = false;
-}
-
-function resetDropZone() {
-  selectedFiles = [];
-  els.file.value = "";
-  els.dropText.innerHTML = 'Перетащите файлы<br><span class="muted">PDF · DOCX · XLSX · MD · TXT</span>';
-  els.uploadBtn.disabled = true;
-}
-
 function shortNodeLabel(node) {
   const props = node.props || {};
   const name = props.name_ru || props.name_en || props.name || props.title || props.quote;
@@ -1377,28 +1416,42 @@ function filteredGraph() {
 function switchPage(page) {
   if (!page) return;
   if (page === "graphs" || page === "fullgraph") page = "doc";
+  if (page === "search") page = "chats";
   currentPage = page;
   const isGraphView = page === "doc" || page === "graphAll";
   const isDocsArea = page === "docs" || isGraphView;
+  const isInlineGraph = isInlineGraphPage(page);
   els.pageHome?.classList.toggle("hidden", page !== "home");
   els.pageDocs?.classList.toggle("hidden", page !== "docs");
   els.pageGraphShell?.classList.toggle("hidden", !isGraphView);
   els.pageQdrant?.classList.toggle("hidden", page !== "qdrant");
   els.pageChats?.classList.toggle("hidden", page !== "chats");
-  els.pageSearch?.classList.toggle("hidden", page !== "search");
   els.pageSettings?.classList.toggle("hidden", page !== "settings");
+  els.pageHome?.classList.toggle("page-home-graph", page === "home");
+  els.pageDocs?.classList.toggle("page-docs-graph", page === "docs");
+  els.mainArea?.classList.toggle("layout-home-graph", page === "home");
+  els.mainArea?.classList.toggle("layout-docs-graph", page === "docs");
   document.querySelectorAll(".page-nav-link").forEach((link) => {
     const p = link.dataset.page;
     link.classList.toggle("active", p === page || (p === "docs" && isDocsArea));
   });
+
   if (page === "home") {
-    graphVisible = false;
-    graphScope = "doc";
+    graphVisible = true;
+    graphScope = "all";
+    graphViewDocId = GRAPH_ALL_ID;
+  } else if (page === "docs") {
+    graphVisible = true;
+    if (graphScope !== "all") {
+      graphScope = selectedDoc && docsWithGraph().some((d) => d.id === selectedDoc) ? "doc" : "all";
+      graphViewDocId = graphScope === "all" ? GRAPH_ALL_ID : (selectedDoc || pickGraphDocId());
+    }
+  } else if (page !== "doc" && page !== "graphAll") {
+    if (graphScope === "all") graphScope = "doc";
   }
-  if (!isGraphView && graphScope === "all") graphScope = "doc";
 
   if (isGraphView) {
-    graphScope = page === "graphAll" ? "all" : "doc";
+    graphScope = page === "graphAll" ? "all" : graphScope;
     if (graphScope === "all") {
       graphDensityMode = "full";
       graphViewDocId = GRAPH_ALL_ID;
@@ -1410,18 +1463,23 @@ function switchPage(page) {
       graphViewDocId = selectedDoc;
     }
     updateGraphsPageState();
-    if (graphVisible) refreshGraphViewport();
+    if (graphVisible || graphScope === "all") refreshGraphViewport();
     if (graphScope === "all") {
       updateDocPageBar({ file_name: "Все документы", id: GRAPH_ALL_ID, graph_nodes: graphData.nodes.length });
     } else if (selectedDoc) {
       const cached = docsListCache.find((d) => d.id === selectedDoc);
       if (cached) updateDocPageBar(cached);
     }
+  } else if (isInlineGraph) {
+    updateGraphScopeUI();
+    updateDensityToggleUI();
+    updateGraphsPageState();
+    refreshGraphViewport();
   } else {
     updateGraphScopeUI();
     updateGraphVisibility();
   }
-  if (page === "docs") renderDocsList();
+  if (page === "docs") loadDocuments();
   if (page === "qdrant") {
     if (els.qdrantDocFilter && selectedDoc) els.qdrantDocFilter.value = selectedDoc;
     refreshEmbeddingStatus();
@@ -1429,16 +1487,12 @@ function switchPage(page) {
     loadQdrantClusterMap();
     if (selectedDoc) loadQdrantPoints(selectedDoc);
   }
-  if (page === "search") {
-    populateGraphDocFilter(docsListCache);
-  }
   if (page === "chats") window.MKGAuth?.refreshChatsPage();
 }
 
 window.MKG = {
   get selectedDoc() { return selectedDoc; },
   get currentPage() { return currentPage; },
-  switchHomeTab,
   switchPage,
 };
 
@@ -1799,17 +1853,6 @@ function renderGraphViews() {
   renderL3Stats();
 }
 
-async function loadFormats() {
-  try {
-    const r = await fetch(`${API}/formats`);
-    if (!r.ok) return;
-    const f = await r.json();
-    els.formatsHint.textContent = `${f.extensions.join(" · ")} · до ${(f.max_size_bytes / (1024 * 1024)).toFixed(0)} МБ`;
-  } catch {
-    els.formatsHint.textContent = "PDF, DOCX, XLSX, MD, TXT…";
-  }
-}
-
 function initGraphResize() {
   const handle = els.graphResizeHandle;
   const wrap = els.graphCanvasWrap;
@@ -1914,12 +1957,9 @@ async function clearDatabase() {
     els.docMdPanel?.classList.add("hidden");
     els.docLogsPanel?.classList.add("hidden");
     closeDetailPanel();
-    showBox(els.uploadError, "База очищена");
-    resetDropZone();
     await renderDocsList();
-    setTimeout(() => showBox(els.uploadError, ""), 2500);
   } catch (e) {
-    showBox(els.uploadError, e.message);
+    appendQdrantLog(e.message, true);
   } finally {
     els.clearDbBtn.disabled = false;
   }
@@ -2162,7 +2202,8 @@ async function openDoc(id, opts = {}) {
   selectedDoc = id;
   graphViewDocId = id;
   graphScope = "doc";
-  if (opts.showGraph !== true) graphVisible = false;
+  if (opts.showGraph === true) graphVisible = true;
+  else if (opts.switchTo) graphVisible = false;
   closeDetailPanel();
   if (opts.switchTo) {
     switchPage(opts.switchTo);
@@ -2178,6 +2219,7 @@ async function openDoc(id, opts = {}) {
   populateGraphDocFilter(docsListCache);
   if (docPanelMode === "logs") loadLogs(id, { force: true });
   updateGraphsPageState();
+  if (currentPage === "docs") renderDocsList();
   if (currentPage === "qdrant") {
     loadQdrantPoints(id);
     loadQdrantClusterMap();
@@ -2214,15 +2256,24 @@ async function pollSelectedDocumentPreview() {
   } catch { /* ignore */ }
 }
 
+async function loadDocuments() {
+  return renderDocsList();
+}
+
 async function renderDocsList() {
+  if (!els.docs) return;
   try {
     const r = await fetch(`${API}/documents?page=1&page_size=50`);
+    if (!r.ok) {
+      els.docs.innerHTML = '<div class="muted">Не удалось загрузить список документов</div>';
+      return;
+    }
     const data = await r.json();
     docsListCache = data.items || [];
     populateGraphDocFilter(docsListCache);
     updateGraphsPageState();
-    if (!data.items.length) {
-      els.docs.innerHTML = '<div class="muted">Пока нет документов</div>';
+    if (!data.items?.length) {
+      els.docs.innerHTML = '<div class="muted">Пока нет документов — загрузите файл выше</div>';
       return;
     }
     const q = docListFilterText.trim().toLowerCase();
@@ -2236,45 +2287,8 @@ async function renderDocsList() {
     els.docs.innerHTML = filtered.map(renderDocCard).join("");
     bindDocCards(els.docs);
     await pollSelectedDocumentPreview();
-  } catch { /* ignore */ }
-}
-
-async function uploadFiles() {
-  if (!selectedFiles.length) return;
-  els.uploadBtn.disabled = true;
-  els.uploadBtn.textContent = "Загрузка…";
-  showBox(els.uploadError, "");
-  const fd = new FormData();
-  const useBatch = selectedFiles.length > 1;
-  if (useBatch) {
-    selectedFiles.forEach((f) => fd.append("files", f));
-  } else {
-    fd.append("file", selectedFiles[0]);
-  }
-  fd.append("classification", els.classification.value);
-  let ok = false;
-  try {
-    const url = useBatch ? `${API}/documents/batch` : `${API}/documents`;
-    const r = await fetch(url, { method: "POST", body: fd });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "Ошибка загрузки");
-    ok = true;
-    if (useBatch) {
-      const items = (data.items || []).filter((x) => x.document);
-      const bad = (data.items || []).filter((x) => x.error);
-      if (bad.length) showBox(els.uploadError, bad.map((x) => `${x.file_name}: ${x.error}`).join("\n"));
-      if (items.length) await openDoc(items[0].document.id, { switchTo: "doc" });
-    } else {
-      await openDoc(data.id, { switchTo: "doc" });
-    }
-    resetDropZone();
   } catch (e) {
-    showBox(els.uploadError, e.message);
-    els.uploadBtn.disabled = selectedFiles.length > 0;
-  } finally {
-    els.uploadBtn.textContent = "Обработать";
-    if (!ok && selectedFiles.length) els.uploadBtn.disabled = false;
-    renderDocsList();
+    els.docs.innerHTML = `<div class="muted">Ошибка загрузки: ${esc(e.message)}</div>`;
   }
 }
 
@@ -2314,13 +2328,6 @@ function bindEvents() {
   els.qdrantSearchForm?.addEventListener("submit", (e) => {
     e.preventDefault();
     runSearch(els.qdrantSearchQuery?.value, els.qdrantSearchResults);
-  });
-  els.globalSearchForm?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    runGlobalSearch(els.globalSearchQuery?.value);
-  });
-  document.querySelectorAll(".home-tab").forEach((btn) => {
-    btn.addEventListener("click", () => switchHomeTab(btn.dataset.homeTab));
   });
   els.docListFilter?.addEventListener("input", (e) => {
     docListFilterText = e.target.value;
@@ -2371,11 +2378,6 @@ function bindEvents() {
   els.originalGraphBtn?.addEventListener("click", resetGraphFilters);
   els.headerNeo4jBtn?.addEventListener("click", openNeo4jBrowser);
   initGraphResize();
-}
-
-function openFilePicker() {
-  els.file.value = "";
-  els.file.click();
 }
 
 function boot() {
