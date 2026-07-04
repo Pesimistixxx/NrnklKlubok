@@ -631,6 +631,7 @@ POST /agents/documents/{id}/search             → mode=semantic
 |-----------|----------------------|
 | `/agents/documents/{id}/layers` | `/api/v1/documents/{id}/pipeline/layers` |
 | `/agents/documents/{id}/graph` | `/api/v1/graph/documents/{id}` |
+| `/agents/documents/{id}/text` | `/api/v1/documents/{id}/markdown` |
 | `POST /agents/analytics/l4-cluster` | `POST /api/v1/graph/l4/cluster`, `POST /api/v1/documents/{id}/l4-cluster` |
 
 Agent API добавляет: фильтры по слоям, соседей узлов, paragraphs, search, ontology, embeddings status, **capabilities registry**, **Qdrant points scroll**.
@@ -648,6 +649,8 @@ QDRANT_URL=http://qdrant:6333
 QDRANT_COLLECTION_CHUNKS=mkg_chunks
 QDRANT_COLLECTION_CLAIMS=mkg_claims
 QDRANT_VECTOR_SIZE=256
+GRAPH_TRAVERSAL_MAX_HOPS=2
+HDBSCAN_MIN_CLUSTER_SIZE=3
 LLM_CACHE_EMBEDDINGS=true
 ```
 
