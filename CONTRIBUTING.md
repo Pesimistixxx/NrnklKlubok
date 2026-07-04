@@ -80,6 +80,7 @@ Worker и agents — см. [`README.md`](./README.md).
 | Раздел | Файл |
 |--------|------|
 | Обзор | [`Docs/00_overview.md`](./Docs/00_overview.md) |
+| Соответствие ТЗ | [`Docs/01_tz_compliance.md`](./Docs/01_tz_compliance.md) |
 | Архитектура | [`Docs/02_architecture.md`](./Docs/02_architecture.md) |
 | Пайплайн L1–L6 | [`Docs/21_pipeline_and_layers.md`](./Docs/21_pipeline_and_layers.md) |
 | API | [`Docs/21_api_reference.md`](./Docs/21_api_reference.md) |

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 router = APIRouter(tags=["documentation"])
@@ -26,6 +27,11 @@ DOC_SECTIONS: dict[str, dict[str, str]] = {
         "file": "22_chat_agents.md",
         "source": "repo",
     },
+    "hrm-reasoning": {
+        "title": "HRM: адаптивное число циклов",
+        "file": "29_hrm_adaptive_reasoning.md",
+        "source": "repo",
+    },
     "analytics-synthesis": {
         "title": "Аналитика и синтез ответов",
         "file": "25_analytics_synthesis.md",
@@ -39,7 +45,7 @@ DOC_SECTIONS: dict[str, dict[str, str]] = {
     "orchestrator": {
         "title": "Оркестратор L1–L6",
         "file": "orchestrator.md",
-        "source": "static",
+        "source": "repo",
     },
     "key-requirements": {
         "title": "Ключевые требования хакатона",
@@ -54,7 +60,7 @@ DOC_SECTIONS: dict[str, dict[str, str]] = {
     "roles-vs-agents": {
         "title": "Роли vs агенты",
         "file": "roles-vs-agents.md",
-        "source": "static",
+        "source": "repo",
     },
     "additional-wishes": {
         "title": "Дополнительные пожелания (MVP)",
@@ -126,3 +132,11 @@ async def get_doc_content(slug: str) -> DocContentOut:
         title=meta["title"],
         content=path.read_text(encoding="utf-8"),
     )
+
+
+@router.get("/docs/{slug}/raw", response_class=PlainTextResponse)
+async def get_doc_raw(slug: str) -> str:
+    path = _resolve_doc_path(slug)
+    if not path:
+        raise HTTPException(status_code=404, detail="not found")
+    return path.read_text(encoding="utf-8")

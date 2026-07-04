@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=134" />
+  <link rel="stylesheet" href="/static/css/app.css?v=137" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
@@ -552,7 +552,7 @@
                 <p><strong>Аномалии</strong> — L4-факты из <code>mkg_claims</code>, которые HDBSCAN не включил ни в плотный кластер (<code>cluster_id = -1</code>, <code>is_anomaly = true</code>). На карте — <strong>красные точки</strong>; клик открывает панель справа: текст слева, связи Neo4j справа.</p>
                 <p><strong>Кластеры</strong> — цветные области и карточки ниже. Клик по области или карточке — описание темы и связи между фактами кластера.</p>
                 <p>Если все точки красные (0 кластеров): мало L4-данных или эмбеддинги слишком разные. Уменьшите <code>HDBSCAN_MIN_CLUSTER_SIZE</code> в <code>.env</code>, перезапустите gateway и нажмите «Перекластеризовать».</p>
-                <p>Подробнее: <a href="/static/docs/24_layer_agents.md#l4-аномалии-hdbscan-и-anomaly_mode" target="_blank" rel="noopener">L4-аномалии и anomaly_mode</a> · <a href="/static/docs/21_pipeline_and_layers.md" target="_blank" rel="noopener">пайплайн L4</a></p>
+                <p>Подробнее: <a href="/api/v1/docs/layer-agents/raw" target="_blank" rel="noopener">L4-аномалии и anomaly_mode</a> · <a href="/api/v1/docs/pipeline/raw" target="_blank" rel="noopener">пайплайн L4</a></p>
               </div>
             </details>
           </section>
@@ -812,9 +812,9 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
-  <script src="/static/js/icons.js?v=134"></script>
-  <script src="/static/js/graph-mini.js?v=134"></script>
-  <script src="/static/js/app.js?v=134"></script>
-  <script src="/static/js/chats.js?v=135"></script>
+  <script src="/static/js/icons.js?v=137"></script>
+  <script src="/static/js/graph-mini.js?v=137"></script>
+  <script src="/static/js/app.js?v=137"></script>
+  <script src="/static/js/chats.js?v=137"></script>
 </body>
 </html>

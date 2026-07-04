@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import re
 from typing import Any, Literal
 
@@ -24,6 +25,7 @@ from app.agent_bus import (
 )
 from app.client import GatewayClient
 from app.config import AgentSettings
+from app.halting import _graph_size as _acc_graph_size, compute_marginal_gain, decide_halt
 from app.layer_nodes import make_layer_runner
 from app.llm import AgentLLM
 from app.state import OrchestratorState
@@ -376,6 +378,10 @@ def _resolve_router_target(state: OrchestratorState, settings: AgentSettings) ->
     round_num = int(state.get("round") or 0)
     max_rounds = int(state.get("max_rounds") or settings.agent_loop_max_rounds)
 
+    # HRM halt head requested early stop → выйти из цикла к discover → synthesize.
+    if state.get("halt_requested"):
+        return "discover_new_connections"
+
     if remaining_seconds(state, settings.timeout_seconds) < _SYNTH_RESERVE_SECONDS:
         acc = state.get("accumulated_graph") or {}
         if acc.get("nodes") or state.get("layer_results"):
@@ -522,6 +528,7 @@ async def orchestrator_plan(
     new_state["max_rounds"] = settings.agent_loop_max_rounds
     new_state["agent_bus"] = []
     new_state["layers_invoked"] = []
+    _setup_hrm_loop(new_state, settings)
 
     timeout = min(settings.planner_timeout * 2, remaining_seconds(new_state, settings.timeout_seconds))
     if timeout <= 0:
@@ -590,6 +597,43 @@ async def orchestrator_plan(
     )
     _trace_loop_start(new_state)
     return new_state
+
+
+def _setup_hrm_loop(state: OrchestratorState, settings: AgentSettings) -> None:
+    """HRM: настроить бюджет раундов (адаптивный/стохастический или фиксированный)."""
+    mode = str(getattr(settings, "agent_halt_mode", "adaptive") or "adaptive").lower()
+    min_rounds = max(1, int(settings.agent_loop_min_rounds))
+    hard_cap = max(min_rounds, int(settings.agent_loop_hard_cap))
+
+    if mode == "adaptive":
+        if settings.agent_halt_random:
+            sampled = random.randint(min_rounds, hard_cap)
+        else:
+            sampled = hard_cap
+        state["min_rounds"] = min_rounds
+        state["hard_max_rounds"] = hard_cap
+        state["max_rounds"] = sampled
+        state["sampled_round_budget"] = sampled
+    else:
+        # fixed: воспроизводим старое поведение на agent_loop_max_rounds.
+        fixed_rounds = max(1, int(settings.agent_loop_max_rounds))
+        state["max_rounds"] = fixed_rounds
+        state["min_rounds"] = min(min_rounds, fixed_rounds)
+        state["hard_max_rounds"] = max(hard_cap, fixed_rounds)
+        state["sampled_round_budget"] = fixed_rounds
+
+    state["last_round_graph_size"] = 0
+    state["round_gain_history"] = []
+    state["halt_history"] = []
+    state["halt_requested"] = False
+    add_trace(
+        state,
+        "hrm_budget_sampled",
+        min_rounds=state["min_rounds"],
+        hard_cap=state["hard_max_rounds"],
+        sampled_budget=state["sampled_round_budget"],
+        mode=mode,
+    )
 
 
 def _trace_loop_start(state: OrchestratorState) -> None:
@@ -668,31 +712,93 @@ def _router_edge(state: OrchestratorState) -> str:
     return "discover_new_connections"
 
 
-async def orchestrator_advance_round(state: OrchestratorState, settings: AgentSettings) -> OrchestratorState:
-    """After a layer agent finishes: track invocation, maybe advance round."""
+async def orchestrator_advance_round(
+    state: OrchestratorState,
+    settings: AgentSettings,
+    llm: AgentLLM | None = None,
+) -> OrchestratorState:
+    """After a layer agent finishes: track invocation, maybe advance round.
+
+    Adaptive (HRM) mode: after all planned layers are invoked, ask the halt head
+    (heuristics + optional LLM) whether to stop or run another round. Fixed mode
+    reproduces the original counter-based behavior on ``agent_loop_max_rounds``.
+    """
     new_state = dict(state)
     last = (new_state.get("layer_results") or [])[-1] if new_state.get("layer_results") else None
-    if last:
-        layer = str(last.get("layer") or "").upper()
-        invoked = list(new_state.get("layers_invoked") or [])
-        if layer and layer not in invoked:
-            invoked.append(layer)
-        new_state["layers_invoked"] = invoked
+    if not last:
+        return new_state
 
-        planned = [str(x).upper() for x in (new_state.get("planned_layers") or list(ALL_LAYERS))]
-        if planned and all(l in invoked for l in planned):
-            round_num = int(new_state.get("round") or 0)
-            max_rounds = int(new_state.get("max_rounds") or settings.agent_loop_max_rounds)
-            if round_num + 1 < max_rounds:
-                new_state["round"] = round_num + 1
-                new_state["layers_invoked"] = []
-                add_trace(
-                    new_state,
-                    "agent_loop_round",
-                    round=new_state["round"],
-                    max_rounds=max_rounds,
-                    reason="all_planned_layers_invoked",
-                )
+    layer = str(last.get("layer") or "").upper()
+    invoked = list(new_state.get("layers_invoked") or [])
+    if layer and layer not in invoked:
+        invoked.append(layer)
+    new_state["layers_invoked"] = invoked
+
+    planned = [str(x).upper() for x in (new_state.get("planned_layers") or list(ALL_LAYERS))]
+    if not (planned and all(l in invoked for l in planned)):
+        return new_state
+
+    round_num = int(new_state.get("round") or 0)
+    max_rounds = int(new_state.get("max_rounds") or settings.agent_loop_max_rounds)
+    mode = str(getattr(settings, "agent_halt_mode", "adaptive") or "adaptive").lower()
+
+    if mode != "adaptive":
+        # Fixed mode: original counter-based advance (no halt head).
+        if round_num + 1 < max_rounds:
+            new_state["round"] = round_num + 1
+            new_state["layers_invoked"] = []
+            new_state["last_round_graph_size"] = _acc_graph_size(new_state)
+            add_trace(
+                new_state,
+                "agent_loop_round",
+                round=new_state["round"],
+                max_rounds=max_rounds,
+                reason="all_planned_layers_invoked",
+            )
+        return new_state
+
+    # Adaptive HRM mode: consult the halt head.
+    gain = compute_marginal_gain(new_state)
+    gain_history = list(new_state.get("round_gain_history") or [])
+    gain_history.append(gain)
+    new_state["round_gain_history"] = gain_history
+
+    decision = await decide_halt(new_state, settings, llm)
+    halt_history = list(new_state.get("halt_history") or [])
+    halt_history.append(decision.to_dict())
+    new_state["halt_history"] = halt_history
+
+    min_rounds = int(new_state.get("min_rounds") or settings.agent_loop_min_rounds)
+    add_trace(
+        new_state,
+        "hrm_halt_decision",
+        round=round_num,
+        decision="halt" if decision.halt else "continue",
+        marginal_gain=decision.marginal_gain,
+        confidence=decision.confidence,
+        reason=decision.reason,
+        source=decision.source,
+        sampled_budget=new_state.get("sampled_round_budget"),
+        min_rounds=min_rounds,
+        hard_cap=new_state.get("hard_max_rounds"),
+    )
+
+    if decision.halt and round_num + 1 >= min_rounds:
+        new_state["halt_requested"] = True
+        return new_state
+
+    # Continue: advance the round and reset per-round invocation tracking.
+    new_state["round"] = round_num + 1
+    new_state["layers_invoked"] = []
+    new_state["last_round_graph_size"] = _acc_graph_size(new_state)
+    add_trace(
+        new_state,
+        "agent_loop_round",
+        round=new_state["round"],
+        max_rounds=max_rounds,
+        reason="all_planned_layers_invoked",
+        hrm=True,
+    )
     return new_state
 
 
@@ -1018,7 +1124,7 @@ def build_orchestrator_graph(settings: AgentSettings, gateway: GatewayClient, ll
 
         async def _layer(state: OrchestratorState, *, _runner=runner, _lid=lid) -> OrchestratorState:
             result = await _runner(state, gateway, settings)
-            return await orchestrator_advance_round(result, settings)
+            return await orchestrator_advance_round(result, settings, llm)
 
         graph.add_node(lid, _layer)
 

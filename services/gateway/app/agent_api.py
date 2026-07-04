@@ -8,7 +8,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from mkg_core.annotated_md import _LABEL_LAYER, _LAYER_TITLES, inject_l3_markers
 from mkg_core.embeddings import (
@@ -53,6 +53,8 @@ from app.schemas import (
     GraphRelationship,
     LayerPipelineOut,
 )
+from app.data_access import allowed_classifications, assert_document_access
+from app.request_context import role_from_request
 from app.storage import get_repo
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -81,6 +83,15 @@ def _require_doc(doc_id: str) -> dict[str, Any]:
     rec = get_repo().get(doc_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
+    return rec
+
+
+async def _require_doc_access(request: Request, doc_id: str) -> dict[str, Any]:
+    rec = _require_doc(doc_id)
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     return rec
 
 
@@ -212,9 +223,10 @@ def _paragraphs_from_md(doc_id: str, md: str) -> list[dict[str, Any]]:
     response_model=AgentDocListOut,
     summary="Список документов со статистикой по слоям",
 )
-async def list_agent_docs(page: int = 1, page_size: int = 50) -> AgentDocListOut:
+async def list_agent_docs(request: Request, page: int = 1, page_size: int = 50) -> AgentDocListOut:
     """Все документы с краткой сводкой L1–L6 (число узлов на слой)."""
-    items_raw, total = get_repo().list(page, page_size)
+    allowed = await allowed_classifications(role_from_request(request))
+    items_raw, total = get_repo().list(page, page_size, classifications=allowed)
     items: list[AgentDocSummaryOut] = []
     for rec in items_raw:
         doc_id = rec["id"]
@@ -245,9 +257,9 @@ async def list_agent_docs(page: int = 1, page_size: int = 50) -> AgentDocListOut
     response_model=AgentDocSummaryOut,
     summary="Метаданные документа и сводка по слоям",
 )
-async def get_agent_document(doc_id: str) -> AgentDocSummaryOut:
+async def get_agent_document(request: Request, doc_id: str) -> AgentDocSummaryOut:
     """Статус документа, ошибки, counts L1–L6."""
-    rec = _require_doc(doc_id)
+    rec = await _require_doc_access(request, doc_id)
     graph = _load_graph(doc_id)
     md = get_repo().read_markdown(doc_id)
     pipeline = build_layer_pipeline(
@@ -275,9 +287,9 @@ async def get_agent_document(doc_id: str) -> AgentDocSummaryOut:
     response_model=LayerPipelineOut,
     summary="Полный пайплайн слоёв L1–L6",
 )
-async def get_agent_layers(doc_id: str) -> LayerPipelineOut:
+async def get_agent_layers(request: Request, doc_id: str) -> LayerPipelineOut:
     """Статус каждого слоя, число узлов/связей, примеры связей."""
-    rec = _require_doc(doc_id)
+    rec = await _require_doc_access(request, doc_id)
     graph = get_repo().read_graph(doc_id)
     md = get_repo().read_markdown(doc_id)
     payload = build_layer_pipeline(
@@ -295,6 +307,7 @@ async def get_agent_layers(doc_id: str) -> LayerPipelineOut:
     summary="Узлы и связи одного слоя (L1–L6)",
 )
 async def get_agent_layer_detail(
+    request: Request,
     doc_id: str,
     layer_id: str,
     label: str | None = Query(None, description="Фильтр по label узла"),
@@ -302,7 +315,7 @@ async def get_agent_layer_detail(
     """Все узлы и связи слоя; опциональный фильтр по Neo4j label."""
     if layer_id not in LAYER_ORDER:
         raise HTTPException(status_code=400, detail=f"layer_id должен быть одним из {LAYER_ORDER}")
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     graph = _load_graph(doc_id, required=True)
     filtered = _filter_graph(graph, layer=layer_id, label=label)
     return AgentLayerDetailOut(
@@ -330,13 +343,14 @@ async def get_agent_layer_detail(
     summary="Полный граф документа с фильтрами",
 )
 async def get_agent_graph(
+    request: Request,
     doc_id: str,
     layer: str | None = Query(None, description="Фильтр L1–L6"),
     label: str | None = Query(None, description="Фильтр label узла"),
     rel_type: str | None = Query(None, description="Фильтр типа связи"),
 ) -> AgentGraphOut:
     """Граф документа; query-параметры сужают узлы и связи."""
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     graph = _load_graph(doc_id, required=True)
     filtered = _filter_graph(graph, layer=layer, label=label, rel_type=rel_type)
     return _graph_to_out(doc_id, filtered)
@@ -348,12 +362,13 @@ async def get_agent_graph(
     summary="Все связи документа",
 )
 async def get_agent_relationships(
+    request: Request,
     doc_id: str,
     rel_type: str | None = Query(None),
     layer: str | None = Query(None, description="Слой исходного узла (from)"),
 ) -> AgentRelationshipsOut:
     """Список связей с опциональным фильтром по типу и слою."""
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     graph = _load_graph(doc_id, required=True)
     rels = graph.get("relationships") or []
     node_by_id = {str(n.get("id")): n for n in graph.get("nodes") or []}
@@ -388,6 +403,7 @@ async def get_agent_relationships(
     summary="Поиск узлов по id, имени, цитате",
 )
 async def list_agent_nodes(
+    request: Request,
     doc_id: str,
     q: str | None = Query(None, description="Keyword: id, name_ru, quote, title…"),
     label: str | None = Query(None, description="Neo4j label узла"),
@@ -397,7 +413,7 @@ async def list_agent_nodes(
     """Список узлов документа с фильтрами по тексту, label и слою."""
     if layer and layer not in LAYER_ORDER:
         raise HTTPException(status_code=400, detail=f"layer должен быть одним из {LAYER_ORDER}")
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     graph = _load_graph(doc_id, required=True)
     nodes = graph.get("nodes") or []
     needle = (q or "").strip().lower()
@@ -436,9 +452,9 @@ async def list_agent_nodes(
     response_model=AgentNodeDetailOut,
     summary="Узел с соседями (incoming/outgoing)",
 )
-async def get_agent_node(doc_id: str, node_id: str) -> AgentNodeDetailOut:
+async def get_agent_node(request: Request, doc_id: str, node_id: str) -> AgentNodeDetailOut:
     """Детали узла и все входящие/исходящие связи."""
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     graph = _load_graph(doc_id, required=True)
     node_by_id = {str(n.get("id")): n for n in graph.get("nodes") or []}
     node = node_by_id.get(node_id)
@@ -492,11 +508,12 @@ async def get_agent_node(doc_id: str, node_id: str) -> AgentNodeDetailOut:
     summary="Markdown документа",
 )
 async def get_agent_text(
+    request: Request,
     doc_id: str,
     with_paragraph_index: bool = Query(False, description="Добавить L3 HTML-комментарии"),
 ) -> AgentTextOut:
     """Чистый markdown; опционально с L3-маркерами абзацев."""
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     md = get_repo().read_markdown(doc_id)
     if md is None:
         raise HTTPException(status_code=404, detail="Markdown ещё не готов")
@@ -515,9 +532,9 @@ async def get_agent_text(
     response_model=AgentParagraphsOut,
     summary="L3 TextParagraph — список абзацев",
 )
-async def get_agent_paragraphs(doc_id: str) -> AgentParagraphsOut:
+async def get_agent_paragraphs(request: Request, doc_id: str) -> AgentParagraphsOut:
     """Абзацы L3 из графа (после extraction) или из markdown (до extraction)."""
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     graph = _load_graph(doc_id)
     md = get_repo().read_markdown(doc_id) or ""
 
@@ -543,9 +560,9 @@ async def get_agent_paragraphs(doc_id: str) -> AgentParagraphsOut:
     response_model=AgentSearchOut,
     summary="Поиск по документу (semantic / keyword)",
 )
-async def agent_search(doc_id: str, body: AgentSearchRequest) -> AgentSearchOut:
+async def agent_search(request: Request, doc_id: str, body: AgentSearchRequest) -> AgentSearchOut:
     """Семантический поиск через Qdrant+Yandex embed; fallback — keyword по графу."""
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     graph = _load_graph(doc_id)
     if not graph.get("nodes") and not get_repo().read_markdown(doc_id):
         raise HTTPException(status_code=404, detail="Нет данных для поиска")
@@ -600,11 +617,11 @@ async def agent_global_search(body: GlobalSearchRequest) -> AgentSearchOut:
     "/documents/{doc_id}/embeddings/index",
     summary="Проиндексировать TextParagraph и Claim в Qdrant",
 )
-async def agent_index_embeddings(doc_id: str) -> dict[str, Any]:
+async def agent_index_embeddings(request: Request, doc_id: str) -> dict[str, Any]:
     """Явная индексация L3/L4 узлов или Markdown-чанков в Qdrant."""
     from mkg_core.embeddings import index_document_graph, index_document_markdown
 
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     graph = _load_graph(doc_id, required=False)
     if graph and graph.get("nodes"):
         stats = await index_document_graph(doc_id, graph)
@@ -661,13 +678,14 @@ async def get_embeddings_status() -> AgentEmbeddingStatusOut:
     summary="Точки Qdrant документа (scroll, без векторов)",
 )
 async def get_document_qdrant_points(
+    request: Request,
     doc_id: str,
     collection: str | None = Query(None, description="mkg_chunks или mkg_claims"),
     limit: int = Query(100, ge=1, le=500),
 ) -> AgentQdrantPointsOut:
     """Список проиндексированных точек — аналог просмотра узлов Neo4j."""
     doc_id = _normalize_doc_id(doc_id)
-    _require_doc(doc_id)
+    await _require_doc_access(request, doc_id)
     raw = await list_indexed_points(doc_id, collection=collection, limit=limit)
     points = [AgentQdrantPointOut(**p) for p in raw]
     return AgentQdrantPointsOut(document_id=doc_id, total=len(points), points=points)
@@ -692,6 +710,7 @@ async def get_all_qdrant_points(
     summary="2D-карта точек Qdrant (PCA проекция эмбеддингов)",
 )
 async def get_qdrant_points_viz(
+    request: Request,
     document_id: str | None = Query(None, description="Фильтр по документу"),
     limit: int = Query(500, ge=1, le=2000),
     layer: str | None = Query("L4", description="Слой точек: L4 (кластеры), L3 или null — все"),
@@ -699,7 +718,7 @@ async def get_qdrant_points_viz(
     """Вектора из Qdrant → PCA → координаты для scatter plot в UI."""
     if document_id:
         document_id = _normalize_doc_id(document_id)
-        _require_doc(document_id)
+        await _require_doc_access(request, document_id)
     layer_filter = layer.strip().upper() if layer and layer.strip() else None
     if layer_filter and layer_filter not in ("L3", "L4"):
         raise HTTPException(status_code=400, detail="layer must be L3, L4 or empty")

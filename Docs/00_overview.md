@@ -8,9 +8,11 @@
 книги, таблицы), приводит их к единому размеченному виду, извлекает сущности и факты,
 раскладывает их по **6 онтологическим слоям** в граф Neo4j, индексирует текст и факты
 в Qdrant, кластеризует L4 (HDBSCAN) и выявляет аномалии. Поверх этого работают **чат**
-с dual search (L3+L4+Neo4j), **LangGraph-агенты** (аудит, гипотезы, аномалии) и
+с unified search (L1+L3+L4 + Neo4j), **LangGraph-агенты** (аудит, гипотезы, аномалии) и
 Agent API для интеграций. Итог — система, которая отвечает на сложные запросы,
 показывает источник каждого факта и цепочку рассуждений.
+
+> Оценка соответствия требованиям хакатона: [`01_tz_compliance.md`](01_tz_compliance.md).
 
 ## Ключевые боли, которые решаем
 
@@ -27,13 +29,16 @@ Agent API для интеграций. Итог — система, котора
 | Файл | Что внутри |
 |------|-----------|
 | `00_overview.md` | Краткая суть проекта и текущий статус |
+| `01_tz_compliance.md` | **Матрица соответствия ТЗ (для жюри)** |
 | `02_architecture.md` | Архитектура, сервисы, хранилища |
 | `21_pipeline_and_layers.md` | **L1–L6, L3 vs L4, HDBSCAN, режимы upload** |
 | `22_chat_agents.md` | **Роли, AI-режимы, trace, POST /query** |
+| `29_hrm_adaptive_reasoning.md` | **HRM: адаптивное число циклов рассуждения** |
 | `21_api_reference.md` | Сводка REST API |
 | `19_user_guide.md` | UI: Чат, Документы, пайплайн, роли |
 | `18_smoke_test.md` | Пошаговая проверка локального запуска |
-| `20_project_status.md` | Текущий этап MVP-2 и матрица готовности |
+| `20_project_status.md` | Текущий этап и матрица готовности |
+| `28_access_and_security.md` | Роли, гриф, RBAC на чтении, аудит |
 | `14_agent_api.md` | Agent REST API для интеграций |
 | `15_l3_qdrant_clustering.md` | L3, Qdrant, кластеризация L4 |
 | `21_multiagent_system.md` | LangGraph agents service |
@@ -48,7 +53,7 @@ Agent API для интеграций. Итог — система, котора
 4. **Neo4j**: `mkg_extraction.loader.load_graph` (MERGE).
 5. **Qdrant L3/L4**: `mkg_core.embeddings` — `POST /documents/{id}/index`.
 6. **L4 HDBSCAN**: `mkg_core.l4_clustering` — `POST /graph/l4/cluster`, `/documents/{id}/l4-cluster`.
-7. **Чат**: `services/gateway/app/chat_engine.py` — dual search + graph traversal.
+7. **Чат**: `services/gateway/app/chat_engine.py` — unified search (L1+L3+L4) + graph traversal.
 8. **LangGraph**: `services/agents/` — proxy `POST /api/v1/agents-service/run`.
 
 ## Пайплайн (актуальный)
@@ -58,8 +63,11 @@ Upload → OCR → MD (clean + marked) → L1–L6 → Graph → Neo4j
   → Qdrant (L3 chunks + L4 claims) → L4 HDBSCAN (clusters + anomalies)
 ```
 
-- **L3** — только семантический поиск (`mkg_chunks`).
-- **L4** — dual search + HDBSCAN-кластеры и выбросы (`mkg_claims`).
+- **L1** — сущности (Material/Process/Equipment…) в `mkg_entities`.
+- **L3** — текстовые абзацы для семантического поиска (`mkg_chunks`).
+- **L4** — факты + HDBSCAN-кластеры и выбросы (`mkg_claims`).
+
+Поиск и чат используют **unified search** сразу по трём коллекциям (`search_global`).
 
 Подробно: [`21_pipeline_and_layers.md`](21_pipeline_and_layers.md), [`22_chat_agents.md`](22_chat_agents.md).
 
@@ -68,20 +76,21 @@ Upload → OCR → MD (clean + marked) → L1–L6 → Graph → Neo4j
 | Готово | В работе / не сделано |
 |--------|------------------------|
 | Upload (full / answers_only), OCR, MD, L1–L6, Neo4j | Contradiction engine (полный) |
-| Qdrant index + semantic + dual search | Entity resolution + pint |
-| L4 HDBSCAN + anomalies API + UI | RBAC UI |
-| Чат: roles, sources, trace, Save MD | Визуальный конструктор графа |
-| LangGraph: audit, hypothesis, anomaly | Полный RAG synthesis |
-| Agent API, pipeline retry-кнопки | TableMatrix, SynonymMap |
+| Qdrant index + unified search (L1+L3+L4) | Entity resolution + pint |
+| L4 HDBSCAN + anomalies API + UI | Визуальный конструктор графа |
+| Чат: roles, sources, trace, Save MD, direct-reply | Полный RAG synthesis + composite confidence |
+| LangGraph: audit, hypothesis, anomaly, review, recommend | TableMatrix, SynonymMap |
+| RBAC на чтении (матрица role × classification) | Production auth (JWT/TLS), полный audit log |
+| Дашборд, сравнение технологий (L6), экспорт | Vision→Mermaid агент |
 
 Подробное сравнение с целевой моделью: [`03_implementation_gap.md`](03_implementation_gap.md).
 
-## Что на текущем этапе (MVP-2)
+## Что доступно сейчас
 
-1. **Чат** — диалог по роли, dual search L3+L4+Neo4j, режимы Audit / Hypotheses / Anomalies, trace, источники, «Сохранить как MD».
+1. **Чат** — диалог по роли, unified search L1+L3+L4 + Neo4j, режимы Audit / Hypotheses / Anomalies, trace, источники, «Сохранить как MD»; приветствия/мета-вопросы отвечаются напрямую без запуска пайплайна.
 2. **Документы** — upload full или «только для ответов»; пайплайн с retry-кнопками по этапам.
 3. Вкладки: **Пайплайн** / **Markdown** / **Граф** / **Qdrant** (кластеры L4).
-4. **Настройки** — модели LLM / OCR / embedding; ролевые промпты.
+4. **Настройки** — модели LLM / OCR / embedding; ролевые промпты; **матрица «Доступ к данным»** (role × гриф).
 5. **Agents service** — LangGraph поверх Agent API.
 
-Следующий этап: полный contradiction engine, композитный confidence, RBAC.
+Следующий этап: полный contradiction engine, композитный confidence, production-auth.

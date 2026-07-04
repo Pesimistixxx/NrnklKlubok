@@ -2,7 +2,7 @@
 
 > L3 = семантический поиск (Qdrant). L4 = HDBSCAN-кластеры и аномалии.
 
-UI cache: `?v=95` (при странном поведении — **Ctrl+F5**).
+UI cache: `?v=137` (при странном поведении — **Ctrl+F5**).
 
 ## Полный пайплайн (`processing_mode=full`)
 
@@ -76,7 +76,7 @@ Upload → OCR → Markdown → Qdrant (только mkg_chunks из MD)
 
 При запросе в режиме **Диалог** (`POST /api/v1/chat/complete`):
 
-1. **Qdrant dual search** — `search_global()` ищет одновременно в `mkg_chunks` (L3) и `mkg_claims` (L4), объединяет hits по score.
+1. **Qdrant unified search** — `search_global()` ищет одновременно в `mkg_entities` (L1), `mkg_chunks` (L3) и `mkg_claims` (L4), объединяет hits по score.
 2. **Graph traversal** — от seed-узлов hits обход Neo4j (или локального JSON) на `GRAPH_TRAVERSAL_MAX_HOPS` hops → подграф контекста.
 3. **LLM** — ответ с блоком **Источники** (ссылки на Markdown документов).
 

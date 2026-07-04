@@ -1501,6 +1501,8 @@
     orchestrator_router: "Маршрутизатор",
     agent_loop_start: "Цикл агентов",
     agent_loop_round: "Раунд",
+    hrm_budget_sampled: "HRM бюджет",
+    hrm_halt_decision: "HRM решение",
     layer_loop_start: "Цикл агентов",
     l1_agent: "L1 агент",
     l2_agent: "L2 агент",
@@ -1831,6 +1833,20 @@
         return;
       }
 
+      if (step === "hrm_budget_sampled") {
+        flushDialogLayers();
+        maxRounds = t.sampled_budget ?? t.hard_cap ?? maxRounds;
+        setup.push({ kind: "setup", step, data: t, id: seq++ });
+        return;
+      }
+
+      if (step === "hrm_halt_decision") {
+        flushDialogLayers();
+        currentRound = t.round ?? currentRound;
+        ensureRound(currentRound).items.push({ kind: "hrm", step, ...t, data: t, id: seq++ });
+        return;
+      }
+
       if (step === "orchestrator_router") {
         flushDialogLayers();
         currentRound = t.round ?? currentRound;
@@ -1945,6 +1961,17 @@
     return `<span class="agent-pipeline-router st-${state}" title="маршрутизатор → ${esc(label)}">↪ ${esc(label)}</span>`;
   }
 
+  function renderPipelineHrmChip(item, state) {
+    const halt = item.decision === "halt";
+    const icon = halt ? "⏹" : "↻";
+    const word = halt ? "стоп" : "ещё цикл";
+    const gain = item.marginal_gain != null ? ` +${item.marginal_gain}` : "";
+    const conf = item.confidence != null ? ` · ${Math.round(item.confidence * 100)}%` : "";
+    const budget = item.sampled_budget != null ? ` · бюджет ${(item.round ?? 0) + 1}/${item.sampled_budget}` : "";
+    const title = `HRM: ${word}${gain ? ` · прирост${gain}` : ""}${conf}${budget}${item.reason ? ` · ${item.reason}` : ""}${item.source ? ` [${item.source}]` : ""}`;
+    return `<span class="agent-pipeline-hrm st-${state}${halt ? " hrm-halt" : " hrm-continue"}" title="${esc(title)}">${icon} HRM ${esc(word)}${esc(gain)}</span>`;
+  }
+
   function renderPipelineBusChip(item, state) {
     const fromLayer = pipelineBusEndpointLabel(item.from);
     const toLayer = pipelineBusEndpointLabel(item.to);
@@ -1988,6 +2015,8 @@
         html = item.agents.map((a) => renderPipelineAgentChip(a, pipelineItemState(a, opts))).join("");
       } else if (item.kind === "loop_start" || item.kind === "round_marker") {
         html = `<span class="agent-pipeline-round-start st-${pipelineItemState(item, opts)}">●</span>`;
+      } else if (item.kind === "hrm") {
+        html = renderPipelineHrmChip(item, pipelineItemState(item, opts));
       }
       if (!html) return;
       if (parts.length) {
@@ -2761,6 +2790,17 @@
     }
     if (item.step === "agent_loop_round") {
       return `→ раунд ${item.round}/${item.max_rounds || "?"}`;
+    }
+    if (item.step === "hrm_budget_sampled") {
+      return `бюджет ${item.sampled_budget ?? "?"} (мин ${item.min_rounds ?? "?"} / макс ${item.hard_cap ?? "?"}) · ${item.mode || "adaptive"}`;
+    }
+    if (item.step === "hrm_halt_decision") {
+      const word = item.decision === "halt" ? "стоп" : "ещё цикл";
+      const parts = [word];
+      if (item.marginal_gain != null) parts.push(`прирост +${item.marginal_gain}`);
+      if (item.confidence != null) parts.push(`${Math.round(item.confidence * 100)}%`);
+      if (item.source) parts.push(item.source);
+      return parts.join(" · ");
     }
     if (item.step === "orchestrator_plan" && item.layers?.length) {
       return item.layers.join("→");

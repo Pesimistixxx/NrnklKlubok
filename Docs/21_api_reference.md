@@ -9,6 +9,9 @@
 
 > **doc_id** может содержать двоеточие (`doc:c745b5ca…`). В URL path кодируйте как `%3A`.
 
+> **Заголовок `X-MKG-Role`** определяет роль запроса и фильтрацию по грифу (`allowed_classifications`).
+> Без заголовка — роль `viewer` (только `открытый`). См. [`28_access_and_security.md`](28_access_and_security.md).
+
 ---
 
 ## Health и диагностика
@@ -30,7 +33,7 @@
 | GET | `/api/v1/documents/{id}` | Метаданные документа |
 | POST | `/api/v1/documents` | Загрузка файла (см. поля ниже) |
 | POST | `/api/v1/documents/batch` | Пакетная загрузка (`files[]`, общие метаданные на весь batch) |
-| GET | `/api/v1/documents/{id}/markdown` | Markdown: `variant=clean\|marked`, `download=1` |
+| GET | `/api/v1/documents/{id}/markdown` | Markdown: `variant=clean\|marked\|raw`, `download=1` |
 | GET | `/api/v1/documents/{id}/source` | Исходный файл |
 | GET | `/api/v1/documents/{id}/preview` | Превью: source, md, graph stats, L4 stats |
 | GET | `/api/v1/documents/{id}/logs` | Логи пайплайна |
@@ -131,6 +134,40 @@ curl -s "http://localhost:8000/api/v1/graph/anomalies?document_id=<doc_id>&limit
 ```
 
 Ответ: `reply`, `sources[]`, `graph`, `artifacts[]`, `trace[]`, `timing_ms`.
+
+---
+
+## Unified search (L1 + L3 + L4)
+
+Единый семантический поиск по всем коллекциям Qdrant (`search_global`), с фильтрацией по грифу.
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/v1/search` | `?q=…&limit=20&layers=L1,L3,L4` |
+| POST | `/api/v1/search` | Тело: `{ "query", "limit", "mode", "layers", "document_ids" }` |
+| GET | `/api/v1/search/entities` | Только `mkg_entities` (L1) |
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/search \
+  -H "Content-Type: application/json" \
+  -H "X-MKG-Role: researcher" \
+  -d '{"query":"никель выщелачивание","limit":10}'
+```
+
+В каждом hit: `layer`, `collection`, `entity_type`, `score`, `retrieval_factors`.
+
+---
+
+## Доступ к данным (RBAC на чтении)
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/v1/settings/data-access` | Матрица role × classification + `allowed_classifications` роли |
+| PUT | `/api/v1/settings/data-access` | Сохранить матрицу (**только `admin`** через `X-MKG-Role`) |
+
+Уровни грифа: `открытый`, `внутренний`, `конфиденциальный`, `строго`.
+Хранилище: Postgres `runtime_config.data_access_matrix`. Детали и enforcement:
+[`28_access_and_security.md`](28_access_and_security.md).
 
 ---
 

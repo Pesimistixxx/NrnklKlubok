@@ -40,10 +40,10 @@
 | Extraction (NER, 6 слоёв) | ✅ `mkg_extraction` |
 | Graph Fusion / Neo4j load | ✅ `loader.py` MERGE |
 | Validation (противоречия, confidence) | ⬜ `analytics` — скелет |
-| Retrieval (гибридный поиск) | ✅ Agent API + Qdrant semantic; ⬜ полный RAG-орchestrator |
-| Synthesis (отчёты) | ⬜ |
-| Security / Audit | ⬜ RBAC UI |
-| Notification | ⬜ |
+| Retrieval (гибридный поиск) | ✅ unified search L1+L3+L4 (`search_global`) + Neo4j traversal |
+| Synthesis (отчёты) | 🟡 structured chat + LangGraph review/hypothesis |
+| Security / Audit | 🟡 RBAC на чтении (role × гриф); ⬜ production auth + централизованный audit log |
+| Notification | 🟡 watchlist toast MVP |
 
 ---
 
@@ -76,9 +76,9 @@
 | Загрузка + библиотека | ✅ Главная + sidebar |
 | Превью MD + «отправить» | ✅ «Построить граф» |
 | GUI графа | ✅ vis-network, фильтры слоёв, межсл. связи |
-| Запрос на естественном языке | ✅ Чат + Qdrant search + LangGraph agents |
+| Запрос на естественном языке | ✅ Чат + unified search + LangGraph agents |
 | Визуальный конструктор | ⬜ |
-| RBAC | ⬜ |
+| RBAC | 🟡 матрица role × гриф на чтении (UI + API); ⬜ production auth |
 
 ---
 

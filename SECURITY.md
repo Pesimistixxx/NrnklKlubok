@@ -39,7 +39,7 @@ MKG — MVP/хакатонный проект; критические испра
 
 ## RBAC и доступ в MKG (MVP)
 
-В hackathon MVP **нет серверной аутентификации**: роль выбирается в UI, API на localhost открыт. Ролевая модель, L5 `SecurityRole`, аудит и roadmap production — в [`Docs/28_access_and_security.md`](Docs/28_access_and_security.md) (в приложении: **Справка → Доступ и безопасность**).
+В hackathon MVP **нет криптографической аутентификации**: роль — самодекларация клиента (`X-MKG-Role`), API на localhost открыт. При этом **фильтрация по грифу (`classification`) на чтении** уже применяется (документы, поиск, граф, RAG) на основе матрицы role × classification. Ролевая модель, L5 `SecurityRole`, аудит и roadmap production-auth — в [`Docs/28_access_and_security.md`](Docs/28_access_and_security.md) (в приложении: **Справка → Доступ и безопасность**).
 
 ## Благодарности
 

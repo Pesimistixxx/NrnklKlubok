@@ -20,6 +20,12 @@ class _AgentEnv(BaseSettings):
     max_context_nodes: int = Field(default=10, alias="AGENTS_MAX_CONTEXT_NODES")
     max_agent_loops: int = Field(default=1, alias="AGENTS_MAX_AGENT_LOOPS")
     agent_loop_max_rounds: int = Field(default=4, alias="AGENT_LOOP_MAX_ROUNDS")
+    agent_loop_min_rounds: int = Field(default=2, alias="AGENT_LOOP_MIN_ROUNDS")
+    agent_loop_hard_cap: int = Field(default=6, alias="AGENT_LOOP_HARD_CAP")
+    agent_halt_mode: str = Field(default="adaptive", alias="AGENT_HALT_MODE")
+    agent_halt_use_llm: bool = Field(default=True, alias="AGENT_HALT_USE_LLM")
+    agent_halt_min_gain: int = Field(default=2, alias="AGENT_HALT_MIN_GAIN")
+    agent_halt_random: bool = Field(default=True, alias="AGENT_HALT_RANDOM")
     max_hypothesis_refinements: int = Field(default=1, alias="AGENTS_MAX_HYPOTHESIS_REFINEMENTS")
     planner_timeout: float = Field(default=1.2, alias="AGENTS_LLM_PLANNER_TIMEOUT")
     analyzer_timeout: float = Field(default=1.8, alias="AGENTS_LLM_ANALYZER_TIMEOUT")
@@ -46,6 +52,20 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on", "y", "t"}
+
+
+def _str_env(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip()
+
+
 @dataclass(frozen=True)
 class AgentSettings:
     gateway_url: str
@@ -57,6 +77,12 @@ class AgentSettings:
     max_context_nodes: int
     max_agent_loops: int
     agent_loop_max_rounds: int
+    agent_loop_min_rounds: int
+    agent_loop_hard_cap: int
+    agent_halt_mode: str
+    agent_halt_use_llm: bool
+    agent_halt_min_gain: int
+    agent_halt_random: bool
     max_hypothesis_refinements: int
     planner_timeout: float
     analyzer_timeout: float
@@ -82,6 +108,12 @@ def get_agent_settings() -> AgentSettings:
         max_context_nodes=_int_env("AGENTS_MAX_CONTEXT_NODES", env.max_context_nodes),
         max_agent_loops=_int_env("AGENTS_MAX_AGENT_LOOPS", env.max_agent_loops),
         agent_loop_max_rounds=_int_env("AGENT_LOOP_MAX_ROUNDS", env.agent_loop_max_rounds),
+        agent_loop_min_rounds=_int_env("AGENT_LOOP_MIN_ROUNDS", env.agent_loop_min_rounds),
+        agent_loop_hard_cap=_int_env("AGENT_LOOP_HARD_CAP", env.agent_loop_hard_cap),
+        agent_halt_mode=_str_env("AGENT_HALT_MODE", env.agent_halt_mode),
+        agent_halt_use_llm=_bool_env("AGENT_HALT_USE_LLM", env.agent_halt_use_llm),
+        agent_halt_min_gain=_int_env("AGENT_HALT_MIN_GAIN", env.agent_halt_min_gain),
+        agent_halt_random=_bool_env("AGENT_HALT_RANDOM", env.agent_halt_random),
         max_hypothesis_refinements=_int_env("AGENTS_MAX_HYPOTHESIS_REFINEMENTS", env.max_hypothesis_refinements),
         planner_timeout=_float_env("AGENTS_LLM_PLANNER_TIMEOUT", env.planner_timeout),
         analyzer_timeout=_float_env("AGENTS_LLM_ANALYZER_TIMEOUT", env.analyzer_timeout),

@@ -1,10 +1,11 @@
 # Статус проекта MKG (актуально)
 
-> UI cache: `?v=95`. Обновляйте этот файл при смене этапа.
+> UI cache: `?v=137` (после деплоя — **Ctrl+F5**). Обновляйте этот файл при смене этапа.
 
-## Текущий этап: **MVP-3 (post-sprint)**
+## Текущий этап: **финальный MVP хакатона**
 
-**Полный пайплайн + гибкий оркестратор L1–L6 + structured answers + corpus Qdrant + graph all-docs + hackathon MVPs.**
+**Полный пайплайн + гибкий оркестратор L1–L6 + unified search (L1+L3+L4) + structured answers
++ RBAC на чтении (role × гриф) + дашборд/сравнение + hackathon MVPs.**
 
 | Область | Статус | Комментарий |
 |---------|--------|-------------|
@@ -13,7 +14,7 @@
 | UI: Пайплайн \| Markdown \| Graph | ✅ | Retry ↺; **reprocess-full** для answers_only |
 | Граф «Все документы» | ✅ | `graphScope=all`, расширенные фильтры |
 | Neo4j MERGE | ✅ | `neo4j_sync`, resync API |
-| Qdrant L3+L4 corpus | ✅ | N/M docs; search без per-doc filter |
+| Qdrant L1+L3+L4 corpus | ✅ | unified `search_global`; per-doc filter опционально |
 | L4 HDBSCAN + cluster UI | ✅ | Карта, клик по кластеру, anomalies API |
 | Chat: role + fast/full toggle | ✅ | **Без AI-mode pills** |
 | Chat: async orchestrator + live graph | ✅ | `/run/async` + poll ~420 ms |
@@ -28,10 +29,12 @@
 | 8 ролей + anomaly_hunter | ✅ | `roles.py` |
 | 6 AI modes (API only) | ✅ | agents service |
 | POST /api/v1/query | ✅ | programmatic modes |
-| Server auth / RBAC UI | ⬜ | localhost MVP, role = client choice |
+| RBAC на чтении (role × classification) | ✅ | матрица «Доступ к данным», filter-on-read, `X-MKG-Role` |
+| Direct-reply для приветствий/мета | ✅ | `query_classify` → без запуска пайплайна |
+| Server auth (JWT/OAuth, TLS) | ⬜ | localhost MVP, роль = самодекларация клиента |
 | Contradiction engine (full) | 🟡 | partial audit_mode + dashboard count |
 | Entity resolution + pint | ⬜ | roadmap |
-| Composite confidence | ⬜ | postgres config only |
+| Composite confidence | 🟡 | postgres config + retrieval factors |
 
 ## Этапы roadmap
 
@@ -42,9 +45,10 @@
 | 2 | Extraction + Neo4j + Qdrant | ✅ ~95% |
 | 2b | L4 HDBSCAN + chat RAG | ✅ ~90% |
 | 2c | Orchestrator bus + async UI | ✅ ~85% |
-| 3 | Достоверность, contradictions | 🟡 ~35% |
+| 3 | Достоверность, contradictions | 🟡 ~40% |
 | 4 | Multi-agent synthesis (full) | 🟡 ~75% |
-| 5 | RBAC, production auth | ⬜ |
+| 5 | RBAC на чтении (гриф) | ✅ ~60% |
+| 6 | Production auth (JWT/TLS, audit log) | ⬜ |
 
 ## 8 агентов ТЗ vs реализация
 
@@ -56,7 +60,7 @@
 | `retrieval` | Qdrant + anomalies | ✅ corpus search, L4 cluster map |
 | `validation` | L5 | 🟡 audit_mode partial |
 | `synthesis` | Отчёты | 🟡 structured chat + hypothesis/review |
-| `security` | RBAC | 🟡 role prompts; no server auth |
+| `security` | RBAC | ✅ гриф на чтении (matrix); ⬜ криптоаутентификация |
 | `notification` | Логи | ✅ watchlist toast MVP |
 
 ## UI навигация
@@ -65,8 +69,8 @@
 |---------|---------|
 | Чат | Роль, fast/full, threads, live graph, trace, sources, Пояснить/Обновить, MD/JSON-LD/PDF |
 | Документы | Pipeline, MD, graph, all-docs, advanced filters, compare |
-| Qdrant | Corpus stats N/M, index all, search chips, cluster map |
-| Настройки | Models, dashboard, watchlist, clear DB |
+| Qdrant | Corpus stats N/M, index all, unified search chips, cluster map |
+| Настройки | Models, dashboard, watchlist, **матрица «Доступ к данным»**, clear DB |
 | Документация | In-app md sections |
 
 ## Ключевые API

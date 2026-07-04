@@ -764,10 +764,14 @@ async def cancel_extraction(doc_id: str) -> dict[str, str]:
 
 
 @app.get(f"{API}/documents/{{doc_id}}/preview")
-async def get_preview(doc_id: str) -> dict:
+async def get_preview(request: Request, doc_id: str) -> dict:
     rec = get_repo().get(doc_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     rec = _merge_repo(rec)
     raw = get_repo().read_source(doc_id) or b""
     file_name = rec.get("file_name", "")
@@ -898,9 +902,14 @@ async def admin_reindex_corpus(
 
 
 @app.get(f"{API}/documents/{{doc_id}}/logs", response_model=PipelineLogOut)
-async def get_document_logs(doc_id: str, limit: int = 100) -> PipelineLogOut:
-    if not get_repo().get(doc_id):
+async def get_document_logs(request: Request, doc_id: str, limit: int = 100) -> PipelineLogOut:
+    rec = get_repo().get(doc_id)
+    if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     return PipelineLogOut(document_id=doc_id, items=read_logs(doc_id, limit=limit))
 
 
@@ -1220,10 +1229,14 @@ async def get_merged_graph(request: Request) -> GraphOut:
 
 
 @app.get(f"{API}/documents/{{doc_id}}/pipeline/layers", response_model=LayerPipelineOut)
-async def get_layer_pipeline(doc_id: str) -> LayerPipelineOut:
+async def get_layer_pipeline(request: Request, doc_id: str) -> LayerPipelineOut:
     rec = get_repo().get(doc_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     rec = _merge_repo(rec)
     graph = get_repo().read_graph(doc_id)
     md = get_repo().read_markdown(doc_id)
@@ -1237,10 +1250,14 @@ async def get_layer_pipeline(doc_id: str) -> LayerPipelineOut:
 
 
 @app.get(f"{API}/pipeline/{{doc_id}}")
-async def get_pipeline_trace(doc_id: str) -> dict:
+async def get_pipeline_trace(request: Request, doc_id: str) -> dict:
     rec = get_repo().get(doc_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     rec = _merge_repo(rec)
     nodes, rels, neo4j_synced = _graph_stats(doc_id, rec)
     return {

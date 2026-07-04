@@ -9,9 +9,9 @@
 
 ```
                           ┌────────────────────────────────────────┐
-                          │              Web UI (?v=43)             │
+                          │                 Web UI                  │
                           │  Чат · Документы (Pipeline/MD/Graph)   │
-                          │  Qdrant · Настройки                    │
+                          │  Qdrant · Настройки · Документация      │
                           └──────────────────┬─────────────────────┘
                                              │ REST /api/v1
                           ┌──────────────────▼─────────────────────┐
@@ -79,16 +79,27 @@ Upload (processing_mode=answers_only)
   → статус loaded (без Neo4j, без L4)
 ```
 
-## L3 vs L4 в Qdrant
+## Коллекции Qdrant (L1 / L3 / L4)
 
-| | L3 | L4 |
-|---|----|----|
-| Коллекция | `mkg_chunks` | `mkg_claims` |
-| Узлы | TextParagraph, MD chunks | Claim, Measurement, Effect… |
-| Назначение | Semantic search цитат | Факты + HDBSCAN anomalies |
-| Кластеризация | Нет | HDBSCAN (`HDBSCAN_MIN_CLUSTER_SIZE`) |
+| | L1 | L3 | L4 |
+|---|----|----|----|
+| Коллекция | `mkg_entities` | `mkg_chunks` | `mkg_claims` |
+| Узлы | Material, Process, Equipment… | TextParagraph, MD chunks | Claim, Measurement, Effect… |
+| Назначение | Поиск сущностей | Semantic search цитат | Факты + HDBSCAN anomalies |
+| Кластеризация | Нет | Нет | HDBSCAN (`HDBSCAN_MIN_CLUSTER_SIZE`) |
 
-Эмбеддинги **не** в Neo4j. См. [`22_pipeline_layers.md`](22_pipeline_layers.md), [`21_api_reference.md`](21_api_reference.md).
+**Unified search** (`mkg_core.embeddings.search_global`) параллельно опрашивает все три коллекции
+и объединяет hits по score — единый путь и для UI-поиска, и для чата (`search_chat_retrieval`).
+Эмбеддинги хранятся **только** в Qdrant, не в Neo4j.
+См. [`22_pipeline_layers.md`](22_pipeline_layers.md), [`21_api_reference.md`](21_api_reference.md).
+
+## Управление доступом (RBAC на чтении)
+
+`packages/core/src/mkg_core/data_access.py` + `services/gateway/app/data_access_api.py`:
+матрица **role × classification** (гриф) хранится в Postgres `runtime_config.data_access_matrix`.
+Заголовок `X-MKG-Role` (или роль сессии) определяет `allowed_classifications`; фильтрация
+применяется на чтении в `GET /documents`, `GET /graph/*`, `POST /search`, RAG чата.
+Без заголовка — роль `viewer` (минимальный доступ). Детали: [`28_access_and_security.md`](28_access_and_security.md).
 
 ## Хранилища
 
@@ -102,11 +113,14 @@ Upload (processing_mode=answers_only)
 
 ## Пакеты (`packages/`)
 
-- `core` — config, llm, embeddings, l4_clustering, graph_traversal, layer_pipeline
+- `core` — config, llm, embeddings, l4_clustering, graph_traversal, layer_pipeline, data_access, ontology, comparison, search_query
 - `ingestion` — OCR, parsers, pipeline
 - `extraction` — extractor, loader
 - `graph` — schema.cypher, init_schema
 - `prompts` — реестр промптов по этапам
+
+> **Замечание по инфраструктуре:** сервис `analytics` — фоновый скелет (confidence/clustering),
+> не находится в hot-path запросов; вся продуктивная логика кластеризации выполняется в `worker`/`core`.
 
 ## Конфигурация (ключевые env)
 

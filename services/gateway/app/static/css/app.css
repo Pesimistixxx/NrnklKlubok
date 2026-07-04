@@ -2392,6 +2392,27 @@ input.input-error { border-color: #ef4444 !important; box-shadow: 0 0 0 2px #fec
   border: 1px solid rgba(2, 136, 209, 0.25);
   color: var(--brand-dark);
 }
+.agent-pipeline-hrm {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  letter-spacing: 0.2px;
+}
+.agent-pipeline-hrm.hrm-continue {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #047857;
+}
+.agent-pipeline-hrm.hrm-halt {
+  background: rgba(190, 24, 93, 0.12);
+  border-color: rgba(190, 24, 93, 0.4);
+  color: #9d174d;
+}
 .agent-pipeline-bus {
   display: inline-flex;
   align-items: center;

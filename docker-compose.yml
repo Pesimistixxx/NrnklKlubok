@@ -6,15 +6,20 @@ services:
       context: .
       dockerfile: services/gateway/Dockerfile
     env_file: .env
+    restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
       - ./data/storage:/app/data/storage
     depends_on:
-      - neo4j
-      - postgres
-      - redis
-      - qdrant
+      neo4j:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     environment:
       AGENTS_URL: http://agents:8010
       AGENTS_TIMEOUT_SECONDS: ${AGENTS_TIMEOUT_SECONDS:-30}
@@ -25,13 +30,18 @@ services:
       context: .
       dockerfile: services/worker/Dockerfile
     env_file: .env
+    restart: unless-stopped
     volumes:
       - ./data/storage:/app/data/storage
     depends_on:
-      - neo4j
-      - postgres
-      - redis
-      - qdrant
+      neo4j:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     environment:
       AUTO_EXTRACT_AFTER_INGEST: "true"
 
@@ -40,17 +50,23 @@ services:
       context: .
       dockerfile: services/analytics/Dockerfile
     env_file: .env
+    restart: unless-stopped
     depends_on:
-      - neo4j
-      - postgres
-      - redis
-      - qdrant
+      neo4j:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
 
   agents:
     build:
       context: .
       dockerfile: services/agents/Dockerfile
     env_file: .env
+    restart: unless-stopped
     environment:
       GATEWAY_URL: http://gateway:8000
       AGENTS_TIMEOUT_SECONDS: ${AGENTS_TIMEOUT_SECONDS:-45}
@@ -77,6 +93,11 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mkg}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -90,6 +111,11 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   neo4j:
     image: neo4j:5-community
@@ -100,6 +126,11 @@ services:
       - "7687:7687"
     volumes:
       - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata:

@@ -6462,19 +6462,6 @@ const DOC_SECTIONS_FALLBACK = [
   { id: "additional-wishes", title: "Дополнительные пожелания (MVP)" },
 ];
 
-const DOC_STATIC_FALLBACK = {
-  pipeline: "/static/docs/21_pipeline_and_layers.md",
-  "layer-agents": "/static/docs/24_layer_agents.md",
-  "chat-agents": "/static/docs/22_chat_agents.md",
-  "analytics-synthesis": "/static/docs/25_analytics_synthesis.md",
-  "agent-hierarchy": "/static/docs/agent_hierarchy.md",
-  orchestrator: "/static/docs/orchestrator.md",
-  "key-requirements": "/static/docs/25_key_requirements.md",
-  "functional-filters": "/static/docs/25_functional_filters.md",
-  "roles-vs-agents": "/static/docs/roles-vs-agents.md",
-  "additional-wishes": "/static/docs/27_additional_wishes.md",
-};
-
 function docLoadingSkeletonHtml() {
   return `<div class="doc-loading-skeleton" aria-busy="true" aria-label="Загрузка">
     <div class="doc-skeleton-bar wide"></div>
@@ -6519,18 +6506,8 @@ async function fetchDocPayload(slug) {
   try {
     const r = await fetch(`${API}/docs/${encodeURIComponent(slug)}`, { signal: ctrl.signal });
     if (r.ok) return await r.json();
-  } catch {
-    /* try static fallback below */
   } finally {
     clearTimeout(timer);
-  }
-  const staticPath = DOC_STATIC_FALLBACK[slug];
-  if (staticPath) {
-    const r2 = await fetch(staticPath);
-    if (r2.ok) {
-      const meta = DOC_SECTIONS_FALLBACK.find((s) => s.id === slug);
-      return { id: slug, title: meta?.title || slug, content: await r2.text() };
-    }
   }
   throw new Error("Документ недоступен");
 }

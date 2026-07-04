@@ -83,3 +83,12 @@ class OrchestratorState(TypedDict, total=False):
     layers_invoked: list[str]
     orchestrator_next: str | None
     conversational_intent: str | None
+
+    # HRM-inspired adaptive halting controller
+    min_rounds: int
+    hard_max_rounds: int
+    sampled_round_budget: int
+    round_gain_history: list[int]
+    halt_history: list[dict[str, Any]]
+    halt_requested: bool
+    last_round_graph_size: int
