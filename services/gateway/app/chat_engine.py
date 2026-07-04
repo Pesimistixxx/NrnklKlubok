@@ -15,6 +15,7 @@ from mkg_core.config import get_settings
 from mkg_core.embeddings import search_chat_retrieval
 from mkg_core.query_facets import reliability_from_props, source_date_from_props
 from mkg_core.graph_traversal import discover_new_connections, has_graph_data, walk_for_chat
+from mkg_core.graph_meta import enrich_graph_for_persistence
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
 from mkg_core.llm import YandexLLMClient
 from mkg_core.ontology import LABEL_LAYER
@@ -939,6 +940,7 @@ async def run_chat_query(
                         "elapsed_ms": int((time.perf_counter() - t0) * 1000),
                     }
                 )
+            walked = enrich_graph_for_persistence(walked, trace)
             graph = _expanded_to_context_graph(walked)
             trace.append(
                 {

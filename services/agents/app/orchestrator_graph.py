@@ -8,6 +8,7 @@ from langgraph.graph import END, StateGraph
 
 from mkg_core.answer_structure import SYNTH_STRUCTURE_RULES, extract_synthesis_entities
 from mkg_core.query_facets import QueryFacets, enrich_search_with_facets, parse_facets_from_plan
+from mkg_core.graph_meta import enrich_graph_for_persistence
 from mkg_core.text_sanitize import sanitize_user_facing_text
 
 from app.agent_bus import (
@@ -607,16 +608,18 @@ async def orchestrator_synthesize(
     elif acc.get("nodes"):
         summary = f"Найдено {len(acc.get('nodes') or [])} узлов и {len(acc.get('relationships') or [])} связей по слоям MKG."
 
-    graph_payload = {
-        "nodes": acc.get("nodes") or [],
-        "relationships": acc.get("relationships") or [],
-        "seed_count": len(acc.get("nodes") or []),
-        "document_ids": list(acc.get("document_ids") or new_state.get("candidate_doc_ids") or []),
-        "graph_walk_steps": [],
-        "walk_path": [],
-        "new_connections": acc.get("new_connections") or [],
-    }
     trace = normalize_list(new_state.get("trace"))
+    graph_payload = enrich_graph_for_persistence(
+        {
+            "nodes": acc.get("nodes") or [],
+            "relationships": acc.get("relationships") or [],
+            "seed_count": len(acc.get("nodes") or []),
+            "document_ids": list(acc.get("document_ids") or new_state.get("candidate_doc_ids") or []),
+            "new_connections": acc.get("new_connections") or [],
+        },
+        trace,
+        layer_results=list(new_state.get("layer_results") or []),
+    )
     new_state["final_response"] = {
         "mode": "orchestrator_mode",
         "query": new_state.get("query", ""),

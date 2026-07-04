@@ -530,7 +530,13 @@ class MessageCreate(BaseModel):
     author_role: str
     body: str = Field(..., min_length=1, max_length=20000)
     msg_type: str = Field(default="user", pattern="^(user|agent|system)$")
-    meta: dict[str, Any] = Field(default_factory=dict)
+    meta: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "JSON meta; for agent messages may include trace, layer_results and graph "
+            "(nodes, relationships, graph_walk_steps, walk_path) — trimmed server-side"
+        ),
+    )
 
 
 class MessageUpdate(BaseModel):

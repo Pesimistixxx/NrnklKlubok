@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from mkg_core.graph_meta import compact_message_meta
 from mkg_core.meta_db import init_schema, pool
 
 _COLLAB_INITIALIZED = False
@@ -251,7 +252,7 @@ async def add_message(
 ) -> dict[str, Any]:
     await init_collab_schema()
     mid = f"msg:{uuid.uuid4().hex[:14]}"
-    meta_json = json.dumps(meta or {}, ensure_ascii=False)
+    meta_json = json.dumps(compact_message_meta(meta), ensure_ascii=False)
     p = await pool()
     async with p.acquire() as conn:
         exists = await conn.fetchval("SELECT 1 FROM chat_threads WHERE id = $1", thread_id)

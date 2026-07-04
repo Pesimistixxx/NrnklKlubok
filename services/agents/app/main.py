@@ -23,6 +23,7 @@ from app.schemas import (
     ModesOut,
 )
 from app.state import MKGAgentState
+from mkg_core.graph_meta import enrich_graph_for_persistence
 from app.utils import elapsed_ms
 from app.graph_snapshot import graph_snapshot_from_acc
 from app.run_store import create_run, get_run, update_run
@@ -260,6 +261,11 @@ async def _execute_orchestrator_async(run_id: str, body: AgentRunRequest) -> Non
         final_response.setdefault("query", body.query)
         final_response.setdefault("trace", list(final_state.get("trace") or []))
         final_response.setdefault("layer_results", list(final_state.get("layer_results") or []))
+        final_response["graph"] = enrich_graph_for_persistence(
+            final_response.get("graph") or {},
+            final_response.get("trace") or list(final_state.get("trace") or []),
+            layer_results=final_response.get("layer_results"),
+        )
         _publish_run_progress(run_id, final_state)
         update_run(run_id, status="complete", result=final_response)
     except asyncio.TimeoutError:
