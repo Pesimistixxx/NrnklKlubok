@@ -2437,6 +2437,134 @@
     return snap;
   }
 
+  const GRAPH_META_MAX_NODES = 64;
+  const GRAPH_META_MAX_RELS = 128;
+  const GRAPH_META_MAX_WALK = 48;
+  const GRAPH_META_MAX_PROP = 400;
+
+  function trimGraphProps(props, maxLen = GRAPH_META_MAX_PROP) {
+    if (!props || typeof props !== "object") return {};
+    const keys = ["raw_text_ru", "quote", "text", "name_ru", "title_ru", "description", "snippet", "summary", "content"];
+    const out = {};
+    Object.entries(props).forEach(([key, val]) => {
+      if (typeof val === "string" && keys.includes(key)) {
+        out[key] = val.length > maxLen ? `${val.slice(0, maxLen - 1)}…` : val;
+      } else if (typeof val === "string" || typeof val === "number" || typeof val === "boolean" || val == null) {
+        out[key] = val;
+      }
+    });
+    return out;
+  }
+
+  function trimGraphForMeta(graph) {
+    if (!graph) return null;
+    const nodes = (graph.nodes || []).slice(0, GRAPH_META_MAX_NODES).map((node) => ({
+      id: String(node.id || ""),
+      label: String(node.label || "?").slice(0, 160),
+      props: trimGraphProps(node.props || {}),
+    })).filter((n) => n.id);
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const relationships = (graph.relationships || []).slice(0, GRAPH_META_MAX_RELS).flatMap((rel) => {
+      const from = String(rel.from || rel.from_ || "");
+      const to = String(rel.to || "");
+      if (!from || !to || !nodeIds.has(from) || !nodeIds.has(to)) return [];
+      return [{
+        type: String(rel.type || "").slice(0, 80),
+        from,
+        to,
+        props: trimGraphProps(rel.props || {}, 240),
+      }];
+    });
+    const walkSteps = (graph.graph_walk_steps || []).slice(0, GRAPH_META_MAX_WALK).map((step) => ({
+      ...step,
+      snippet: step.snippet ? String(step.snippet).slice(0, GRAPH_META_MAX_PROP) : step.snippet,
+      agent_question: step.agent_question ? String(step.agent_question).slice(0, GRAPH_META_MAX_PROP) : step.agent_question,
+    }));
+    const walkPath = (graph.walk_path || walkSteps).slice(0, GRAPH_META_MAX_WALK).map((step) => ({
+      node_id: step.node_id,
+      from_id: step.from_id,
+      to_id: step.to_id,
+      rel_type: step.rel_type,
+      label: step.label,
+    })).filter((s) => s.node_id);
+    if (!nodes.length && !relationships.length && !walkSteps.length) return null;
+    return {
+      nodes,
+      relationships,
+      graph_walk_steps: walkSteps,
+      walk_path: walkPath,
+      seed_count: graph.seed_count ?? nodes.length,
+      document_ids: (graph.document_ids || []).slice(0, 24),
+    };
+  }
+
+  function prepareGraphForMeta(graph, trace, layerResults) {
+    const merged = extractGraphFromTrace(trace, graph, layerResults) || graph;
+    if (!merged) return null;
+    let safe = normalizeChatGraph(merged);
+    if (!safe.graph_walk_steps?.length) {
+      const steps = extractWalkSteps(trace, safe);
+      if (steps.length) safe = { ...safe, graph_walk_steps: steps };
+    }
+    if (!safe.walk_path?.length && safe.graph_walk_steps?.length) {
+      safe = {
+        ...safe,
+        walk_path: safe.graph_walk_steps.map((s) => ({
+          node_id: s.node_id,
+          from_id: s.from_id,
+          to_id: s.to_id,
+          rel_type: s.rel_type,
+          label: s.label,
+        })).filter((s) => s.node_id),
+      };
+    }
+    return trimGraphForMeta(safe);
+  }
+
+  function findLastGraphMessage(items) {
+    const agents = (items || []).filter((m) => m.msg_type === "agent");
+    for (let i = agents.length - 1; i >= 0; i -= 1) {
+      if (hasContextGraph(agents[i].meta)) return agents[i];
+    }
+    return null;
+  }
+
+  function isGraphPanelEmpty() {
+    const canvas = $("chatGraphCanvas");
+    const empty = $("chatGraphEmpty");
+    if (!canvas) return true;
+    if (empty && !empty.classList.contains("hidden")) return true;
+    return !(lastFullscreenGraph?.nodes?.length || liveAccumulatedGraph?.nodes?.length);
+  }
+
+  function restoreGraphPanelFromMessages(items, { force = false } = {}) {
+    if (chatBusy && !force) return;
+    const msg = findLastGraphMessage(items);
+    if (!msg) {
+      if (!chatBusy) {
+        updateChatGraphStats(null);
+        window.MKGMiniGraph?.destroy($("chatGraphCanvas"));
+        setLastReplayableWalk(null);
+      }
+      return;
+    }
+    const payload = replayPayloadFromMessage(msg);
+    if (!payload?.graph?.nodes?.length) return;
+    lastFullscreenGraph = payload.graph;
+    lastFullscreenTrace = payload.trace || [];
+    setLastReplayableWalk(payload);
+    renderChatContextGraph(payload.graph, {
+      animate: false,
+      walkPath: payload.graph.walk_path || [],
+      skipHighlight: false,
+    });
+  }
+
+  function restoreGraphPanelIfNeeded(items) {
+    if (chatBusy || !isGraphPanelEmpty()) return;
+    restoreGraphPanelFromMessages(items);
+  }
+
   function applyLiveGraphUpdate(graph, trace, layerResults) {
     const merged = extractGraphFromTrace(trace, graph, layerResults);
     if (!merged?.nodes?.length) return;
@@ -2965,6 +3093,7 @@
       if (!threadChanged && !fingerprintChanged && !options.forceRender) {
         const t = threads.find((x) => x.id === threadId);
         if ($("chatActiveTitle") && t) $("chatActiveTitle").textContent = t.title;
+        restoreGraphPanelIfNeeded(items);
         return;
       }
       if (chatBusy && !options.forceRender) {
@@ -2977,6 +3106,7 @@
       currentThreadMessages = items;
       renderMessages(items, options);
       syncLastReplayableFromMessages(items);
+      restoreGraphPanelFromMessages(items);
       items.forEach((m) => {
         if (m.meta?.kind === "upload" && m.meta?.document_id) {
           const st = uploadPreviewCache.get(m.meta.document_id)?.status;
@@ -3198,13 +3328,20 @@
       const bodyHtml = isAgent
         ? `<div class="chat-msg-body md-render-view">${renderAgentAnswerHtml(m.body, m.id)}</div>`
         : `<div class="chat-msg-body">${esc(m.body)}</div>`;
-      const showMsgActions = isAgent && !isChatBusy();
-      const actionsHtml = showMsgActions
-        ? `<div class="chat-msg-actions">
+      const showMsgActions = (isAgent || isUser) && !isUpload && !isChatBusy();
+      let actionsHtml = "";
+      if (showMsgActions && isAgent) {
+        actionsHtml = `<div class="chat-msg-actions">
             <button type="button" class="chat-msg-action" data-action="explain" data-msg-id="${esc(m.id)}">Пояснить</button>
             <button type="button" class="chat-msg-action" data-action="regenerate" data-msg-id="${esc(m.id)}">Обновить</button>
-          </div>`
-        : "";
+            <button type="button" class="chat-msg-action" data-action="delete" data-msg-id="${esc(m.id)}">Удалить</button>
+          </div>`;
+      } else if (showMsgActions && isUser) {
+        actionsHtml = `<div class="chat-msg-actions">
+            <button type="button" class="chat-msg-action" data-action="edit" data-msg-id="${esc(m.id)}">Изменить</button>
+            <button type="button" class="chat-msg-action" data-action="delete" data-msg-id="${esc(m.id)}" data-cascade="following">Удалить</button>
+          </div>`;
+      }
       return `
         <article class="chat-msg ${cls}" data-msg-id="${esc(m.id)}">
           <div class="chat-msg-avatar${avatarCls}" aria-hidden="true">${avatarHtml}</div>
@@ -3259,14 +3396,19 @@
       });
     });
     el.querySelectorAll(".chat-msg-action").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const msgId = btn.dataset.msgId;
         const action = btn.dataset.action;
-        if (!msgId || !action) return;
+        if (!msgId || !action || chatBusy) return;
         if (action === "explain") {
           sendChatMessage({ explain: true, targetAgentMsgId: msgId });
         } else if (action === "regenerate") {
           sendChatMessage({ regenerate: true, targetAgentMsgId: msgId });
+        } else if (action === "edit") {
+          beginEditUserMessage(msgId, items);
+        } else if (action === "delete") {
+          const cascade = btn.dataset.cascade === "following";
+          await apiDeleteMessage(msgId, { cascade });
         }
       });
     });
@@ -3316,7 +3458,7 @@
   }
 
   async function postMessage(text, msgType = "user", authorName = null, authorId = null, meta = null) {
-    await fetch(`${API}/chat/threads/${encodeURIComponent(activeThreadId)}/messages`, {
+    const r = await fetch(`${API}/chat/threads/${encodeURIComponent(activeThreadId)}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3328,6 +3470,11 @@
         meta: meta || {},
       }),
     });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      console.warn("postMessage failed:", parseApiError(data, "Не удалось сохранить сообщение"));
+    }
+    return r.ok;
   }
 
   function parseApiError(data, fallback = "AI недоступен") {
@@ -3639,12 +3786,13 @@
           }
         }
 
+        const graphMeta = isFast ? null : prepareGraphForMeta(result.graph, result.trace, result.layer_results);
         await postMessage(result.text, "agent", "MKG AI", null, {
           trace: result.trace,
           mode: detectPipelineMode(result.trace, result.speed_mode),
           speed_mode: result.speed_mode || speedMode,
           timing_ms: result.timing_ms,
-          graph: isFast ? null : (result.graph || null),
+          graph: graphMeta,
           layer_results: isFast ? null : (result.layer_results || null),
           artifacts: isFast ? [] : (result.artifacts || []),
           sources: result.sources || [],

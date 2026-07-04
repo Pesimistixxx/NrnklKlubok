@@ -4484,6 +4484,7 @@ function resetGraphAdvancedFilters({ rerender = true } = {}) {
   try { sessionStorage.removeItem(GRAPH_ADV_FILTERS_SESSION_KEY); } catch { /* ignore */ }
   syncGraphFilterFormFromState(graphAdvancedFilters);
   if (els.graphFilterStatus) els.graphFilterStatus.textContent = "";
+  updateGraphAdvFiltersNodeCount();
   if (rerender) {
     clearGraphNodeSelection();
     resetGraphNetwork();
@@ -5467,6 +5468,7 @@ function renderGraphViews(opts = {}) {
     renderGraphMap(nodes, rels);
   }
   renderL3Stats();
+  updateGraphAdvFiltersNodeCount();
 }
 
 function getGraphMinHeight() {
@@ -6210,7 +6212,7 @@ function bindEvents() {
   els.graphCompareRefreshBtn?.addEventListener("click", renderCompareTable);
   els.dashboardRefreshBtn?.addEventListener("click", loadDashboardStats);
   bindTopicWatchlistEvents();
-  initGraphToolbarCollapse();
+  initGraphAdvFiltersCollapse();
   initGraphAdvancedFilters();
   initQdrantPostFilters();
   initGraphResize();
