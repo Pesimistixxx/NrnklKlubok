@@ -40,6 +40,23 @@ services:
       - redis
       - qdrant
 
+  agents:
+    build:
+      context: .
+      dockerfile: services/agents/Dockerfile
+    env_file: .env
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      AGENTS_TIMEOUT_SECONDS: ${AGENTS_TIMEOUT_SECONDS:-5}
+      AGENTS_LLM_MODEL: ${AGENTS_LLM_MODEL:-yandexgpt-5-lite}
+      AGENTS_LLM_MAX_OUTPUT_TOKENS: ${AGENTS_LLM_MAX_OUTPUT_TOKENS:-1200}
+      AGENTS_MAX_DOCS: ${AGENTS_MAX_DOCS:-5}
+      AGENTS_SEARCH_LIMIT: ${AGENTS_SEARCH_LIMIT:-6}
+    ports:
+      - "8010:8010"
+    depends_on:
+      - gateway
+
   postgres:
     image: postgres:16-alpine
     environment:
