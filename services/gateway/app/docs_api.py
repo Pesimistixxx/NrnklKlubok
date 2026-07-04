@@ -61,6 +61,11 @@ DOC_SECTIONS: dict[str, dict[str, str]] = {
         "file": "27_additional_wishes.md",
         "source": "repo",
     },
+    "access-and-security": {
+        "title": "Доступ и безопасность",
+        "file": "28_access_and_security.md",
+        "source": "repo",
+    },
 }
 
 

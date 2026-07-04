@@ -19,6 +19,7 @@ MKG_ROLES: list[dict[str, Any]] = [
         "accent_color": "#991b1b",
         "capability_ru": "Настройки пайплайна, RBAC, очистка Neo4j/Qdrant",
         "differs_from": "В отличие от остальных — полные права и destructive-операции",
+        "allowed_classifications": ["открытый", "внутренний", "конфиденциальный", "строго"],
     },
     {
         "id": "researcher",
@@ -35,6 +36,7 @@ MKG_ROLES: list[dict[str, Any]] = [
         "accent_color": "#1e40af",
         "capability_ru": "Режимы «Гипотезы», «Обзор», «Советы» — синтез из графа",
         "differs_from": "Фокус на новых связях и идеях, а не на проверке или пайплайне",
+        "allowed_classifications": ["открытый", "внутренний"],
     },
     {
         "id": "engineer",
@@ -51,6 +53,7 @@ MKG_ROLES: list[dict[str, Any]] = [
         "accent_color": "#166534",
         "capability_ru": "Загрузка, extraction, диагностика ingestion — без LangGraph-агентов",
         "differs_from": "Только инфраструктура данных; не запускает режимы аудита/гипотез",
+        "allowed_classifications": ["открытый", "внутренний"],
     },
     {
         "id": "analyst",
@@ -67,6 +70,7 @@ MKG_ROLES: list[dict[str, Any]] = [
         "accent_color": "#3730a3",
         "capability_ru": "Семантический поиск, сравнение документов, графики из данных MKG",
         "differs_from": "Ищет закономерности в уже загруженных данных, не строит гипотезы",
+        "allowed_classifications": ["открытый", "внутренний"],
     },
     {
         "id": "validator",
@@ -83,6 +87,7 @@ MKG_ROLES: list[dict[str, Any]] = [
         "accent_color": "#92400e",
         "capability_ru": "Режим «Аудит» — issue / severity / рекомендация",
         "differs_from": "Критикует и проверяет, а не генерирует новые идеи",
+        "allowed_classifications": ["открытый", "внутренний"],
     },
     {
         "id": "security",
@@ -99,6 +104,7 @@ MKG_ROLES: list[dict[str, Any]] = [
         "accent_color": "#9d174d",
         "capability_ru": "SecurityRole, классификация, политики RBAC",
         "differs_from": "Фильтрует ответы по уровню допуска, не анализирует содержание",
+        "allowed_classifications": ["открытый", "внутренний", "конфиденциальный", "строго"],
     },
     {
         "id": "viewer",
@@ -115,6 +121,7 @@ MKG_ROLES: list[dict[str, Any]] = [
         "accent_color": "#374151",
         "capability_ru": "Объясняет содержание без изменений данных",
         "differs_from": "Не загружает файлы и не запускает агентов",
+        "allowed_classifications": ["открытый"],
     },
 ]
 

@@ -37,6 +37,10 @@ MKG — MVP/хакатонный проект; критические испра
 - Меняйте пароли Neo4j/Postgres по умолчанию в production.
 - Не выставляйте gateway и Neo4j Browser в интернет без аутентификации и TLS.
 
+## RBAC и доступ в MKG (MVP)
+
+В hackathon MVP **нет серверной аутентификации**: роль выбирается в UI, API на localhost открыт. Ролевая модель, L5 `SecurityRole`, аудит и roadmap production — в [`Docs/28_access_and_security.md`](Docs/28_access_and_security.md) (в приложении: **Справка → Доступ и безопасность**).
+
 ## Благодарности
 
 Сообщившим об ответственно раскрытых уязвимостях — благодарность в release notes (по согласованию).

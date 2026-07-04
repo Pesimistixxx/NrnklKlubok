@@ -26,15 +26,16 @@
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/v1/documents` | Список документов (`page`, `page_size`) |
+| GET | `/api/v1/documents` | Список документов (`page`, `page_size`, `geography`, `material_year`) |
 | GET | `/api/v1/documents/{id}` | Метаданные документа |
-| POST | `/api/v1/documents` | Загрузка файла (`file`, `classification`, `processing_mode=full\|answers_only`) |
-| POST | `/api/v1/documents/batch` | Пакетная загрузка (`files[]`) |
+| POST | `/api/v1/documents` | Загрузка файла (см. поля ниже) |
+| POST | `/api/v1/documents/batch` | Пакетная загрузка (`files[]`, общие метаданные на весь batch) |
 | GET | `/api/v1/documents/{id}/markdown` | Markdown: `variant=clean\|marked`, `download=1` |
 | GET | `/api/v1/documents/{id}/source` | Исходный файл |
 | GET | `/api/v1/documents/{id}/preview` | Превью: source, md, graph stats, L4 stats |
 | GET | `/api/v1/documents/{id}/logs` | Логи пайплайна |
 | POST | `/api/v1/documents/{id}/reprocess` | Повтор OCR → Markdown |
+| POST | `/api/v1/documents/{id}/reprocess-full` | Полный пайплайн (upgrade `answers_only` → `full`) |
 | POST | `/api/v1/documents/{id}/submit` | Запуск extraction → граф → Neo4j |
 | POST | `/api/v1/documents/{id}/cancel-extraction` | Отмена extraction |
 | POST | `/api/v1/documents/{id}/neo4j-sync` | Повторная синхронизация графа в Neo4j |
@@ -43,14 +44,30 @@
 | GET | `/api/v1/documents/{id}/pipeline/layers` | Статус слоёв L1–L6 |
 | GET | `/api/v1/pipeline/{id}` | Краткий trace пайплайна |
 
+### Поля загрузки (`POST /documents`, `POST /documents/batch`)
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `file` / `files[]` | file | PDF, изображения, MD, TXT, CSV, JSON, YAML, XML, DOCX, XLSX |
+| `classification` | string | По умолчанию `открытый` |
+| `processing_mode` | string | `full` (граф + Neo4j + Qdrant + L4) или `answers_only` (только MD → Qdrant) |
+| `geography` | string | География материала (`RU`, `foreign`, …); нормализуется, попадает в граф и Qdrant |
+| `source_location` | string | Источник / место происхождения; если `geography` пуст — может вывести geography |
+| `material_date` | string | Дата материала `YYYY-MM-DD`; тег `year:…` в графе и Qdrant |
+
+После загрузки worker автоматически: `run_ingestion` → (при `AUTO_EXTRACT_AFTER_INGEST=true`) `run_extraction` → Neo4j → Qdrant L3/L4/entities → L4 HDBSCAN.
+
 ### Примеры
 
 ```bash
-# Загрузка (полный пайплайн)
+# Загрузка (полный пайплайн + метаданные)
 curl -s -X POST http://localhost:8000/api/v1/documents \
   -F "file=@report.pdf" \
   -F "classification=открытый" \
-  -F "processing_mode=full"
+  -F "processing_mode=full" \
+  -F "geography=RU" \
+  -F "source_location=Норильск" \
+  -F "material_date=2024-06-15"
 
 # Markdown с разметкой L1–L6
 curl -s "http://localhost:8000/api/v1/documents/<doc_id>/markdown?variant=marked&download=1" -o marked.md
@@ -169,6 +186,8 @@ Gateway проксирует сервис `agents` (порт 8010):
 | GET | `/api/v1/config/models` | LLM, OCR, embedding doc/query |
 | PUT | `/api/v1/config/models` | Обновить runtime-конфиг (Postgres) |
 | POST | `/api/v1/admin/clear?confirm=true` | Очистка storage, Postgres, Neo4j |
+| POST | `/api/v1/admin/reindex` | Backfill Qdrant L3+L4+entities (`?document_id=` — один документ) |
+| POST | `/api/v1/admin/reindex-entities` | Backfill только `mkg_entities` |
 
 ---
 

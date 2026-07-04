@@ -4,95 +4,124 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=100" />
+  <link rel="stylesheet" href="/static/css/app.css?v=134" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
     <main class="main-area" id="mainArea">
       <nav class="main-nav" role="navigation" aria-label="Разделы">
-        <button class="page-nav-link active" data-page="chats" type="button">Чат</button>
-        <button class="page-nav-link" data-page="docs" type="button">Документы</button>
-        <button class="page-nav-link" data-page="qdrant" type="button">Qdrant</button>
-        <button class="page-nav-link" data-page="guide" type="button">Документация</button>
-        <button class="page-nav-link" data-page="settings" type="button">Настройки</button>
+        <div class="main-nav-links">
+          <button class="page-nav-link active" data-page="home" type="button" data-i18n="nav_home">Главная</button>
+          <button class="page-nav-link" data-page="chats" type="button" data-i18n="nav_chats">Чат</button>
+          <button class="page-nav-link" data-page="docs" type="button" data-i18n="nav_docs">Документы</button>
+          <button class="page-nav-link" data-page="qdrant" type="button" data-i18n="nav_qdrant">Qdrant</button>
+          <button class="page-nav-link" data-page="manager" type="button" data-i18n="nav_manager">Панель руководителя</button>
+          <button class="page-nav-link" data-page="guide" type="button" data-i18n="nav_guide">Документация</button>
+          <button class="page-nav-link" data-page="settings" type="button" data-i18n="nav_settings">Настройки</button>
+        </div>
+        <div class="app-preferences" id="appPreferences">
+          <div class="pref-toggle" role="group" aria-label="Language">
+            <button type="button" class="pref-btn" data-lang="ru" id="langRuBtn" aria-pressed="true">RU</button>
+            <button type="button" class="pref-btn" data-lang="en" id="langEnBtn" aria-pressed="false">EN</button>
+          </div>
+          <button type="button" class="pref-btn pref-theme-btn" id="themeToggleBtn" title="Тёмная тема" aria-label="Тёмная тема">🌙</button>
+        </div>
       </nav>
 
-      <section class="page page-chats" id="pageChats">
+      <section class="page page-home" id="pageHome">
+        <div class="home-page">
+          <header class="home-hero">
+            <div class="home-hero-row">
+              <h1 class="home-title">MKG</h1>
+              <span class="home-version" id="homeVersion">v0.9.0</span>
+            </div>
+            <p class="home-tagline" data-i18n="home_tagline">Mining Knowledge Graph — AI-карта знаний для металлургии и экологии</p>
+          </header>
+          <section class="home-desc-card">
+            <p class="home-desc" data-i18n="home_desc_1">MKG — прототип для хакатона «Норникель»: корпоративная карта знаний из документов с пайплайном извлечения L1–L6 (сущности, факты, связи, кластеры, противоречия, аналитика).</p>
+            <p class="home-desc-note muted" data-i18n="home_desc_2">Загружайте документы, стройте граф Neo4j и Qdrant, задавайте вопросы AI-агентам по ролям. Разделы доступны в верхнем меню.</p>
+          </section>
+        </div>
+      </section>
+
+      <section class="page page-chats hidden" id="pageChats">
         <div class="chat-shell">
           <header class="chat-toolbar">
             <div class="chat-toolbar-row">
-              <span class="chat-toolbar-label">Роль</span>
+              <span class="chat-toolbar-label" data-i18n="chat_role_label">Роль</span>
               <div class="role-card-grid role-card-grid-compact" id="roleCardGrid"></div>
             </div>
             <div class="chat-role-header hidden" id="chatRoleHeader">
               <span class="user-role-badge" id="chatRoleBadge"></span>
               <span class="chat-role-capability muted" id="chatRoleCapability"></span>
-              <a href="#" class="chat-agents-doc-link muted small" id="chatAgentsDocLink">Как устроены агенты</a>
+              <a href="#" class="chat-agents-doc-link muted small" id="chatAgentsDocLink" data-i18n="chat_agents_doc">Как устроены агенты</a>
             </div>
             <p class="chat-notice hidden" id="chatIdentityStatus"></p>
             <details class="role-prompt-panel hidden" id="rolePromptPanel">
               <summary>
                 <span class="role-prompt-summary">
                   <span class="role-prompt-chevron" aria-hidden="true"></span>
-                  <span>Промпт роли</span>
+                  <span data-i18n="role_prompt_title">Промпт роли</span>
                   <span class="role-prompt-badge muted" id="rolePromptBadge"></span>
                 </span>
               </summary>
               <div class="role-prompt-body">
-                <p class="muted small role-prompt-hint">Системная инструкция для выбранной роли. Используется при запросах к AI.</p>
-                <textarea id="rolePromptText" rows="5" placeholder="Системный промпт…"></textarea>
+                <p class="muted small role-prompt-hint" data-i18n="role_prompt_hint">Системная инструкция для выбранной роли. Используется при запросах к AI.</p>
+                <textarea id="rolePromptText" rows="5" data-i18n-placeholder="role_prompt_placeholder" placeholder="Системный промпт…"></textarea>
                 <div class="role-prompt-actions">
-                  <button class="btn btn-primary btn-small" id="rolePromptSave" type="button">Сохранить</button>
-                  <button class="btn btn-small" id="rolePromptReset" type="button">По умолчанию</button>
+                  <button class="btn btn-primary btn-small" id="rolePromptSave" type="button" data-i18n="role_prompt_save">Сохранить</button>
+                  <button class="btn btn-small" id="rolePromptReset" type="button" data-i18n="role_prompt_reset">По умолчанию</button>
                 </div>
               </div>
             </details>
           </header>
           <div class="chats-layout chats-layout-with-graph">
             <aside class="chats-sidebar">
-              <button class="btn btn-primary btn-small chat-new-btn" id="chatNewBtn" type="button">+ Новый чат</button>
-              <h3 class="chats-sidebar-title">История</h3>
+              <button class="btn btn-primary btn-small chat-new-btn" id="chatNewBtn" type="button" data-i18n="chat_new">+ Новый чат</button>
+              <h3 class="chats-sidebar-title" data-i18n="chat_history">История</h3>
               <div class="chats-thread-list" id="chatThreadList"></div>
             </aside>
             <section class="chats-main">
-              <h2 class="chats-main-title" id="chatActiveTitle">Диалог</h2>
+              <h2 class="chats-main-title" id="chatActiveTitle" data-i18n="chat_dialog">Диалог</h2>
               <div class="chats-messages" id="chatMessages">
-                <p class="chat-empty-hint">Выберите роль и напишите сообщение — агенты L1–L6 ответят автоматически.</p>
+                <p class="chat-empty-hint" data-i18n="chat_empty_hint">Выберите роль и напишите сообщение — агенты L1–L6 ответят автоматически.</p>
               </div>
               <div class="chat-typing hidden" id="chatTyping" aria-live="polite">
                 <div class="chat-agent-viz">
-                  <div class="chat-agent-viz-head">Работа агентов</div>
+                  <div class="chat-agent-viz-head" data-i18n="chat_typing_agents">Работа агентов</div>
                   <div class="agent-trace-live" id="chatTraceLive"></div>
                   <div class="chat-agent-questions" id="chatAgentQuestions" aria-live="polite"></div>
                 </div>
                 <div class="chat-typing-footer">
                   <span class="chat-typing-dots"><i></i><i></i><i></i></span>
-                  <span>MKG AI печатает…</span>
+                  <span data-i18n="chat_typing">MKG AI печатает…</span>
                 </div>
               </div>
               <p class="chat-upload-error hidden" id="chatUploadError" role="alert"></p>
               <div class="chat-pending-attachments hidden" id="chatPendingAttachments" aria-live="polite"></div>
               <div class="chat-speed-toggle" id="chatSpeedToggle" role="radiogroup" aria-label="Режим ответа">
-                <button type="button" class="chat-speed-pill active" data-speed="full" aria-pressed="true">Подробный · с рассуждениями</button>
-                <button type="button" class="chat-speed-pill" data-speed="fast" aria-pressed="false">Быстрый</button>
+                <button type="button" class="chat-speed-pill active" data-speed="full" aria-pressed="true" data-i18n="chat_speed_full">Подробный · с рассуждениями</button>
+                <button type="button" class="chat-speed-pill" data-speed="compare" aria-pressed="false" data-i18n="chat_speed_compare">Сравнение</button>
+                <button type="button" class="chat-speed-pill" data-speed="fast" aria-pressed="false" data-i18n="chat_speed_fast">Быстрый</button>
               </div>
-              <div class="chats-compose" id="chatsCompose">
+              <form class="chats-compose" id="chatsCompose" action="#" novalidate>
                 <input type="file" id="chatFileInput" class="visually-hidden" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp,.tif,.tiff" />
                 <button type="button" class="btn btn-ghost btn-icon chat-attach-btn" id="chatAttachBtn" title="Прикрепить файл или фото" aria-label="Прикрепить файл"><svg class="icon-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
-                <textarea id="chatMessageInput" rows="2" placeholder="Вопрос или сообщение…"></textarea>
-                <button class="btn btn-primary" id="chatSendBtn" type="button">Отправить</button>
-              </div>
-              <p class="muted small chat-upload-hint" id="chatUploadHint">Файл в чате → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация · источники и «Сохранить как MD»</p>
+                <textarea id="chatMessageInput" rows="2" data-i18n-placeholder="chat_input_placeholder" placeholder="Вопрос или сообщение…"></textarea>
+                <button class="btn btn-primary" id="chatSendBtn" type="submit" data-i18n="chat_send">Отправить</button>
+              </form>
+              <p class="muted small chat-upload-hint" id="chatUploadHint" data-i18n="chat_upload_hint">Файл в чате → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация · источники и «Сохранить как MD»</p>
             </section>
             <div class="chat-graph-split-handle" id="chatGraphResizeHandle" title="Потяните для изменения ширины графа" aria-hidden="true"></div>
             <aside class="chat-graph-panel" id="chatGraphPanel">
               <header class="chat-graph-head">
                 <div class="chat-graph-head-text">
-                  <h3>Граф контекста</h3>
+                  <h3 data-i18n="chat_graph_title">Граф контекста</h3>
                   <span class="chat-graph-stats muted" id="chatGraphStats">0 узлов</span>
                 </div>
                 <div class="chat-graph-head-actions">
                   <button type="button" class="btn-icon chat-graph-replay" id="chatGraphReplay" title="Пройти по графу заново" aria-label="Пройти по графу заново" disabled>↻</button>
+                  <button type="button" class="btn-icon chat-graph-stop hidden" id="chatGraphStop" title="Остановить обход" aria-label="Остановить обход">■</button>
                   <button type="button" class="btn-icon chat-graph-expand" id="chatGraphExpand" title="Развернуть граф" aria-label="Развернуть">⛶</button>
                   <button type="button" class="btn-icon chat-graph-toggle" id="chatGraphToggle" title="Свернуть панель" aria-label="Свернуть">›</button>
                 </div>
@@ -104,8 +133,8 @@
               <div class="chat-graph-canvas-wrap">
                 <div class="chat-graph-canvas" id="chatGraphCanvas"></div>
                 <div class="chat-graph-empty" id="chatGraphEmpty">
-                  <p class="muted small" id="chatGraphEmptyMsg">Нет данных MKG для этого запроса.</p>
-                  <p class="muted small">Загрузите документы во вкладке «Документы» — пайплайн до графа и Qdrant запустится автоматически.</p>
+                  <p class="muted small" id="chatGraphEmptyMsg" data-i18n="chat_graph_empty">Нет данных MKG для этого запроса.</p>
+                  <p class="muted small" data-i18n="chat_graph_empty_hint">Загрузите документы во вкладке «Документы» — пайплайн до графа и Qdrant запустится автоматически.</p>
                 </div>
               </div>
             </aside>
@@ -119,30 +148,61 @@
             <div class="upload-panel upload-panel-prominent" id="homeTabUpload">
               <div class="upload-panel-head">
                 <span class="upload-panel-icon" aria-hidden="true"><svg class="icon-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>
-                <h2>Загрузить документ</h2>
+                <h2 data-i18n="docs_upload_title">Загрузить документ</h2>
               </div>
-              <p class="muted small upload-pipeline-hint">Upload → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация — автоматически после загрузки</p>
+              <p class="muted small upload-pipeline-hint" data-i18n="docs_upload_hint">Upload → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация — автоматически после загрузки</p>
               <input type="file" id="file" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp" />
               <input type="hidden" id="classification" value="открытый" />
               <div class="drop" id="drop" role="button" tabindex="0" aria-label="Зона загрузки файлов">
-                <div id="dropText">Перетащите файл сюда</div>
-                <div class="drop-hint muted small">или нажмите для выбора</div>
+                <div id="dropText" data-i18n="docs_drop_text">Перетащите файл сюда</div>
+                <div class="drop-hint muted small" data-i18n="docs_drop_hint">или нажмите для выбора</div>
               </div>
               <div class="upload-actions">
-                <button class="btn btn-ghost btn-small" id="pickBtn" type="button">Выбрать</button>
-                <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled>Загрузить и обработать</button>
+                <button class="btn btn-ghost btn-small" id="pickBtn" type="button" data-i18n="docs_pick">Выбрать</button>
+                <button class="btn btn-primary btn-small" id="uploadBtn" type="button" disabled data-i18n="docs_upload_btn">Загрузить и обработать</button>
               </div>
+              <details class="upload-meta" id="uploadMetaPanel">
+                <summary data-i18n="docs_upload_meta_toggle">Метаданные (необязательно)</summary>
+                <div class="upload-meta-fields">
+                  <label class="upload-meta-field">
+                    <span data-i18n="docs_meta_geography">География / источник</span>
+                    <select id="uploadGeography" aria-label="Geography">
+                      <option value="" data-i18n="docs_meta_geo_unset">— не указано —</option>
+                      <option value="RU" data-i18n="docs_meta_geo_ru">Россия (RU / domestic)</option>
+                      <option value="foreign" data-i18n="docs_meta_geo_foreign">Зарубежная (foreign)</option>
+                      <option value="international" data-i18n="docs_meta_geo_intl">Международная</option>
+                    </select>
+                  </label>
+                  <label class="upload-meta-field">
+                    <span data-i18n="docs_meta_source">Откуда (текст)</span>
+                    <input type="text" id="uploadSourceLocation" maxlength="200" autocomplete="off" data-i18n-placeholder="docs_meta_source_ph" placeholder="организация, страна, URL…" />
+                  </label>
+                  <label class="upload-meta-field">
+                    <span data-i18n="docs_meta_date">Дата материала</span>
+                    <input type="date" id="uploadMaterialDate" />
+                  </label>
+                </div>
+              </details>
               <p class="muted small" id="formatsHint">…</p>
               <div class="error-box" id="uploadError"></div>
             </div>
             <div class="docs-sidebar-scroll">
               <div class="docs-sidebar-head">
-                <h2>Документы</h2>
-                <input type="search" class="doc-list-filter" id="docListFilter" placeholder="Фильтр по имени…" autocomplete="off" />
+                <h2 data-i18n="docs_list_title">Документы</h2>
+                <input type="search" class="doc-list-filter" id="docListFilter" data-i18n-placeholder="docs_filter_placeholder" placeholder="Фильтр по имени…" autocomplete="off" />
+                <div class="doc-list-meta-filters">
+                  <select id="docGeoFilter" class="doc-list-filter-select" aria-label="Geography filter">
+                    <option value="" data-i18n="docs_filter_geo_all">Вся география</option>
+                    <option value="RU" data-i18n="docs_filter_geo_ru">RU / domestic</option>
+                    <option value="foreign" data-i18n="docs_filter_geo_foreign">Foreign</option>
+                    <option value="international" data-i18n="docs_filter_geo_intl">International</option>
+                  </select>
+                  <input type="number" id="docYearFilter" class="doc-list-filter-year" min="1900" max="2100" step="1" data-i18n-placeholder="docs_filter_year_ph" placeholder="Год" aria-label="Material year" />
+                </div>
               </div>
-              <div class="docs-page-list doc-nav" id="docs"><div class="muted">Загрузка…</div></div>
+              <div class="docs-page-list doc-nav" id="docs"><div class="muted" data-i18n="docs_loading">Загрузка…</div></div>
               <div class="docs-sidebar-footer">
-                <button class="btn btn-ghost btn-small" id="viewAllGraphBtn" type="button">Полный граф всех документов</button>
+                <button class="btn btn-ghost btn-small" id="viewAllGraphBtn" type="button" data-i18n="docs_view_all_graph">Полный граф всех документов</button>
               </div>
             </div>
           </aside>
@@ -153,7 +213,7 @@
       <section class="page page-graph-shell hidden" id="pageGraphShell">
         <div class="doc-page-bar" id="docPageBar">
           <div class="doc-page-bar-top">
-            <button class="btn btn-ghost btn-small" id="docBackBtn" type="button">← Документы</button>
+            <button class="btn btn-ghost btn-small" id="docBackBtn" type="button" data-i18n="docs_back">← Документы</button>
             <div class="doc-page-info">
               <h1 id="docPageTitle">—</h1>
               <span class="badge s-uploaded" id="docPageBadge">—</span>
@@ -162,26 +222,26 @@
           </div>
           <dl class="doc-meta-grid hidden" id="docMetaGrid"></dl>
           <div class="doc-page-actions">
-            <button class="btn btn-primary btn-small" id="docPrimaryBtn" type="button" data-action="build">Построить граф</button>
+            <button class="btn btn-primary btn-small" id="docPrimaryBtn" type="button" data-action="build" data-i18n="docs_build_graph">Построить граф</button>
             <div class="doc-page-actions-row">
-              <button class="btn btn-rebuild btn-small doc-only-action hidden" id="docRebuildGraphBtn" type="button" title="Заново извлечь узлы и связи из Markdown">↺ Перестроить связи</button>
-              <button class="btn btn-ghost btn-small doc-only-action" id="docReprocessBtn" type="button" title="Повторить OCR и сборку Markdown">↺ OCR</button>
-              <button class="btn btn-ghost btn-small doc-only-action" id="docMdBtn" type="button">Markdown</button>
-              <button class="btn btn-ghost btn-small doc-only-action" id="docLogsBtn" type="button">Логи</button>
+              <button class="btn btn-rebuild btn-small doc-only-action hidden" id="docRebuildGraphBtn" type="button" data-i18n-title="docs_rebuild_rels" title="Заново извлечь узлы и связи из Markdown" data-i18n="docs_rebuild_rels">↺ Перестроить связи</button>
+              <button class="btn btn-ghost btn-small doc-only-action" id="docReprocessBtn" type="button" data-i18n="docs_reprocess_ocr" title="Повторить OCR и сборку Markdown">↺ OCR</button>
+              <button class="btn btn-ghost btn-small doc-only-action" id="docMdBtn" type="button" data-i18n="docs_md">Markdown</button>
+              <button class="btn btn-ghost btn-small doc-only-action" id="docLogsBtn" type="button" data-i18n="docs_logs">Логи</button>
               <button class="btn btn-ghost btn-small" id="docNeo4jBtn" type="button">Neo4j ↗</button>
             </div>
-            <button class="btn btn-danger btn-small doc-only-action hidden" id="docStopBtn" type="button">Стоп</button>
+            <button class="btn btn-danger btn-small doc-only-action hidden" id="docStopBtn" type="button" data-i18n="docs_stop">Стоп</button>
           </div>
         </div>
         <div class="doc-page-panel hidden" id="docMdPanel">
           <div class="md-panel-head">
-            <h4>Markdown</h4>
+            <h4 data-i18n="md_panel_title">Markdown</h4>
             <div class="md-panel-actions">
-              <button type="button" class="btn btn-ghost btn-small" id="docMdDownloadBtn" title="Скачать текущий вид как .md">Скачать .md</button>
+              <button type="button" class="btn btn-ghost btn-small" id="docMdDownloadBtn" data-i18n-title="md_download" title="Скачать текущий вид как .md" data-i18n="md_download">Скачать .md</button>
               <div class="md-view-toggle">
-                <button type="button" class="view-btn active" id="mdViewCleanBtn">Очищенный</button>
-                <button type="button" class="view-btn" id="mdViewRawBtn">Сырой OCR</button>
-                <button type="button" class="view-btn" id="mdViewMarkedBtn">С разметкой</button>
+                <button type="button" class="view-btn active" id="mdViewCleanBtn" data-i18n="md_view_clean">Очищенный</button>
+                <button type="button" class="view-btn" id="mdViewRawBtn" data-i18n="md_view_raw">Сырой OCR</button>
+                <button type="button" class="view-btn" id="mdViewMarkedBtn" data-i18n="md_view_marked">С разметкой</button>
               </div>
             </div>
           </div>
@@ -190,7 +250,7 @@
           <div class="preview md-panel doc-md-panel md-source-view hidden empty" id="previewMdSource">—</div>
         </div>
         <div class="doc-page-panel hidden" id="docLogsPanel">
-          <h4>Логи пайплайна</h4>
+          <h4 data-i18n="md_logs_title">Логи пайплайна</h4>
           <div class="preview logs-panel doc-logs-panel empty" id="previewLogs">—</div>
         </div>
       </section>
@@ -202,34 +262,34 @@
             <span class="badge s-uploaded" id="docWorkBadge">—</span>
             <span class="muted doc-work-meta" id="docWorkMeta"></span>
             <div class="doc-upload-fallback hidden" id="docUploadFallback">
-              <button class="btn btn-primary btn-small btn-with-icon" id="docUploadFallbackBtn" type="button" title="Загрузить документ"><svg class="icon-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span>Загрузить</span></button>
+              <button class="btn btn-primary btn-small btn-with-icon" id="docUploadFallbackBtn" type="button" data-i18n-title="docs_upload_title" title="Загрузить документ"><svg class="icon-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span data-i18n="graph_upload_fallback">Загрузить</span></button>
             </div>
           </div>
           <nav class="doc-work-tabs" role="tablist" aria-label="Просмотр документа">
-            <button type="button" class="doc-work-tab active" data-tab="journey" id="docWorkTabJourney">Пайплайн</button>
-            <button type="button" class="doc-work-tab" data-tab="md" id="docWorkTabMd">Markdown</button>
-            <button type="button" class="doc-work-tab" data-tab="graph" id="docWorkTabGraph">Граф</button>
+            <button type="button" class="doc-work-tab active" data-tab="journey" id="docWorkTabJourney" data-i18n="doc_work_pipeline">Пайплайн</button>
+            <button type="button" class="doc-work-tab" data-tab="md" id="docWorkTabMd" data-i18n="docs_md">Markdown</button>
+            <button type="button" class="doc-work-tab" data-tab="graph" id="docWorkTabGraph" data-i18n="doc_work_graph">Граф</button>
           </nav>
         </header>
         <div class="page-head graph-page-head" id="graphPageHead">
-          <h1 id="graphPageTitle">Граф знаний</h1>
-          <p class="muted page-lead" id="graphPageLead">Компактный режим. Перетаскивайте узлы; тяните нижний край графа или разделитель списка узлов для изменения высоты.</p>
+          <h1 id="graphPageTitle" data-i18n="graph_page_title">Граф знаний</h1>
+          <p class="muted page-lead" id="graphPageLead" data-i18n="graph_page_lead">Компактный режим. Перетаскивайте узлы; тяните нижний край графа или разделитель списка узлов для изменения высоты.</p>
         </div>
         <div class="doc-work-body">
           <div class="doc-work-pane active" id="docJourneyPane" data-pane="journey">
             <div class="doc-journey" id="docJourneyContent">
-              <p class="muted doc-work-empty">Выберите документ слева или загрузите новый файл.</p>
+              <p class="muted doc-work-empty" data-i18n="doc_work_empty">Выберите документ слева или загрузите новый файл.</p>
             </div>
           </div>
           <div class="doc-work-pane" id="docMdPane" data-pane="md">
             <div class="md-panel-head md-inline-head">
-              <p class="muted small md-inline-hint">После OCR: «Очищенный» — нормализованный текст; «Сырой OCR» — вывод распознавания; «С разметкой» — L3-маркеры после extraction.</p>
+              <p class="muted small md-inline-hint" data-i18n="md_inline_hint">После OCR: «Очищенный» — нормализованный текст; «Сырой OCR» — вывод распознавания; «С разметкой» — L3-маркеры после extraction.</p>
               <div class="md-panel-actions">
-                <button type="button" class="btn btn-ghost btn-small" id="docMdInlineDownloadBtn" title="Скачать текущий вид как .md">Скачать .md</button>
+                <button type="button" class="btn btn-ghost btn-small" id="docMdInlineDownloadBtn" data-i18n-title="md_download" title="Скачать текущий вид как .md" data-i18n="md_download">Скачать .md</button>
                 <div class="md-view-toggle">
-                  <button type="button" class="view-btn active" id="mdInlineCleanBtn">Очищенный</button>
-                  <button type="button" class="view-btn" id="mdInlineRawBtn">Сырой OCR</button>
-                  <button type="button" class="view-btn" id="mdInlineMarkedBtn">С разметкой</button>
+                  <button type="button" class="view-btn active" id="mdInlineCleanBtn" data-i18n="md_view_clean">Очищенный</button>
+                  <button type="button" class="view-btn" id="mdInlineRawBtn" data-i18n="md_view_raw">Сырой OCR</button>
+                  <button type="button" class="view-btn" id="mdInlineMarkedBtn" data-i18n="md_view_marked">С разметкой</button>
                 </div>
               </div>
             </div>
@@ -258,16 +318,16 @@
                 <div class="graph-toolbar-head">
                   <div class="graph-toolbar-primary">
                     <div class="graph-density-toggle">
-                      <button type="button" class="view-btn active" id="graphCompactBtn">Компактный</button>
-                      <button type="button" class="view-btn" id="graphFullBtn">Полный</button>
+                      <button type="button" class="view-btn active" id="graphCompactBtn" data-i18n="graph_compact">Компактный</button>
+                      <button type="button" class="view-btn" id="graphFullBtn" data-i18n="graph_full">Полный</button>
                     </div>
                     <div class="graph-view-toggle">
-                      <button type="button" class="view-btn active" id="viewMapBtn">Карта</button>
-                      <button type="button" class="view-btn" id="viewRelsBtn">Связи</button>
+                      <button type="button" class="view-btn active" id="viewMapBtn" data-i18n="graph_map">Карта</button>
+                      <button type="button" class="view-btn" id="viewRelsBtn" data-i18n="graph_rels">Связи</button>
                     </div>
                     <div class="graph-toolbar-actions">
-                      <button class="btn btn-ghost btn-small" id="graphCompareBtn" type="button" title="Сравнить 2–3 процесса/материала">Сравнение</button>
-                      <button class="btn btn-ghost btn-small" id="originalGraphBtn" type="button">Сброс</button>
+                      <button class="btn btn-ghost btn-small" id="graphCompareBtn" type="button" data-i18n-title="graph_compare" title="Сравнить 2–3 процесса/материала" data-i18n="graph_compare">Сравнение</button>
+                      <button class="btn btn-ghost btn-small" id="originalGraphBtn" type="button" data-i18n="graph_reset">Сброс</button>
                       <button class="btn btn-ghost btn-small" id="headerNeo4jBtn" type="button">Neo4j ↗</button>
                     </div>
                   </div>
@@ -278,9 +338,9 @@
                     <div class="layer-filters" id="layerFilters"></div>
                   </div>
                   <div class="graph-toolbar-filter-actions">
-                    <button type="button" class="layer-chip cross-layer-toggle" id="crossLayerToggle" title="Подсветить межслойные связи">Межслойные</button>
-                    <button type="button" class="layer-chip connection-formation-toggle" id="connectionFormationBtn" title="Пошаговое появление слоёв L1→L6">Как формируются связи</button>
-                    <button type="button" class="layer-chip" id="toggleNodeListBtn">Список узлов</button>
+                    <button type="button" class="layer-chip cross-layer-toggle" id="crossLayerToggle" data-i18n-title="graph_cross_layer" title="Подсветить межслойные связи" data-i18n="graph_cross_layer">Межслойные</button>
+                    <button type="button" class="layer-chip connection-formation-toggle" id="connectionFormationBtn" data-i18n-title="graph_formation" title="Пошаговое появление слоёв L1→L6" data-i18n="graph_formation">Как формируются связи</button>
+                    <button type="button" class="layer-chip" id="toggleNodeListBtn" data-i18n="graph_node_list">Список узлов</button>
                   </div>
                   <div class="connection-formation-timeline hidden" id="connectionFormationTimeline" aria-live="polite"></div>
                 </div>
@@ -288,37 +348,37 @@
                   <div class="graph-adv-filters-bar">
                     <button type="button" class="graph-adv-filters-toggle" id="graphAdvFiltersToggle" aria-expanded="false" title="Развернуть фильтры">
                       <span class="graph-adv-filters-toggle-icon" aria-hidden="true">▸</span>
-                      <span class="graph-adv-filters-toggle-label">Фильтры</span>
+                      <span class="graph-adv-filters-toggle-label" data-i18n="graph_filters">Фильтры</span>
                     </button>
                     <span class="graph-adv-filters-meta muted" id="graphAdvFiltersNodeCount">—</span>
-                    <button type="button" class="btn btn-primary btn-small" id="graphFilterApplyCompact">Применить</button>
+                    <button type="button" class="btn btn-primary btn-small" id="graphFilterApplyCompact" data-i18n="graph_filter_apply">Применить</button>
                   </div>
                   <div class="graph-adv-filters-body" id="graphAdvFiltersBody" hidden>
                     <div class="graph-advanced-filters" id="graphAdvancedFilters" title="Расширенные фильтры: география (RU/зарубежная практика), год публикации, достоверность extraction_confidence, числовой диапазон Measurement (концентрация, температура, расход).">
                       <div class="graph-adv-filter-row">
-                        <label class="graph-adv-label" for="graphFilterSearch">Поиск</label>
-                        <input type="search" class="graph-adv-input" id="graphFilterSearch" placeholder="Текст в узлах…" autocomplete="off" />
+                        <label class="graph-adv-label" for="graphFilterSearch" data-i18n="graph_filter_search">Поиск</label>
+                        <input type="search" class="graph-adv-input" id="graphFilterSearch" data-i18n-placeholder="graph_filter_search_ph" placeholder="Текст в узлах…" autocomplete="off" />
                       </div>
                       <fieldset class="graph-adv-entity-types">
-                        <legend class="graph-adv-label">Тип сущности</legend>
+                        <legend class="graph-adv-label" data-i18n="graph_filter_entity_type">Тип сущности</legend>
                         <div class="graph-adv-checkboxes graph-adv-checkboxes-grid" id="graphEntityTypeChecks"></div>
                       </fieldset>
                       <div class="graph-adv-filter-row">
-                        <label class="graph-adv-label" for="graphFilterGeography">География</label>
+                        <label class="graph-adv-label" for="graphFilterGeography" data-i18n="graph_filter_geography">География</label>
                         <select class="graph-adv-select" id="graphFilterGeography">
-                          <option value="">Все регионы</option>
+                          <option value="" data-i18n="graph_filter_all_regions">Все регионы</option>
                         </select>
                       </div>
                       <div class="graph-adv-filter-row">
-                        <label class="graph-adv-label" for="graphFilterPracticeRegion" title="Российская практика — Location.country/region с RU; зарубежная — остальные">Практика</label>
+                        <label class="graph-adv-label" for="graphFilterPracticeRegion" data-i18n-title="graph_filter_practice" data-i18n="graph_filter_practice" title="Российская практика — Location.country/region с RU; зарубежная — остальные">Практика</label>
                         <select class="graph-adv-select" id="graphFilterPracticeRegion">
-                          <option value="">Все</option>
-                          <option value="domestic">Российская (RU)</option>
-                          <option value="foreign">Зарубежная</option>
+                          <option value="" data-i18n="graph_filter_all">Все</option>
+                          <option value="domestic" data-i18n="graph_filter_practice_domestic">Российская (RU)</option>
+                          <option value="foreign" data-i18n="graph_filter_practice_foreign">Зарубежная</option>
                         </select>
                       </div>
                       <div class="graph-adv-filter-row graph-adv-year-row">
-                        <span class="graph-adv-label">Год публикации</span>
+                        <span class="graph-adv-label" data-i18n="graph_filter_year">Год публикации</span>
                         <div class="graph-adv-year-range">
                           <input type="range" id="graphFilterYearMin" min="1990" max="2026" value="1990" />
                           <input type="range" id="graphFilterYearMax" min="1990" max="2026" value="2026" />
@@ -326,35 +386,35 @@
                         </div>
                       </div>
                       <div class="graph-adv-filter-row">
-                        <label class="graph-adv-label" for="graphFilterConfidence">Мин. достоверность</label>
+                        <label class="graph-adv-label" for="graphFilterConfidence" data-i18n="graph_filter_confidence">Мин. достоверность</label>
                         <select class="graph-adv-select" id="graphFilterConfidence">
-                          <option value="0">Любая</option>
+                          <option value="0" data-i18n="graph_filter_conf_any">Любая</option>
                           <option value="0.5">≥ 50%</option>
                           <option value="0.7">≥ 70%</option>
                           <option value="0.85">≥ 85%</option>
                         </select>
                       </div>
                       <div class="graph-adv-filter-row">
-                        <label class="graph-adv-label" for="graphFilterMaterial">Материал</label>
-                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterMaterial" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
+                        <label class="graph-adv-label" for="graphFilterMaterial" data-i18n="graph_filter_material">Материал</label>
+                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterMaterial" data-i18n-placeholder="graph_filter_keyword_ph" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
                       </div>
                       <div class="graph-adv-filter-row">
-                        <label class="graph-adv-label" for="graphFilterProcess">Процесс</label>
-                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterProcess" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
+                        <label class="graph-adv-label" for="graphFilterProcess" data-i18n="graph_filter_process">Процесс</label>
+                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterProcess" data-i18n-placeholder="graph_filter_keyword_ph" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
                       </div>
                       <fieldset class="graph-adv-entity-types">
-                        <legend class="graph-adv-label">Тип документа</legend>
+                        <legend class="graph-adv-label" data-i18n="graph_filter_doc_type">Тип документа</legend>
                         <div class="graph-adv-checkboxes graph-adv-checkboxes-grid" id="graphDocTypeChecks"></div>
                       </fieldset>
                       <details class="graph-adv-rel-types">
                         <summary class="graph-adv-sub-toggle">
-                          <span class="graph-adv-sub-toggle-label">Тип связи</span>
+                          <span class="graph-adv-sub-toggle-label" data-i18n="graph_filter_rel_type">Тип связи</span>
                           <span class="graph-adv-sub-toggle-icon" aria-hidden="true">▼</span>
                         </summary>
                         <div class="graph-adv-checkboxes graph-adv-checkboxes-grid" id="graphRelationTypeChecks"></div>
                       </details>
                       <div class="graph-adv-filter-row">
-                        <label class="graph-adv-label" for="graphFilterLanguage">Язык</label>
+                        <label class="graph-adv-label" for="graphFilterLanguage" data-i18n="graph_filter_language">Язык</label>
                         <select class="graph-adv-select" id="graphFilterLanguage">
                           <option value="both">RU + EN</option>
                           <option value="ru">RU</option>
@@ -362,36 +422,36 @@
                         </select>
                       </div>
                       <div class="graph-adv-filter-row graph-adv-param-row">
-                        <span class="graph-adv-label">Параметр (Measurement)</span>
+                        <span class="graph-adv-label" data-i18n="graph_filter_param">Параметр (Measurement)</span>
                         <div class="graph-adv-param-range">
-                          <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericParam" placeholder="конц., temp, flow…" autocomplete="off" />
-                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMin" placeholder="мин" step="any" />
+                          <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericParam" data-i18n-placeholder="graph_filter_param_ph" placeholder="конц., temp, flow…" autocomplete="off" />
+                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMin" data-i18n-placeholder="graph_filter_min" placeholder="мин" step="any" />
                           <span class="graph-adv-param-sep">—</span>
-                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMax" placeholder="макс" step="any" />
+                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMax" data-i18n-placeholder="graph_filter_max" placeholder="макс" step="any" />
                         </div>
                       </div>
                       <div class="graph-adv-filter-row">
-                        <label class="graph-adv-label" for="graphFilterNumericMin" title="Фильтр узлов Measurement по numeric_value, concentration, temperature, flow_rate">Числовой диапазон</label>
+                        <label class="graph-adv-label" for="graphFilterNumericMin" data-i18n-title="graph_filter_numeric" data-i18n="graph_filter_numeric" title="Фильтр узлов Measurement по numeric_value, concentration, temperature, flow_rate">Числовой диапазон</label>
                         <div class="graph-adv-numeric-range">
-                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMin" placeholder="мин" step="any" />
+                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMin" data-i18n-placeholder="graph_filter_min" placeholder="мин" step="any" />
                           <span class="graph-adv-numeric-sep">—</span>
-                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMax" placeholder="макс" step="any" />
+                          <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMax" data-i18n-placeholder="graph_filter_max" placeholder="макс" step="any" />
                         </div>
                       </div>
                       <div class="graph-adv-toggles">
                         <label class="graph-adv-toggle">
                           <input type="checkbox" id="graphFilterContradictions" />
-                          <span>Показывать противоречия</span>
+                          <span data-i18n="graph_filter_show_contradictions">Показывать противоречия</span>
                         </label>
                         <label class="graph-adv-toggle">
                           <input type="checkbox" id="graphFilterGaps" />
-                          <span>Показывать пробелы</span>
+                          <span data-i18n="graph_filter_show_gaps">Показывать пробелы</span>
                         </label>
                       </div>
                     </div>
                     <div class="graph-adv-actions-sticky">
-                      <button type="button" class="btn btn-ghost btn-small" id="graphFilterResetBtn">Сбросить</button>
-                      <button type="button" class="btn btn-primary btn-small" id="graphFilterApplyBtn">Применить</button>
+                      <button type="button" class="btn btn-ghost btn-small" id="graphFilterResetBtn" data-i18n="graph_filter_reset">Сбросить</button>
+                      <button type="button" class="btn btn-primary btn-small" id="graphFilterApplyBtn" data-i18n="graph_filter_apply">Применить</button>
                       <span class="graph-adv-status muted" id="graphFilterStatus"></span>
                     </div>
                   </div>
@@ -412,13 +472,13 @@
             </div>
             <div class="graph-compare-panel hidden" id="graphComparePanel">
               <div class="graph-compare-head">
-                <h3>Сравнительный анализ</h3>
-                <p class="muted small">Выберите 2–3 узла Process или Material на графе (Ctrl+клик), затем «Обновить таблицу».</p>
+                <h3 data-i18n="graph_compare_title">Сравнительный анализ</h3>
+                <p class="muted small" data-i18n="graph_compare_lead">Выберите 2–3 узла Process или Material на графе (Ctrl+клик), затем «Обновить таблицу».</p>
               </div>
               <div class="graph-compare-selected" id="graphCompareSelected"></div>
               <div class="graph-compare-actions">
-                <button type="button" class="btn btn-ghost btn-small" id="graphCompareClearBtn">Очистить</button>
-                <button type="button" class="btn btn-primary btn-small" id="graphCompareRefreshBtn">Обновить таблицу</button>
+                <button type="button" class="btn btn-ghost btn-small" id="graphCompareClearBtn" data-i18n="graph_compare_clear">Очистить</button>
+                <button type="button" class="btn btn-primary btn-small" id="graphCompareRefreshBtn" data-i18n="graph_compare_refresh">Обновить таблицу</button>
               </div>
               <div class="graph-compare-table-wrap" id="graphCompareTableWrap"></div>
             </div>
@@ -429,37 +489,53 @@
       </section>
 
       <section class="page page-qdrant hidden" id="pageQdrant">
-        <div class="page-head">
-          <h1>Qdrant</h1>
-          <p class="muted page-lead">L3: эмбеддинг-поиск (mkg_chunks, без кластеров). L4: глобальные HDBSCAN-кластеры (mkg_claims). AI-поиск использует оба слоя.</p>
-        </div>
-        <section class="l3-section qdrant-search-section">
-          <h3>Семантический поиск</h3>
+        <div class="qdrant-page">
+          <header class="exec-page-head">
+            <h1>Qdrant</h1>
+            <p class="exec-lead" data-i18n="qdrant_lead">L3: mkg_chunks. L4: mkg_claims (кластеры). L1: mkg_entities (материалы, процессы, оборудование). Семантический поиск объединяет все три коллекции.</p>
+          </header>
+        <section class="l3-section qdrant-search-section exec-block panel-shell">
+          <h3 class="exec-subheading" data-i18n="qdrant_search_title">Поиск по всем слоям</h3>
+          <div class="qdrant-empty-banner hidden" id="qdrantEmptyBanner">
+            <p class="muted">Корпус не проиндексирован — поиск вернёт 0 результатов.</p>
+            <button class="btn btn-primary btn-small" id="qdrantEmptyReindexBtn" type="button">Переиндексировать корпус (L1+L3+L4)</button>
+          </div>
           <form class="search-form" id="qdrantSearchForm">
-            <input type="search" id="qdrantSearchQuery" placeholder="Запрос по всему корпусу…" autocomplete="off" />
-            <button class="btn btn-primary btn-small" type="submit">Найти</button>
+            <input type="search" id="qdrantSearchQuery" data-i18n-placeholder="qdrant_search_ph" placeholder="Запрос по L1+L3+L4…" autocomplete="off" />
+            <button class="btn btn-primary btn-small" type="submit" data-i18n="qdrant_search_btn">Найти</button>
           </form>
           <div class="search-form search-form-secondary">
-            <input type="search" id="qdrantSearchKeyword" placeholder="Фильтр результатов по слову…" autocomplete="off" />
+            <input type="search" id="qdrantSearchKeyword" data-i18n-placeholder="qdrant_keyword_ph" placeholder="Уточнение по слову (Enter — поиск, если верхнее поле пусто)…" autocomplete="off" />
           </div>
           <div class="qdrant-filter-chips" id="qdrantFilterChips" aria-label="Фильтры результатов поиска"></div>
           <p class="muted search-meta" id="qdrantSearchMeta"></p>
           <div class="search-results qdrant-search-results" id="qdrantSearchResults"></div>
         </section>
+        <section class="l3-section qdrant-entity-search-section exec-block panel-shell">
+          <h3 class="exec-subheading" data-i18n="qdrant_entity_search_title">Поиск материалов и процессов</h3>
+          <p class="muted small" data-i18n="qdrant_entity_search_lead">Тот же unified backend — mkg_entities + L3 + L4.</p>
+          <form class="search-form" id="qdrantEntitySearchForm">
+            <input type="search" id="qdrantEntitySearchQuery" data-i18n-placeholder="qdrant_entity_search_ph" placeholder="Материал или процесс…" autocomplete="off" />
+            <button class="btn btn-primary btn-small" type="submit" data-i18n="qdrant_search_btn">Найти</button>
+          </form>
+          <p class="muted search-meta" id="qdrantEntitySearchMeta"></p>
+          <div class="search-results qdrant-entity-search-results" id="qdrantEntitySearchResults"></div>
+        </section>
         <div class="l3-panel">
-          <section class="l3-section">
+          <section class="l3-section exec-block panel-shell">
             <div class="l3-stats-grid" id="l3Stats">—</div>
             <div class="embedding-status-line" id="l3EmbeddingStatus">Загрузка…</div>
             <pre class="qdrant-info muted" id="l3QdrantInfo"></pre>
             <div class="l3-actions">
-              <button class="btn btn-primary btn-small" id="l3IndexBtn" type="button">Индекс L3 (Qdrant)</button>
-              <button class="btn btn-ghost btn-small" id="l3IndexAllBtn" type="button">Все документы</button>
+              <button class="btn btn-primary btn-small" id="l3IndexAllBtn" type="button">Переиндексировать корпус</button>
+              <button class="btn btn-ghost btn-small" id="l3IndexBtn" type="button">Индекс документа</button>
+              <button class="btn btn-ghost btn-small" id="l3ReindexEntitiesBtn" type="button">Сущности (L1)</button>
               <button class="btn btn-ghost btn-small" id="l4ClusterBtn" type="button">Глобальная кластеризация L4</button>
             </div>
             <div class="qdrant-index-log" id="qdrantIndexLog"></div>
           </section>
-          <section class="l3-section l3-viz-section">
-            <h3>Карта кластеров L4 <span class="muted" id="qdrantClusterCount">(0)</span></h3>
+          <section class="l3-section l3-viz-section exec-block panel-shell">
+            <h3 class="exec-subheading">Карта кластеров L4 <span class="muted" id="qdrantClusterCount">(0)</span></h3>
             <p class="muted small qdrant-viz-meta" id="qdrantVizMeta">2D PCA · только L4 (mkg_claims) · HDBSCAN-области · клик — описание и связи</p>
             <p class="muted small qdrant-l3-note">L3 (mkg_chunks) индексируется отдельно — используется в поиске выше, не на этой карте.</p>
             <div class="qdrant-viz-legend" id="qdrantVizLegend"></div>
@@ -480,26 +556,113 @@
               </div>
             </details>
           </section>
-          <section class="l3-section">
-            <h3><span id="qdrantPointsTitle">Точки корпуса</span> <span class="muted" id="qdrantPointsCount">(0)</span></h3>
+          <section class="l3-section exec-block panel-shell">
+            <h3 class="exec-subheading"><span id="qdrantPointsTitle">Точки корпуса</span> <span class="muted" id="qdrantPointsCount">(0)</span></h3>
             <div class="qdrant-points-list" id="qdrantPointsList">
               <p class="muted">Проиндексируйте документы — точки появятся здесь.</p>
             </div>
           </section>
-          <details class="settings-advanced qdrant-advanced">
+          <details class="settings-advanced qdrant-advanced exec-block panel-shell">
             <summary>Диагностика и очистка</summary>
-            <button class="btn btn-ghost btn-small" id="diagBtn" type="button">Диагностика API</button>
+            <button class="btn btn-ghost btn-small exec-btn" id="diagBtn" type="button">Диагностика API</button>
             <div class="diag-list" id="diagList"></div>
-            <button class="btn btn-danger btn-small" id="clearDbBtn" type="button">Очистить базу</button>
+            <button class="btn btn-danger btn-small exec-btn" id="clearDbBtn" type="button">Очистить базу</button>
           </details>
+        </div>
+        </div>
+      </section>
+
+      <section class="page page-manager hidden" id="pageManager">
+        <div class="manager-page">
+          <header class="exec-page-head">
+            <h1 data-i18n="nav_manager">Панель руководителя</h1>
+            <p class="exec-lead" data-i18n="manager_lead">Покрытие знаний по направлениям, активность команд, сравнение технологий и зоны риска.</p>
+          </header>
+
+          <div class="exec-kpi-row" id="managerKpiRow">
+            <div class="exec-kpi skeleton"><span class="exec-kpi-value">…</span><span class="exec-kpi-label" data-i18n="dashboard_loading">Загрузка</span></div>
+          </div>
+
+          <section class="exec-block">
+            <h2 class="exec-heading" data-i18n="mgr_coverage_title">Покрытие знаний по направлениям</h2>
+            <div class="exec-table-wrap" id="domainCoverageWrap">
+              <table class="exec-table" id="domainCoverageTable">
+                <thead>
+                  <tr>
+                    <th data-i18n="mgr_col_domain">Направление</th>
+                    <th data-i18n="mgr_col_docs">Документы</th>
+                    <th data-i18n="mgr_col_nodes">Факты L4</th>
+                    <th data-i18n="mgr_col_coverage">Покрытие</th>
+                  </tr>
+                </thead>
+                <tbody id="domainCoverageBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="exec-block">
+            <h2 class="exec-heading" data-i18n="mgr_activity_title">Активность команд</h2>
+            <div id="teamActivityBlock" class="exec-activity-grid"></div>
+          </section>
+
+          <section class="exec-block">
+            <h2 class="exec-heading" data-i18n="mgr_compare_title">Сравнительный анализ технологий</h2>
+            <p class="exec-note" data-i18n="mgr_compare_note">Process / Material / TechnologySolution из графа. Полные CAPEX и eco-ограничения — roadmap L6.</p>
+            <div class="exec-table-wrap" id="techCompareWrap">
+              <table class="exec-table exec-table-compact" id="techCompareTable">
+                <thead>
+                  <tr>
+                    <th data-i18n="mgr_col_tech">Технология</th>
+                    <th data-i18n="mgr_col_efficiency">Эффективность</th>
+                    <th data-i18n="mgr_col_capex">CAPEX</th>
+                    <th data-i18n="mgr_col_cold">Холодный климат</th>
+                    <th data-i18n="mgr_col_eco">Эко-ограничения</th>
+                    <th data-i18n="mgr_col_sources">Источники</th>
+                  </tr>
+                </thead>
+                <tbody id="techCompareBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="exec-block">
+            <div class="exec-block-head">
+              <h2 class="exec-heading" data-i18n="dashboard_risks_title">Зоны риска</h2>
+              <div class="dashboard-toolbar exec-toolbar-inline">
+                <button type="button" class="btn btn-ghost btn-small exec-btn" id="dashboardRefreshBtn" data-i18n="dashboard_refresh">Обновить</button>
+                <div class="dashboard-export-group">
+                  <button type="button" class="btn btn-ghost btn-small exec-btn" id="dashboardExportJsonBtn" data-i18n="dashboard_export_json">JSON</button>
+                  <button type="button" class="btn btn-ghost btn-small exec-btn" id="dashboardExportCsvBtn" data-i18n="dashboard_export_csv">CSV</button>
+                  <button type="button" class="btn btn-ghost btn-small exec-btn" id="dashboardExportRisksBtn" data-i18n="dashboard_export_risks">Риски</button>
+                  <button type="button" class="btn btn-ghost btn-small exec-btn" id="dashboardExportCompareBtn" data-i18n="dashboard_export_compare">Сравнение CSV</button>
+                  <button type="button" class="btn btn-ghost btn-small exec-btn" id="dashboardExportDocsBtn" data-i18n="dashboard_export_docs">Документы</button>
+                  <button type="button" class="btn btn-ghost btn-small exec-btn export-all-link" id="dashboardAllExportsBtn" data-i18n="export_all_link">Все экспорты</button>
+                </div>
+              </div>
+            </div>
+            <div class="exec-table-wrap" id="riskZonesWrap">
+              <table class="exec-table exec-table-risk" id="riskZonesTable">
+                <thead>
+                  <tr>
+                    <th data-i18n="mgr_col_severity">Критичность</th>
+                    <th data-i18n="mgr_col_topic">Тема</th>
+                    <th data-i18n="mgr_col_sources">Источники</th>
+                    <th data-i18n="mgr_col_contradiction">Противор.</th>
+                    <th data-i18n="mgr_col_detail">Описание</th>
+                  </tr>
+                </thead>
+                <tbody id="riskZonesBody"></tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </section>
 
       <section class="page page-guide hidden" id="pageGuide">
         <div class="doc-guide-shell">
-          <header class="doc-guide-header">
-            <h1 class="doc-guide-title">Документация MKG</h1>
-            <p class="muted doc-guide-lead">Архитектура пайплайна, агентов и ролей — в приложении, без внешних ссылок.</p>
+          <header class="doc-guide-header exec-page-head">
+            <h1 class="doc-guide-title" data-i18n="guide_title">Документация MKG</h1>
+            <p class="exec-lead doc-guide-lead" data-i18n="guide_lead">Архитектура пайплайна, агентов и ролей — в приложении, без внешних ссылок.</p>
           </header>
           <nav class="doc-section-tabs" id="docSectionTabs" role="tablist" aria-label="Разделы документации"></nav>
           <article class="doc-content-panel md-render-view" id="guideContent" aria-live="polite">
@@ -515,62 +678,86 @@
 
       <section class="page page-settings hidden" id="pageSettings">
         <div class="settings-page">
-          <h1>Настройки</h1>
-          <p class="muted page-lead">Модели пайплайна, обзор знаний и подписки на темы (MVP).</p>
+          <header class="exec-page-head">
+            <h1 data-i18n="settings_title">Настройки</h1>
+            <p class="exec-lead" data-i18n="settings_lead">Модели пайплайна, обзор знаний и подписки на темы (MVP).</p>
+          </header>
 
-          <section class="settings-section dashboard-section" id="dashboardSection">
-            <h2>Обзор знаний</h2>
-            <p class="muted small">Покрытие корпуса, аномалии L4 и зоны риска (противоречия, разреженные кластеры).</p>
-            <div class="dashboard-cards" id="dashboardCards">
-              <div class="dashboard-card skeleton"><span class="dashboard-card-value">…</span><span class="dashboard-card-label">Загрузка</span></div>
+          <section class="settings-section exec-block panel-shell appearance-section" id="appearanceSection">
+            <h2 class="exec-heading" data-i18n="settings_appearance">Оформление</h2>
+            <div class="appearance-grid">
+              <div class="appearance-row">
+                <span class="small" data-i18n="settings_lang">Язык интерфейса</span>
+                <div class="pref-toggle" role="group">
+                  <button type="button" class="pref-btn" data-lang="ru">RU</button>
+                  <button type="button" class="pref-btn" data-lang="en">EN</button>
+                </div>
+              </div>
+              <div class="appearance-row">
+                <span class="small" data-i18n="settings_theme">Тема</span>
+                <div class="pref-toggle" role="group">
+                  <button type="button" class="pref-btn" data-theme-choice="light" data-i18n="theme_light">Светлая</button>
+                  <button type="button" class="pref-btn" data-theme-choice="dark" data-i18n="theme_dark">Тёмная</button>
+                </div>
+              </div>
             </div>
-            <div class="dashboard-domains" id="dashboardDomains"></div>
-            <div class="dashboard-risks">
-              <h3 class="dashboard-risks-title">Зоны риска</h3>
-              <ul class="dashboard-risk-list" id="dashboardRiskList"></ul>
-            </div>
-            <button type="button" class="btn btn-ghost btn-small" id="dashboardRefreshBtn">Обновить обзор</button>
           </section>
 
-          <section class="settings-section watchlist-section" id="watchlistSection">
-            <h2>Подписки на темы (MVP)</h2>
-            <p class="muted small">Ключевые слова через запятую. Toast при загрузке документа с совпадением в названии. Roadmap: email/push.</p>
-            <label class="small" for="topicWatchlistInput">Темы</label>
+          <section class="settings-section exec-block panel-shell export-section" id="exportSection">
+            <h2 class="exec-heading" data-i18n="export_section_title">Экспорт данных</h2>
+            <p class="muted" data-i18n="export_section_lead">Скачайте обзор, риски, документы, граф, аномалии L4 и диалоги — все форматы экспорта в одном месте.</p>
+            <div class="export-cards" id="exportCards" role="list"></div>
+          </section>
+
+          <section class="settings-section exec-block panel-shell watchlist-section" id="watchlistSection">
+            <h2 class="exec-heading" data-i18n="watchlist_title">Подписки на темы (MVP)</h2>
+            <p class="muted small" data-i18n="watchlist_lead">Ключевые слова через запятую. Toast при загрузке документа с совпадением в названии. Roadmap: email/push.</p>
+            <label class="small" for="topicWatchlistInput" data-i18n="watchlist_label">Темы</label>
             <input type="text" class="settings-text-input" id="topicWatchlistInput" placeholder="хвосты, медь, экология…" autocomplete="off" />
-            <button type="button" class="btn btn-ghost btn-small" id="topicWatchlistSaveBtn">Сохранить подписки</button>
+            <button type="button" class="btn btn-ghost btn-small" id="topicWatchlistSaveBtn" data-i18n="watchlist_save">Сохранить подписки</button>
             <span class="muted small" id="topicWatchlistStatus"></span>
           </section>
 
-          <h2 class="settings-subheading">Модели</h2>
-          <p class="muted page-lead">Модель для каждого сервиса пайплайна. Сохраняется в Postgres и применяется к новым задачам.</p>
+          <section class="settings-section exec-block panel-shell data-access-section" id="dataAccessSection">
+            <h2 class="exec-heading" data-i18n="settings_data_access">Доступ к данным</h2>
+            <p class="muted" data-i18n="settings_data_access_lead">Какие роли видят документы каждого грифа. Администратор всегда имеет полный доступ.</p>
+            <div class="data-access-matrix-wrap" id="dataAccessMatrix"></div>
+            <div class="settings-actions">
+              <button class="btn btn-primary btn-small" id="saveDataAccessBtn" type="button" data-i18n="settings_data_access_save">Сохранить матрицу</button>
+              <span class="settings-save-status muted" id="dataAccessSaveStatus"></span>
+            </div>
+          </section>
+
+          <h2 class="exec-heading settings-subheading" data-i18n="settings_models">Модели</h2>
+          <p class="exec-note" data-i18n="settings_models_lead">Модель для каждого сервиса пайплайна. Сохраняется в Postgres и применяется к новым задачам.</p>
           <div class="settings-grid">
-            <div class="settings-section">
-              <h2>Извлечение графа</h2>
-              <p class="muted">LLM для extraction L1–L6 и фильтра чанков при ingestion.</p>
-              <label class="small" for="llmModel">Модель LLM</label>
-              <select id="llmModel"></select>
+            <div class="settings-section exec-block panel-shell">
+              <h2 class="exec-subheading" data-i18n="settings_model_graph_title">Извлечение графа</h2>
+              <p class="muted" data-i18n="settings_model_graph_lead">LLM для извлечения L1–L6 и фильтрации чанков при ingestion.</p>
+              <label class="small" for="llmModel" data-i18n="settings_model_llm_label">Модель LLM</label>
+              <select id="llmModel" class="settings-model-select"></select>
             </div>
-            <div class="settings-section">
-              <h2>OCR (ingestion)</h2>
-              <p class="muted">Распознавание PDF и изображений. «auto» — выбор по типу файла.</p>
-              <label class="small" for="ocrModel">Модель OCR</label>
-              <select id="ocrModel"></select>
+            <div class="settings-section exec-block panel-shell">
+              <h2 class="exec-subheading" data-i18n="settings_model_ocr_title">OCR (ingestion)</h2>
+              <p class="muted" data-i18n="settings_model_ocr_lead">Распознавание PDF и изображений. «auto» — выбор по типу файла.</p>
+              <label class="small" for="ocrModel" data-i18n="settings_model_ocr_label">Модель OCR</label>
+              <select id="ocrModel" class="settings-model-select"></select>
             </div>
-            <div class="settings-section">
-              <h2>Qdrant — индексация</h2>
-              <p class="muted">Embedding doc при записи точек в коллекции.</p>
-              <label class="small" for="embDocModel">Embedding doc</label>
-              <select id="embDocModel"></select>
+            <div class="settings-section exec-block panel-shell">
+              <h2 class="exec-subheading" data-i18n="settings_model_qdrant_index_title">Qdrant — индексация</h2>
+              <p class="muted" data-i18n="settings_model_qdrant_index_lead">Embedding doc при записи точек в коллекции.</p>
+              <label class="small" for="embDocModel" data-i18n="settings_model_emb_doc_label">Embedding doc</label>
+              <select id="embDocModel" class="settings-model-select"></select>
             </div>
-            <div class="settings-section">
-              <h2>Qdrant — поиск</h2>
-              <p class="muted">Embedding query при семантическом поиске.</p>
-              <label class="small" for="embQueryModel">Embedding query</label>
-              <select id="embQueryModel"></select>
+            <div class="settings-section exec-block panel-shell">
+              <h2 class="exec-subheading" data-i18n="settings_model_qdrant_search_title">Qdrant — поиск</h2>
+              <p class="muted" data-i18n="settings_model_qdrant_search_lead">Embedding query при семантическом поиске.</p>
+              <label class="small" for="embQueryModel" data-i18n="settings_model_emb_query_label">Embedding query</label>
+              <select id="embQueryModel" class="settings-model-select"></select>
             </div>
           </div>
           <div class="settings-actions">
-            <button class="btn btn-primary btn-small" id="saveConfigBtn" type="button">Сохранить</button>
+            <button class="btn btn-primary btn-small" id="saveConfigBtn" type="button" data-i18n="settings_save">Сохранить</button>
             <span class="settings-save-status muted" id="settingsSaveStatus"></span>
           </div>
         </div>
@@ -579,8 +766,8 @@
 
     <aside class="detail-panel hidden" id="detailPanel">
       <div class="detail-head">
-        <h3 id="detailTitle">Узел</h3>
-        <button class="btn-icon" id="closeDetailBtn" type="button" aria-label="Закрыть">×</button>
+        <h3 id="detailTitle" data-i18n="detail_node">Узел</h3>
+        <button class="btn-icon" id="closeDetailBtn" type="button" data-i18n-title="detail_close" aria-label="Закрыть">×</button>
       </div>
       <div class="detail-body" id="detailBody"></div>
     </aside>
@@ -625,9 +812,9 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
-  <script src="/static/js/icons.js?v=100"></script>
-  <script src="/static/js/graph-mini.js?v=100"></script>
-  <script src="/static/js/app.js?v=100"></script>
-  <script src="/static/js/chats.js?v=100"></script>
+  <script src="/static/js/icons.js?v=134"></script>
+  <script src="/static/js/graph-mini.js?v=134"></script>
+  <script src="/static/js/app.js?v=134"></script>
+  <script src="/static/js/chats.js?v=135"></script>
 </body>
 </html>

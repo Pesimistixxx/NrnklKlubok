@@ -1,4 +1,4 @@
-"""Синглтон Qdrant: коллекции чанков и утверждений (Claim)."""
+"""Синглтон Qdrant: коллекции чанков, утверждений (Claim) и сущностей L1."""
 from __future__ import annotations
 
 from qdrant_client import AsyncQdrantClient
@@ -35,6 +35,7 @@ class QdrantClientSingleton:
         for name in (
             self.settings.qdrant_collection_chunks,
             self.settings.qdrant_collection_claims,
+            self.settings.qdrant_collection_entities,
         ):
             exists = await self.client.collection_exists(name)
             if not exists:

@@ -14,10 +14,45 @@
     L1: "#0288d1", L2: "#7b1fa2", L3: "#546e7a", L4: "#ef6c00", L5: "#c62828", L6: "#2e7d32", "L?": "#78909c",
   };
 
-  const instances = new WeakMap();
+  const instances = new Map();
   const resizeObservers = new WeakMap();
   const resizeTimers = new WeakMap();
   const RESIZE_DEBOUNCE_MS = 150;
+  let activeWalkSession = null;
+
+  function forEachInstance(callback) {
+    if (instances instanceof Map) {
+      for (const inst of instances.values()) callback(inst);
+    } else if (Array.isArray(instances)) {
+      for (const inst of instances) callback(inst);
+    } else if (instances && typeof instances === "object") {
+      for (const key of Object.keys(instances)) callback(instances[key]);
+    }
+  }
+
+  function stopWalk() {
+    try {
+      if (activeWalkSession) {
+        try { activeWalkSession.cancel(); } catch { /* ignore */ }
+        activeWalkSession = null;
+      }
+      forEachInstance((inst) => {
+        clearRevealTimers(inst);
+        if (inst?.network) {
+          try {
+            inst.network.setOptions({ physics: { enabled: false } });
+            inst.network.unselectAll();
+          } catch { /* ignore */ }
+        }
+      });
+    } catch { /* ignore */ }
+  }
+
+  function clearRevealTimers(inst) {
+    if (!inst?.revealTimers?.length) return;
+    inst.revealTimers.forEach((id) => clearTimeout(id));
+    inst.revealTimers = [];
+  }
 
   function bindCameraStable(network, inst) {
     if (inst._cameraBound || !network) return;
@@ -64,10 +99,18 @@
     return LABEL_LAYER[label] || "L?";
   }
 
+  function stripMarkup(text) {
+    const raw = String(text || "");
+    if (!raw.includes("<")) return raw;
+    const tmp = document.createElement("div");
+    tmp.innerHTML = raw;
+    return (tmp.textContent || tmp.innerText || "").replace(/\s+/g, " ").trim();
+  }
+
   function shortLabel(node) {
     const props = node.props || {};
     const text = props.name || props.quote || props.raw_text_ru || props.title || node.label || node.id || "";
-    const s = String(text).replace(/\s+/g, " ").trim();
+    const s = stripMarkup(text).replace(/\s+/g, " ").trim();
     if (s.length > 18) return s.slice(0, 16) + "…";
     return s || String(node.id || "").slice(-12);
   }
@@ -132,11 +175,11 @@
           border: isSeed ? "#004999" : (isVisited ? "#fff" : "#cfd8dc"),
           highlight: { background: "#01579b", border: "#fff" },
         },
-        borderWidth: isSeed ? 2.5 : (isVisited ? 1.5 : 1),
-        font: { color: "#fff", size: 9, face: "Inter, sans-serif" },
+        borderWidth: isSeed ? 3 : (isVisited ? 2 : 1.5),
+        font: { color: "#fff", size: 11, face: "Inter, system-ui, sans-serif", strokeWidth: 2, strokeColor: "rgba(0,0,0,0.35)" },
         shape: "box",
-        margin: 4,
-        widthConstraint: { maximum: 88 },
+        margin: 6,
+        widthConstraint: { maximum: 100 },
         level: walkOrder != null ? walkOrder : (isSeed ? 0 : 1),
         hidden: animate,
         opacity: animate ? 0 : 1,
@@ -150,12 +193,12 @@
         from,
         to,
         title: r.type,
-        arrows: { to: { enabled: true, scaleFactor: 0.4 } },
+        arrows: { to: { enabled: true, scaleFactor: 0.55 } },
         color: {
-          color: traversed ? "rgba(2,136,209,0.95)" : "rgba(144,202,249,0.75)",
+          color: traversed ? "rgba(2,136,209,0.95)" : "rgba(55,90,130,0.82)",
           highlight: "#0288d1",
         },
-        width: traversed ? 2.4 : 0.8,
+        width: traversed ? 2.8 : 1.6,
         smooth: { type: "dynamic", roundness: 0.35 },
         hidden: animate,
       };
@@ -168,6 +211,7 @@
     if (inst?.network) {
       inst.network.destroy();
     }
+    clearRevealTimers(inst);
     detachGraphObservers(container);
     instances.delete(container);
     if (container) container.innerHTML = "";
@@ -199,32 +243,33 @@
           enabled: true,
           stabilization: { iterations: 40, fit: true },
           barnesHut: {
-            gravitationalConstant: -800,
-            centralGravity: 0.12,
-            springLength: 120,
-            springConstant: 0.02,
-            damping: 0.25,
+            gravitationalConstant: -1200,
+            centralGravity: 0.14,
+            springLength: 150,
+            springConstant: 0.025,
+            damping: 0.24,
           },
         },
         interaction: { hover: true, zoomView: true, dragView: true, dragNodes: true },
       },
     );
 
+    const revealTimers = [];
+    const nodeUpdates = dataSets.nodes.get().map((n, idx) => ({
+      id: n.id,
+      hidden: false,
+      opacity: 1,
+      delay: idx * 40,
+    }));
     const reveal = () => {
-      const nodeUpdates = dataSets.nodes.get().map((n, idx) => ({
-        id: n.id,
-        hidden: false,
-        opacity: 1,
-        delay: idx * 40,
-      }));
       nodeUpdates.forEach((u, idx) => {
-        setTimeout(() => dataSets.nodes.update({ id: u.id, hidden: false, opacity: 1 }), idx * 45);
+        revealTimers.push(setTimeout(() => dataSets.nodes.update({ id: u.id, hidden: false, opacity: 1 }), idx * 45));
       });
       rels.slice(0, 120).forEach((_, idx) => {
-        setTimeout(() => {
+        revealTimers.push(setTimeout(() => {
           const eid = `e${idx}`;
           if (dataSets.edges.get(eid)) dataSets.edges.update({ id: eid, hidden: false });
-        }, nodes.length * 45 + idx * 30);
+        }, nodes.length * 45 + idx * 30));
       });
     };
 
@@ -240,7 +285,14 @@
       dataSets.edges.update(visEdges.map((e) => ({ id: e.id, hidden: false })));
     }
 
-    const inst = { network, dataSets, edgeSeq: visEdges.length, userMovedCamera: false, hasInitialFit: false };
+    const inst = {
+      network,
+      dataSets,
+      edgeSeq: visEdges.length,
+      userMovedCamera: false,
+      hasInitialFit: false,
+      revealTimers,
+    };
     bindCameraStable(network, inst);
     attachResizeObserver(container, inst);
     instances.set(container, inst);
@@ -313,12 +365,12 @@
         from,
         to,
         title: r.type,
-        arrows: { to: { enabled: true, scaleFactor: 0.4 } },
+        arrows: { to: { enabled: true, scaleFactor: 0.55 } },
         color: {
-          color: traversed ? "rgba(2,136,209,0.95)" : "rgba(144,202,249,0.75)",
+          color: traversed ? "rgba(2,136,209,0.95)" : "rgba(55,90,130,0.82)",
           highlight: "#0288d1",
         },
-        width: traversed ? 2.4 : 0.8,
+        width: traversed ? 2.8 : 1.6,
         smooth: { type: "dynamic", roundness: 0.35 },
         hidden: animate,
       };
@@ -354,11 +406,11 @@
   }
 
   const GRAPH_WALK_UI_STEP_MS = 1300;
-  const WALK_NODE_FADE_MS = 350;
-  const WALK_EDGE_FADE_MS = 350;
-  const WALK_STEP_OVERLAP_MS = 220;
-  const WALK_FOCUS_SCALE = 1.015;
-  const WALK_FOCUS_EASING = "easeInOutQuart";
+  const WALK_NODE_FADE_MS = 280;
+  const WALK_EDGE_FADE_MS = 280;
+  const WALK_STEP_OVERLAP_MS = 280;
+  const WALK_FOCUS_SCALE = 1.0;
+  const WALK_FOCUS_EASING = "easeInOutQuad";
   const WALK_HIGHLIGHT_BORDER = "#ffb74d";
   const WALK_HIGHLIGHT_EDGE = "rgba(255, 183, 77, 0.92)";
 
@@ -508,9 +560,11 @@
 
   function highlightWalkPath(containerOrNetwork, walkPath, { intervalMs = GRAPH_WALK_UI_STEP_MS, onStep = null, initialDelayMs = 320 } = {}) {
     if (!walkPath?.length) return Promise.resolve();
-    let inst = instances.get(containerOrNetwork);
+    let inst = instances.get?.(containerOrNetwork) ?? null;
     if (!inst) {
-      inst = [...instances.values()].find((i) => i.network === containerOrNetwork);
+      forEachInstance((candidate) => {
+        if (!inst && candidate?.network === containerOrNetwork) inst = candidate;
+      });
     }
     const dataSets = inst?.dataSets;
     const network = inst?.network;
@@ -534,8 +588,22 @@
       if (typeof stop === "function") activeTweens.push(stop);
     };
 
-    const focusDuration = Math.min(intervalMs * 0.72, 920);
-    const stepGapMs = Math.max(480, intervalMs - WALK_STEP_OVERLAP_MS);
+    const restoreStyles = () => {
+      origNodes.forEach((style, id) => {
+        try { dataSets.nodes.update({ id, borderWidth: style.borderWidth, color: style.color }); } catch { /* ignore */ }
+      });
+      origEdges.forEach((style, id) => {
+        try { dataSets.edges.update({ id, width: style.width, color: style.color }); } catch { /* ignore */ }
+      });
+      try { network.unselectAll(); } catch { /* ignore */ }
+    };
+
+    try {
+      network.setOptions({ physics: { enabled: false } });
+    } catch { /* ignore */ }
+
+    const focusDuration = Math.min(intervalMs * 0.55, 650);
+    const stepGapMs = Math.max(520, intervalMs - WALK_STEP_OVERLAP_MS);
 
     const highlightStep = (step) => {
       const nid = step.node_id;
@@ -637,9 +705,17 @@
       cancelled = true;
       if (timerId) clearTimeout(timerId);
       stopTweens();
+      restoreStyles();
     };
 
-    promise.cancel = cancel;
+    if (activeWalkSession) {
+      try { activeWalkSession.cancel(); } catch { /* ignore */ }
+    }
+    activeWalkSession = { cancel, promise, restore: restoreStyles };
+    promise.finally(() => {
+      if (!cancelled) restoreStyles();
+      if (activeWalkSession?.promise === promise) activeWalkSession = null;
+    });
     return promise;
   }
 
@@ -651,6 +727,8 @@
     mergeInto,
     dedupeGraphNodes,
     highlightWalkPath,
+    stopWalk,
+    isWalkActive: () => !!activeWalkSession,
     GRAPH_WALK_UI_STEP_MS,
     WALK_NODE_FADE_MS,
     WALK_EDGE_FADE_MS,

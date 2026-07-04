@@ -82,3 +82,4 @@ class OrchestratorState(TypedDict, total=False):
     max_rounds: int
     layers_invoked: list[str]
     orchestrator_next: str | None
+    conversational_intent: str | None

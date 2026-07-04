@@ -448,10 +448,11 @@ async def run_extraction(ctx: dict[str, Any], document_id: str) -> dict[str, Any
             index_stats = await index_document_graph(document_id, payload)
 
             log.info(
-                "qdrant indexed doc_id=%s l3=%s l4=%s total=%s",
+                "qdrant indexed doc_id=%s l3=%s l4=%s entities=%s total=%s",
                 document_id,
                 index_stats.get("indexed_l3", 0),
                 index_stats.get("indexed_l4", 0),
+                index_stats.get("indexed_entities", 0),
                 index_stats.get("indexed", 0),
             )
 

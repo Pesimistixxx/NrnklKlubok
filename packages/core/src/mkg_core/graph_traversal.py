@@ -900,8 +900,9 @@ async def neo4j_keyword_seeds(query: str, *, limit: int = 12) -> list[dict[str, 
     q = query.strip().lower()
     if not q:
         return []
-    tokens = [t for t in re.split(r"\s+", q) if len(t) >= 2][:4]
-    needle = tokens[0] if tokens else q[:48]
+    tokens = [t for t in re.split(r"\s+", q) if len(t) >= 2][:6]
+    if not tokens:
+        tokens = [q[:48]]
     client = Neo4jClient.instance()
     try:
         await client.verify()
@@ -909,8 +910,9 @@ async def neo4j_keyword_seeds(query: str, *, limit: int = 12) -> list[dict[str, 
         log.debug("neo4j keyword search unavailable: %s", exc)
         return []
 
-    rows = await client.run(
-        """
+    hits: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    cypher = """
         MATCH (n)
         WHERE n.id IS NOT NULL
         AND (
@@ -922,10 +924,21 @@ async def neo4j_keyword_seeds(query: str, *, limit: int = 12) -> list[dict[str, 
         )
         RETURN n.id AS id, labels(n)[0] AS label, properties(n) AS props
         LIMIT $limit
-        """,
-        {"q": needle, "limit": limit},
-    )
-    return [_hit_from_neo4j_row(row) for row in rows if row.get("id")]
+        """
+    for needle in tokens:
+        rows = await client.run(
+            cypher,
+            {"q": needle, "limit": max(3, limit - len(hits))},
+        )
+        for row in rows:
+            nid = str(row.get("id") or "")
+            if not nid or nid in seen_ids:
+                continue
+            seen_ids.add(nid)
+            hits.append(_hit_from_neo4j_row(row))
+            if len(hits) >= limit:
+                return hits
+    return hits
 
 
 def keyword_seeds_from_docs(

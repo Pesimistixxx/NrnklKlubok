@@ -1,7 +1,7 @@
 """Pydantic-схемы API gateway."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Literal
 
@@ -37,6 +37,11 @@ class DocumentOut(BaseModel):
     l4_clusters: int | None = None
     l4_anomalies: int | None = None
     l4_clustered: int | None = None
+    source_location: str | None = None
+    geography: str | None = None
+    material_date: date | None = None
+    tags: list[str] = Field(default_factory=list)
+    ingested_at: datetime | None = None
 
 
 class DocumentList(BaseModel):
@@ -44,6 +49,7 @@ class DocumentList(BaseModel):
     total: int
     page: int
     page_size: int
+    restricted_count: int = 0
 
 
 class BatchUploadItem(BaseModel):
@@ -88,6 +94,25 @@ class ClearDatabaseOut(BaseModel):
     storage: dict[str, int]
     postgres_documents: int
     neo4j_cleared: bool
+
+
+class ReindexEntitiesOut(BaseModel):
+    documents: int
+    indexed: int
+    skipped: int
+    collection: str
+    per_document: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReindexCorpusOut(BaseModel):
+    documents: int
+    indexed_l3: int
+    indexed_l4: int
+    indexed_entities: int
+    skipped: int
+    per_document: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class RuntimeConfigUpdate(BaseModel):
@@ -318,6 +343,59 @@ class GlobalSearchRequest(BaseModel):
         default=None,
         description="Ограничить поиск указанными документами",
     )
+    role_id: str | None = Field(default=None, description="Роль для фильтра по грифу")
+
+
+class UnifiedSearchRequest(GlobalSearchRequest):
+    """Alias for POST /api/v1/search."""
+
+
+class UnifiedSearchHit(BaseModel):
+    node_id: str
+    label: str
+    layer: str
+    score: float
+    text: str
+    document_id: str | None = None
+    entity_type: str | None = None
+    collection: str | None = None
+    mode: str = "semantic"
+    retrieval_factors: list[str] = Field(default_factory=list)
+    cluster_id: int | None = None
+    is_anomaly: bool | None = None
+    anomaly_score: float | None = None
+    md_file: str = ""
+
+
+class UnifiedSearchOut(BaseModel):
+    query: str
+    mode: str
+    hits: list[UnifiedSearchHit]
+    total: int
+    collections: dict[str, int] = Field(default_factory=dict)
+    note: str | None = None
+
+
+class EntitySearchHit(BaseModel):
+    node_id: str
+    entity_type: str
+    label: str
+    layer: str = "L1"
+    score: float
+    text: str
+    document_id: str | None = None
+    geography: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    mode: str = "semantic"
+    retrieval_factors: list[str] = Field(default_factory=list)
+
+
+class EntitySearchOut(BaseModel):
+    query: str
+    types: list[str]
+    hits: list[EntitySearchHit]
+    total: int
+    collection: str
 
 
 class AgentOntologyLayer(BaseModel):
@@ -345,6 +423,7 @@ class AgentEmbeddingStatusOut(BaseModel):
     qdrant_url: str
     qdrant_ok: bool = True
     total_points: int = 0
+    entity_points: int | None = None
     collections: dict[str, AgentEmbeddingCollection]
     vector_size: int
     yandex_configured: bool
@@ -467,10 +546,25 @@ class RoleOut(BaseModel):
     accent_color: str = "#0071e3"
     capability_ru: str = ""
     differs_from: str = ""
+    allowed_classifications: list[str] = Field(default_factory=lambda: ["открытый"])
 
 
 class RolesOut(BaseModel):
     roles: list[RoleOut]
+
+
+class DataAccessOut(BaseModel):
+    classifications: list[str]
+    roles: list[str]
+    role_names: dict[str, str] = Field(default_factory=dict)
+    matrix: dict[str, dict[str, bool]]
+    defaults: dict[str, list[str]] = Field(default_factory=dict)
+    current_role: str = "viewer"
+    allowed_classifications: list[str] = Field(default_factory=lambda: ["открытый"])
+
+
+class DataAccessUpdate(BaseModel):
+    matrix: dict[str, dict[str, bool]]
 
 
 class RolePromptOut(BaseModel):
@@ -573,13 +667,18 @@ class ChatCompleteIn(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=12000)
     include_graph: bool = True
     include_artifacts: bool = True
-    speed_mode: Literal["fast", "full"] = Field(
+    speed_mode: Literal["fast", "full", "compare"] = Field(
         default="full",
-        description="fast — RAG за ~5 с без оркестратора; full — оркестратор и цепочки рассуждений",
+        description="fast — RAG за ~3–4 с; full — оркестратор; compare — таблица сравнения технологий",
     )
     document_ids: list[str] = Field(
         default_factory=list,
         description="Ограничить поиск Qdrant документами, загруженными в чат",
+    )
+    ui_lang: str | None = Field(
+        default=None,
+        max_length=8,
+        description="Язык UI (ru/en) — fallback, если язык запроса неоднозначен",
     )
 
 
@@ -624,7 +723,7 @@ class ChatCompleteOut(BaseModel):
     sources: list[ChatSourceOut] = Field(default_factory=list)
     layer_results: list[dict[str, Any]] | None = None
     timing_ms: int = 0
-    speed_mode: Literal["fast", "full"] = "full"
+    speed_mode: Literal["fast", "full", "compare"] = "full"
 
 
 class QueryTestIn(BaseModel):
@@ -655,7 +754,7 @@ class AgentServiceRunIn(BaseModel):
     user_role: str = "researcher"
     limit: int = Field(default=5, ge=1, le=20)
     history: list[ChatHistoryTurn] = Field(default_factory=list, max_length=20)
-    speed_mode: Literal["fast", "full"] = "full"
+    speed_mode: Literal["fast", "full", "compare"] = "full"
 
 
 class AgentServiceRunOut(BaseModel):

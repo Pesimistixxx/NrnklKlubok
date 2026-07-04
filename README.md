@@ -81,8 +81,8 @@ UI (gateway :8000)
 1. `POST /api/v1/documents` — сохраняет source, ставит `run_ingestion`.
 2. Worker: OCR/парсинг → **clean** и **marked** Markdown.
 3. При `AUTO_EXTRACT_AFTER_INGEST=true` — extraction L1–L6 → JSON graph → Neo4j.
-4. Индексация Qdrant: `POST /api/v1/documents/{id}/index` (или авто в UI).
-5. L4 HDBSCAN: `POST /api/v1/documents/{id}/l4-cluster` (режим `full`).
+4. Worker автоиндексирует Qdrant (L3 chunks, L4 claims, L1 entities); retry: `POST …/index`.
+5. Worker запускает L4 HDBSCAN (режим `full`); retry: `POST …/l4-cluster`.
 
 Подробнее: [Docs/22_pipeline_layers.md](./Docs/22_pipeline_layers.md).
 

@@ -1,5 +1,5 @@
 from mkg_core.annotated_md import build_marked_markdown
-from mkg_core.embeddings import embedding_status, index_document_graph, search_document
+from mkg_core.embeddings import embedding_status, index_document_graph, reindex_corpus, reindex_corpus_entities, search_document, search_entities
 from mkg_core.config import Settings, get_settings
 from mkg_core.diagnostics import run_diagnostics
 from mkg_core.llm import YandexLLMClient
@@ -59,4 +59,5 @@ __all__ = [
     "embedding_status",
     "index_document_graph",
     "search_document",
+    "search_entities",
 ]

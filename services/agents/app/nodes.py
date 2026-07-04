@@ -61,7 +61,7 @@ _PLANNER_PROMPT = """
 
 _ANSWER_STYLE = (
     "Текст summary для пользователя — Markdown с разделами ## на русском без document_id, neo4j_node_id, node_id, "
-    "кодов L1–L6 и внутреннего жаргона (Qdrant, Neo4j, LangGraph). "
+    "кодов L1–L6, счётчиков узлов/связей/хитов, «Оценки ситуации» и внутреннего жаргона (Qdrant, Neo4j, LangGraph). "
     + CHAT_STRUCTURE_RULES
     + " Опирайся на evidence, knowledge_gaps, experts и anomalies естественно."
 )

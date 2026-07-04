@@ -48,6 +48,11 @@ class DocumentRepository:
         classification: str = "открытый",
         organization: str | None = None,
         processing_mode: str = "full",
+        source_location: str | None = None,
+        geography: str | None = None,
+        material_date: str | None = None,
+        tags: list[str] | None = None,
+        ingested_at: str | None = None,
     ) -> dict[str, Any]:
         hash_sum = hashlib.sha256(content).hexdigest()
         doc_id = f"doc:{hash_sum[:16]}"
@@ -71,6 +76,18 @@ class DocumentRepository:
                 "size_bytes": len(content),
                 "stored_name": stored_name,
             }
+            if source_location:
+                record["source_location"] = source_location
+            if geography:
+                record["geography"] = geography
+            if material_date:
+                record["material_date"] = material_date
+            if tags:
+                record["tags"] = list(tags)
+            if ingested_at:
+                record["ingested_at"] = ingested_at
+            else:
+                record["ingested_at"] = record["upload_date"]
             data[doc_id] = record
             self._save(data)
             return record
@@ -78,11 +95,59 @@ class DocumentRepository:
     def get(self, doc_id: str) -> dict[str, Any] | None:
         return self._load().get(doc_id)
 
-    def list(self, page: int = 1, page_size: int = 20) -> tuple[list[dict[str, Any]], int]:
+    def list(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        *,
+        geography: str | None = None,
+        material_year: int | None = None,
+        classifications: list[str] | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
         items = sorted(self._load().values(), key=lambda r: r["upload_date"], reverse=True)
+        if geography:
+            items = [r for r in items if r.get("geography") == geography]
+        if material_year is not None:
+            items = [
+                r
+                for r in items
+                if str(r.get("material_date") or "")[:4] == str(material_year)
+            ]
+        if classifications:
+            allowed = set(classifications)
+            items = [
+                r
+                for r in items
+                if (r.get("classification") or "открытый") in allowed
+            ]
         total = len(items)
         start = (page - 1) * page_size
         return items[start : start + page_size], total
+
+    def count_restricted(
+        self,
+        *,
+        geography: str | None = None,
+        material_year: int | None = None,
+        allowed_classifications: list[str] | None = None,
+    ) -> int:
+        if not allowed_classifications:
+            return 0
+        allowed = set(allowed_classifications)
+        items = list(self._load().values())
+        if geography:
+            items = [r for r in items if r.get("geography") == geography]
+        if material_year is not None:
+            items = [
+                r
+                for r in items
+                if str(r.get("material_date") or "")[:4] == str(material_year)
+            ]
+        return sum(
+            1
+            for r in items
+            if (r.get("classification") or "открытый") not in allowed
+        )
 
     def set_status(self, doc_id: str, status: str, **extra: Any) -> None:
         with self._lock:

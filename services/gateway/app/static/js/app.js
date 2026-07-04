@@ -1,6 +1,1140 @@
 const API = "/api/v1";
 const AGENT_API = "/api/v1/agents";
 
+function mkgSessionRoleId() {
+  try {
+    const user = window.MKGAuth?.getCurrentUser?.();
+    if (user?.role_id) return user.role_id;
+    const raw = localStorage.getItem("mkg_user_session");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.role_id) return parsed.role_id;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const url = typeof input === "string" ? input : input?.url;
+  if (url && (url.startsWith("/api/v1") || url.startsWith(API))) {
+    const headers = new Headers(init.headers || (typeof input !== "string" ? input.headers : undefined));
+    const roleId = mkgSessionRoleId();
+    if (roleId && !headers.has("X-MKG-Role")) headers.set("X-MKG-Role", roleId);
+    init = { ...init, headers };
+  }
+  return _nativeFetch(input, init);
+};
+
+const MKG_UI_LANG_KEY = "mkg_ui_lang";
+const MKG_THEME_KEY = "mkg_theme";
+
+const MKG_I18N = {
+  ru: {
+    nav_home: "Главная",
+    nav_chats: "Чат",
+    nav_docs: "Документы",
+    nav_qdrant: "Qdrant",
+    nav_manager: "Панель руководителя",
+    nav_guide: "Документация",
+    nav_settings: "Настройки",
+    chat_send: "Отправить",
+    chat_new: "+ Новый чат",
+    chat_history: "История",
+    chat_dialog: "Диалог",
+    chat_role_label: "Роль",
+    chat_agents_doc: "Как устроены агенты",
+    chat_input_placeholder: "Вопрос или сообщение…",
+    chat_speed_full: "Подробный · с рассуждениями",
+    chat_speed_fast: "Быстрый",
+    chat_speed_compare: "Сравнение",
+    chat_pipeline: "Пайплайн агентов",
+    expand_stages: "Развернуть",
+    collapse_stages: "Свернуть",
+    pipeline_overflow_title: "Ещё {count} шагов · Развернуть",
+    chat_graph_title: "Граф контекста",
+    chat_empty_hint: "Выберите роль и напишите сообщение — агенты L1–L6 ответят автоматически.",
+    chat_empty_first: "Выберите роль и напишите первое сообщение — AI ответит в режиме «Диалог».",
+    chat_empty_new: "Напишите первое сообщение…",
+    chat_typing_agents: "Работа агентов",
+    chat_typing: "MKG AI печатает…",
+    chat_upload_hint: "Файл в чате → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация · источники и «Сохранить как MD»",
+    chat_no_threads: "Нет чатов",
+    chat_delete_thread: "Удалить чат",
+    chat_delete_confirm: "Удалить этот чат? Сообщения будут удалены безвозвратно.",
+    chat_show_graph: "Показать граф обхода",
+    chat_graph_empty: "Нет данных MKG для этого запроса.",
+    chat_graph_empty_hint: "Загрузите документы во вкладке «Документы» — пайплайн до графа и Qdrant запустится автоматически.",
+    chat_graph_stats: "{nodes} узл · {rels} св",
+    chat_graph_stats_walk: "{nodes} узл · {rels} св · {steps} шаг.",
+    chat_graph_stats_zero: "0 узлов",
+    chat_graph_replay_ok: "Пройти по графу заново",
+    chat_graph_replay_busy: "Обход графа…",
+    chat_graph_replay_none: "Нет обхода для повтора",
+    role_prompt_title: "Промпт роли",
+    role_prompt_hint: "Системная инструкция для выбранной роли. Используется при запросах к AI.",
+    role_prompt_placeholder: "Системный промпт…",
+    role_prompt_save: "Сохранить",
+    role_prompt_reset: "По умолчанию",
+    role_prompt_default: "· по умолчанию",
+    role_prompt_custom: "· изменён",
+    role_prompt_select_role: "Сначала выберите роль",
+    role_prompt_empty: "Промпт не может быть пустым",
+    role_prompt_save_failed: "Не удалось сохранить промпт",
+    role_prompt_saved: "Промпт сохранён",
+    role_prompt_reset_failed: "Не удалось сбросить",
+    role_prompt_reset_ok: "Промпт по умолчанию",
+    action_explain: "Пояснить",
+    action_expand: "Дополнить",
+    action_regenerate: "Обновить",
+    action_delete: "Удалить",
+    action_expand_prompt: "Дополни предыдущий ответ: раскрой детали, добавь примеры и контекст, сохрани структуру",
+    chat_answer_extra: "Подробности",
+    role_admin_name: "Администратор",
+    role_admin_tagline: "Управление системой и данными",
+    role_admin_capability: "Настройки пайплайна, RBAC, очистка Neo4j/Qdrant",
+    role_researcher_name: "Исследователь",
+    role_researcher_tagline: "Гипотезы и связи между фактами",
+    role_researcher_capability: "Режимы «Гипотезы», «Обзор», «Советы» — синтез из графа",
+    role_engineer_name: "Инженер данных",
+    role_engineer_tagline: "Пайплайн: OCR → MD → граф → Neo4j",
+    role_engineer_capability: "Загрузка, extraction, диагностика ingestion — без LangGraph-агентов",
+    role_analyst_name: "Аналитик",
+    role_analyst_tagline: "Паттерны в графе и Qdrant",
+    role_analyst_capability: "Семантический поиск, сравнение документов, графики из данных MKG",
+    role_validator_name: "Валидатор",
+    role_validator_tagline: "Проверка фактов и противоречий",
+    role_validator_capability: "Режим «Аудит» — issue / severity / рекомендация",
+    role_security_name: "Безопасность",
+    role_security_tagline: "Грифы и контроль доступа L5",
+    role_security_capability: "SecurityRole, классификация, политики RBAC",
+    role_viewer_name: "Наблюдатель",
+    role_viewer_tagline: "Read-only: документы и граф",
+    role_viewer_capability: "Объясняет содержание без изменений данных",
+    agent_mode_orchestrator_mode: "Оркестратор L1–L6",
+    agent_mode_hypothesis_mode: "Гипотезы",
+    agent_mode_audit_mode: "Аудит",
+    agent_mode_literature_review_mode: "Обзор",
+    agent_mode_recommendation_mode: "Советы",
+    agent_mode_anomaly_mode: "Аномалии",
+    trace_anomaly_seed_loader: "Аномалии",
+    trace_anomaly_graph_walker: "Neo4j walk",
+    trace_anomaly_qdrant_refine: "Qdrant refine",
+    trace_anomaly_mode_builder: "Объяснение",
+    agent_mode_dialog: "Диалог",
+    agent_mode_fast: "Быстрый",
+    settings_title: "Настройки",
+    settings_appearance: "Оформление",
+    settings_theme: "Тема",
+    settings_lang: "Язык интерфейса",
+    settings_lead: "Модели пайплайна, экспорт данных и подписки на темы (MVP).",
+    dashboard_title: "Обзор знаний",
+    dashboard_lead: "Покрытие корпуса, аномалии L4 и зоны риска (противоречия, разреженные кластеры).",
+    dashboard_loading: "Загрузка",
+    dashboard_docs: "Документов",
+    dashboard_anomalies: "L4-аномалии",
+    dashboard_contradictions: "Contradiction",
+    dashboard_domains_empty: "Домены по заголовкам файлов пока не определены.",
+    dashboard_risks_title: "Зоны риска",
+    dashboard_risks_empty: "Зоны риска не обнаружены.",
+    dashboard_refresh: "Обновить обзор",
+    dashboard_error: "Ошибка обзора: {msg}",
+    dashboard_export_json: "Экспорт JSON",
+    dashboard_export_csv: "Экспорт CSV",
+    dashboard_export_risks: "Риски CSV",
+    dashboard_export_docs: "Документы CSV",
+    dashboard_export_compare: "Сравнение CSV",
+    dashboard_export_empty: "Сначала загрузите обзор",
+    export_section_title: "Экспорт данных",
+    export_section_lead: "Скачайте обзор, риски, документы, граф, аномалии L4 и диалоги — все форматы экспорта в одном месте.",
+    export_all_link: "Все экспорты",
+    export_btn_download: "Скачать",
+    export_dashboard_json_title: "Обзор панели (JSON)",
+    export_dashboard_json_desc: "Полный снимок KPI, доменов, рисков и активности команд.",
+    export_dashboard_csv_title: "Обзор панели (CSV)",
+    export_dashboard_csv_desc: "Сводные метрики и покрытие доменов в табличном виде.",
+    export_risks_csv_title: "Зоны риска (CSV)",
+    export_risks_csv_desc: "Противоречия, L4-аномалии и разреженные кластеры с деталями.",
+    export_documents_csv_title: "Список документов (CSV)",
+    export_documents_csv_desc: "ID, имя файла, статус, размер графа и дата загрузки.",
+    export_graph_json_title: "Снимок графа (JSON)",
+    export_graph_json_desc: "Узлы и связи открытого документа или объединённого графа.",
+    export_graph_empty: "Граф пуст — откройте документ или дождитесь построения.",
+    export_doc_md_title: "Документ (Markdown)",
+    export_doc_md_desc: "Текущий вид MD открытого документа (clean / raw / marked).",
+    export_doc_md_empty: "Откройте документ на вкладке «Документы».",
+    export_anomalies_csv_title: "L4-аномалии (CSV)",
+    export_anomalies_csv_desc: "Выбросы HDBSCAN: node_id, score, причина и документ-источник.",
+    export_anomalies_empty: "Аномалии не найдены — постройте граф и запустите кластеризацию.",
+    export_chat_md_title: "Диалог чата (Markdown)",
+    export_chat_md_desc: "Все сообщения активного диалога с источниками MKG.",
+    export_chat_json_title: "Диалог чата (JSON-LD)",
+    export_chat_json_desc: "Структурированный экспорт ответов агента со ссылками на источники.",
+    export_chat_empty: "Откройте или создайте диалог на вкладке «Чат».",
+    export_busy: "Экспорт…",
+    export_done: "Файл скачан",
+    home_title: "MKG — карта знаний",
+    home_tagline: "Mining Knowledge Graph — AI-карта знаний для металлургии и экологии",
+    home_desc_1: "MKG — прототип для хакатона «Норникель»: корпоративная карта знаний из документов с пайплайном извлечения L1–L6 (сущности, факты, связи, кластеры, противоречия, аналитика).",
+    home_desc_2: "Загружайте документы, стройте граф Neo4j и Qdrant, задавайте вопросы AI-агентам по ролям. Разделы доступны в верхнем меню.",
+    home_lead: "Единая точка входа: чат с агентами L1–L6, документы, Qdrant, обзор для руководителя и настройки пайплайна.",
+    home_card_chat_desc: "Диалог с AI-агентами по ролям и графу MKG",
+    home_card_docs_desc: "Загрузка, OCR, extraction и граф документов",
+    home_card_qdrant_desc: "Семантический поиск и индексация эмбеддингов",
+    home_card_manager_desc: "Покрытие корпуса, аномалии L4 и зоны риска",
+    home_card_guide_desc: "Архитектура пайплайна, агенты и роли",
+    home_card_settings_desc: "Модели LLM/OCR/embedding, тема и язык",
+    manager_lead: "Покрытие корпуса, аномалии L4, противоречия и зоны риска по доменам знаний.",
+    watchlist_title: "Подписки на темы (MVP)",
+    watchlist_lead: "Ключевые слова через запятую. Toast при загрузке документа с совпадением в названии. Roadmap: email/push.",
+    watchlist_label: "Темы",
+    watchlist_save: "Сохранить подписки",
+    settings_models: "Модели",
+    settings_models_lead: "Модель для каждого сервиса пайплайна. Сохраняется в Postgres и применяется к новым задачам.",
+    settings_model_graph_title: "Извлечение графа",
+    settings_model_graph_lead: "LLM для извлечения L1–L6 и фильтрации чанков при ingestion.",
+    settings_model_ocr_title: "OCR (ingestion)",
+    settings_model_ocr_lead: "Распознавание PDF и изображений. «auto» — выбор по типу файла.",
+    settings_model_qdrant_index_title: "Qdrant — индексация",
+    settings_model_qdrant_index_lead: "Embedding doc при записи точек в коллекции.",
+    settings_model_qdrant_search_title: "Qdrant — поиск",
+    settings_model_qdrant_search_lead: "Embedding query при семантическом поиске.",
+    settings_model_llm_label: "Модель LLM",
+    settings_model_ocr_label: "Модель OCR",
+    settings_model_emb_doc_label: "Embedding doc",
+    settings_model_emb_query_label: "Embedding query",
+    settings_save: "Сохранить",
+    settings_data_access: "Доступ к данным",
+    settings_data_access_lead: "Какие роли видят документы каждого грифа. Администратор всегда имеет полный доступ.",
+    settings_data_access_role: "Роль",
+    settings_data_access_admin_note: "Администратор — полный доступ (не редактируется).",
+    settings_data_access_save: "Сохранить матрицу",
+    classification_label: "Гриф",
+    classification_открытый: "открытый",
+    classification_внутренний: "внутренний",
+    classification_конфиденциальный: "конфиденциальный",
+    classification_строго: "строго",
+    docs_restricted_count: "🔒 {count} док. скрыто по грифу для вашей роли",
+    theme_light: "Светлая",
+    theme_dark: "Тёмная",
+    lang_ru: "Русский",
+    lang_en: "English",
+    docs_upload_title: "Загрузить документ",
+    docs_upload_hint: "Upload → OCR → MD → граф → Neo4j → Qdrant → глобальная L4-кластеризация — автоматически после загрузки",
+    docs_drop_text: "Перетащите файл сюда",
+    docs_drop_hint: "или нажмите для выбора",
+    docs_drop_reset: "Перетащите файл или нажмите",
+    docs_drop_formats: "PDF · DOCX · XLSX · MD · TXT",
+    docs_pick: "Выбрать",
+    docs_upload_btn: "Загрузить и обработать",
+    docs_uploading: "Загрузка…",
+    docs_upload_meta_toggle: "Метаданные (необязательно)",
+    docs_meta_geography: "География / источник",
+    docs_meta_geo_unset: "— не указано —",
+    docs_meta_geo_ru: "Россия (RU / domestic)",
+    docs_meta_geo_foreign: "Зарубежная (foreign)",
+    docs_meta_geo_intl: "Международная",
+    docs_meta_source: "Откуда (текст)",
+    docs_meta_source_ph: "организация, страна, URL…",
+    docs_meta_date: "Дата материала",
+    docs_filter_geo_all: "Вся география",
+    docs_filter_geo_ru: "RU / domestic",
+    docs_filter_geo_foreign: "Foreign",
+    docs_filter_geo_intl: "International",
+    docs_filter_year_ph: "Год",
+    docs_meta_geography_label: "География",
+    docs_meta_source_label: "Источник",
+    docs_meta_material_date: "Дата материала",
+    docs_meta_ingested_at: "Загружен в систему",
+    docs_meta_tags: "Теги",
+    docs_list_title: "Документы",
+    docs_filter_placeholder: "Фильтр по имени…",
+    docs_view_all_graph: "Полный граф всех документов",
+    docs_loading: "Загрузка…",
+    docs_list_loading: "Загрузка документов…",
+    docs_list_empty: "Пока нет документов — загрузите файл выше",
+    docs_list_no_match: "Нет документов по фильтру",
+    docs_list_error: "Не удалось загрузить документы",
+    docs_retry: "Повторить",
+    docs_back: "← Документы",
+    docs_build_graph: "Построить граф",
+    docs_rebuild_rels: "↺ Перестроить связи",
+    docs_reprocess_ocr: "↺ OCR",
+    docs_md: "Markdown",
+    docs_logs: "Логи",
+    docs_stop: "Стоп",
+    docs_meta_nodes: "{nodes} узл · {rels} св",
+    docs_mode_chat_only: "только чат",
+    docs_mode_chat_badge: "только для чата",
+    docs_all_docs: "Все документы",
+    docs_all_graph_badge: "граф",
+    docs_with_graph_count: "{count} док. с графом",
+    docs_step_prefix: "Шаг: {step}",
+    doc_work_pipeline: "Пайплайн",
+    doc_work_graph: "Граф",
+    doc_work_empty: "Выберите документ слева или загрузите новый файл.",
+    graph_page_title: "Граф знаний",
+    graph_page_lead: "Компактный режим. Перетаскивайте узлы; тяните нижний край графа или разделитель списка узлов для изменения высоты.",
+    graph_compact: "Компактный",
+    graph_full: "Полный",
+    graph_map: "Карта",
+    graph_rels: "Связи",
+    graph_compare: "Сравнение",
+    graph_reset: "Сброс",
+    graph_cross_layer: "Межслойные",
+    graph_formation: "Как формируются связи",
+    graph_node_list: "Список узлов",
+    graph_filters: "Фильтры",
+    graph_filter_apply: "Применить",
+    graph_filter_reset: "Сбросить",
+    graph_filter_search: "Поиск",
+    graph_filter_search_ph: "Текст в узлах…",
+    graph_filter_entity_type: "Тип сущности",
+    graph_filter_geography: "География",
+    graph_filter_all_regions: "Все регионы",
+    graph_filter_practice: "Практика",
+    graph_filter_all: "Все",
+    graph_filter_practice_domestic: "Российская (RU)",
+    graph_filter_practice_foreign: "Зарубежная",
+    graph_filter_year: "Год публикации",
+    graph_filter_confidence: "Мин. достоверность",
+    graph_filter_conf_any: "Любая",
+    graph_filter_material: "Материал",
+    graph_filter_process: "Процесс",
+    graph_filter_keyword_ph: "Ключевое слово + синонимы…",
+    graph_filter_doc_type: "Тип документа",
+    graph_filter_rel_type: "Тип связи",
+    graph_filter_language: "Язык",
+    graph_filter_param: "Параметр (Measurement)",
+    graph_filter_numeric: "Числовой диапазон",
+    graph_filter_show_contradictions: "Показывать противоречия",
+    graph_filter_show_gaps: "Показывать пробелы",
+    graph_filter_min: "мин",
+    graph_filter_max: "макс",
+    graph_filter_param_ph: "конц., temp, flow…",
+    graph_layer_all: "Все ({count})",
+    graph_rels_count: "{rels} связей · {cross} межслойных",
+    graph_no_nodes: "Нет узлов",
+    graph_no_rels: "Нет связей",
+    graph_context: "контекст",
+    graph_compare_title: "Сравнительный анализ",
+    graph_compare_lead: "Выберите 2–3 узла Process или Material на графе (Ctrl+клик), затем «Обновить таблицу».",
+    graph_compare_clear: "Очистить",
+    graph_compare_refresh: "Обновить таблицу",
+    graph_empty_no_docs: "Нет документов с графом",
+    graph_empty_no_docs_desc: "Загрузите файл на вкладке «Документы» — полный пайплайн (OCR → граф → Neo4j → Qdrant) запустится автоматически.",
+    graph_empty_not_built: "Граф ещё не построен",
+    graph_empty_pick_doc: "Выберите документ слева или загрузите файл.",
+    graph_empty_not_built_ao: "Граф не построен",
+    graph_empty_ao_desc: "Документ загружен в режиме «только для ответов» — слои и Neo4j не строились. Нажмите кнопку ниже для полной обработки.",
+    graph_empty_busy_desc: "Идёт обработка — граф появится после извлечения слоёв L1–L6.",
+    graph_empty_ready_desc: "Markdown готов. Запустите извлечение, чтобы построить граф знаний.",
+    graph_empty_building: "Граф строится…",
+    graph_empty_building_desc: "Дождитесь завершения текущего этапа пайплайна.",
+    graph_empty_action_full: "↺ Построить полный граф",
+    graph_empty_action_build: "Построить граф",
+    graph_upload_fallback: "Загрузить",
+    md_download: "Скачать .md",
+    md_view_clean: "Очищенный",
+    md_view_raw: "Сырой OCR",
+    md_view_marked: "С разметкой",
+    md_panel_title: "Markdown",
+    md_logs_title: "Логи пайплайна",
+    md_inline_hint: "После OCR: «Очищенный» — нормализованный текст; «Сырой OCR» — вывод распознавания; «С разметкой» — L3-маркеры после extraction.",
+    detail_node: "Узел",
+    detail_close: "Закрыть",
+    detail_metadata: "Метаданные узла",
+    detail_incoming: "Входящие ({count})",
+    detail_outgoing: "Исходящие ({count})",
+    detail_rel_props: "Свойства связи",
+    detail_nodes: "Узлы",
+    detail_source: "Источник",
+    detail_target: "Цель",
+    detail_related: "Смежные связи",
+    detail_open_node: "Открыть узел",
+    detail_node_missing: "Узел не найден в графе",
+    detail_no_rel_props: "Свойства связи не заданы",
+    detail_no_related: "Других связей у этих узлов пока нет.",
+    entity_material: "Материал",
+    entity_process: "Процесс",
+    entity_equipment: "Оборудование",
+    entity_property: "Свойство",
+    entity_experiment: "Эксперимент",
+    entity_publication: "Публикация",
+    entity_expert: "Эксперт",
+    entity_object: "Объект",
+    doctype_patent: "Патент",
+    doctype_article: "Статья",
+    doctype_report: "Отчёт",
+    doctype_handbook: "Справочник",
+    rel_uses_mat: "Материал (USED_FOR)",
+    rel_operates_proc: "Процесс",
+    rel_showed_effect: "Эффект (SHOWED_EFFECT)",
+    rel_authored: "Автор (EXPERT_IN)",
+    rel_produced_measure: "Измерение",
+    rel_asserted_by: "Утверждение",
+    rel_derived_from: "Выведено из",
+    rel_context_for: "Контекст",
+    rel_data_source_for: "Источник данных",
+    pipe_upload: "Загрузка",
+    pipe_upload_short: "Файл",
+    pipe_ocr: "OCR / ingestion",
+    pipe_ocr_short: "OCR",
+    pipe_md: "Markdown",
+    pipe_md_short: "MD",
+    pipe_graph: "Extraction / граф",
+    pipe_graph_short: "Граф",
+    pipe_neo4j: "Neo4j",
+    pipe_neo4j_short: "Neo4j",
+    pipe_qdrant: "L3+L4 индекс (Qdrant)",
+    pipe_qdrant_short: "L3+L4",
+    pipe_l4: "Глобальная кластеризация L4",
+    pipe_l4_short: "L4",
+    fullpipe_ocr: "OCR и Markdown",
+    fullpipe_layers: "Извлечение слоёв L1–L6",
+    fullpipe_graph: "Граф знаний (узлы и связи)",
+    fullpipe_neo4j: "Синхронизация Neo4j",
+    fullpipe_qdrant: "Индекс L3+L4 в Qdrant",
+    fullpipe_l4: "Глобальная кластеризация L4",
+    journey_upload_title: "Загрузка файла",
+    journey_upload_hint: "PDF, DOCX или другой формат принят в хранилище",
+    journey_ocr_title: "OCR и ingestion",
+    journey_ocr_hint: "Распознавание текста, очистка, сборка Markdown",
+    journey_md_title: "Markdown готов",
+    journey_md_hint: "Чистый MD и размеченный (L3 + узлы графа) — вкладка «Markdown», скачивание .md",
+    journey_layers_title: "Извлечение слоёв L1–L6",
+    journey_layers_hint: "LLM извлекает сущности, абзацы, факты, роли доступа…",
+    journey_graph_title: "Граф знаний",
+    journey_graph_hint: "Узлы и связи сохранены локально",
+    journey_neo4j_title: "Neo4j",
+    journey_neo4j_hint: "Синхронизация в графовую базу данных",
+    journey_qdrant_title: "L3+L4: индекс эмбеддингов (Qdrant)",
+    journey_qdrant_hint: "TextParagraph → mkg_chunks; Claim/Measurement/… → mkg_claims",
+    journey_l4_title: "L4: глобальная HDBSCAN-кластеризация",
+    journey_l4_hint: "Claim/Measurement → mkg_claims, cluster_id и is_anomaly по всему корпусу",
+    journey_skipped: "Пропущено (режим «только для ответов»)",
+    journey_layers_heading: "Слои L1–L6",
+    journey_layers_pending: "Слои появятся при запуске извлечения графа.",
+    journey_recent_rels: "Последние связи",
+    journey_md_detail: "Вкладка «Markdown»: без разметки / с L3-маркерами · «Скачать .md»",
+    journey_graph_detail: "{nodes} узлов · {rels} связей",
+    journey_neo4j_synced: "Синхронизировано с Neo4j",
+    journey_qdrant_indexed: "L3 TextParagraph проиндексированы в mkg_chunks",
+    journey_l4_detail: "{clustered} точек · {clusters} кластеров · {anomalies} аномалий",
+    journey_layer_stat: "{status} · {nodes} узл · {rels} св",
+    pipeline_answers_banner: "Документ загружен только для чата",
+    pipeline_answers_desc: "слои L1–L6, граф и Neo4j не строились. Для карты знаний запустите полный пайплайн.",
+    pipeline_answers_action: "↺ Построить полный граф",
+    pipe_retry: "Перезапустить",
+    pipe_retry_full: "Полная обработка",
+    pipe_retry_ocr: "↺ OCR",
+    pipe_retry_extract: "↺ Извлечение",
+    pipe_retry_neo4j: "↺ Neo4j",
+    pipe_retry_index: "↺ Индекс",
+    pipe_retry_l4: "↺ Глоб. L4",
+    pipe_starting: "Запуск…",
+    files_selected: "{count} файл(ов)",
+    docs_formats: "{ext} · до {max} МБ",
+    docs_formats_fallback: "PDF, DOCX, XLSX, MD, TXT…",
+    step_extraction_default: "извлечение",
+    step_layer_facts: "факты {current}/{total}",
+    step_ingestion: "OCR / ingestion",
+    step_reprocess: "повтор OCR",
+    step_extraction: "извлечение",
+    step_layer_L3: "текст L3",
+    step_layer_L5: "доступ L5",
+    step_layer_L2_L6: "контекст и ТЭП",
+    step_layer_L2: "контекст L2",
+    step_layer_L6: "ТЭП L6",
+    step_layer_L1_L4: "сущности и факты",
+    step_neo4j_load: "загрузка Neo4j",
+    step_extraction_failed: "ошибка extraction",
+    step_ingestion_failed: "ошибка ingestion",
+    step_index_failed: "ошибка индексации",
+    step_answers_indexed: "индекс для чата",
+    step_qdrant_index: "индекс L3+L4 в Qdrant",
+    step_l4_cluster: "глобальная кластеризация L4",
+    step_l4_done: "кластеризация L4 готова",
+    step_l4_failed: "ошибка L4",
+    step_cancelling: "остановка",
+    step_extraction_cancelled: "остановлено",
+    step_extraction_empty: "пустой граф",
+    layer_status_pending: "ожид.",
+    layer_status_running: "идёт",
+    layer_status_done: "готово",
+    layer_status_partial: "частично",
+    layer_status_empty: "пусто",
+    layer_status_failed: "ошибка",
+    status_cancelling: "остановка…",
+    status_queued: "в очереди",
+    status_ocr: "OCR и очистка",
+    status_extracting: "извлечение",
+    status_failed: "ошибка",
+    status_chat_only: "только для чата",
+    status_neo4j: "в Neo4j · {nodes} узл.",
+    status_local_graph: "граф локально · {nodes} узл.",
+    status_empty_graph: "граф пуст",
+    status_md_graph: "MD + граф · {nodes} узл.",
+    status_md_ready: "MD готов",
+    guide_title: "Документация MKG",
+    guide_lead: "Архитектура пайплайна, агентов и ролей — в приложении, без внешних ссылок.",
+    qdrant_lead: "L3: эмбеддинг-поиск (mkg_chunks, без кластеров). L4: глобальные HDBSCAN-кластеры (mkg_claims). AI-поиск использует оба слоя.",
+    qdrant_search_title: "Поиск по всем слоям",
+    qdrant_search_ph: "Запрос по L1+L3+L4…",
+    qdrant_search_btn: "Найти",
+    qdrant_keyword_ph: "Уточнение по слову (Enter — поиск, если верхнее поле пусто)…",
+    qdrant_entity_search_title: "Поиск материалов и процессов",
+    qdrant_entity_search_lead: "Тот же unified backend — mkg_entities + L3 + L4.",
+    qdrant_entity_search_ph: "Материал или процесс…",
+    qdrant_index_prompt: "Индексировать в Qdrant?",
+    qdrant_index_ao_msg: "Markdown готов — проиндексируйте фрагменты в Qdrant для семантического поиска в чате.",
+    qdrant_index_full_msg: "Граф построен — индекс L3+L4 в Qdrant ещё не создан (или индексация прервалась).",
+    qdrant_index_btn: "⚡ Индексировать в Qdrant",
+    qdrant_open_tab: "Открыть Qdrant",
+  },
+  en: {
+    nav_home: "Home",
+    nav_chats: "Chat",
+    nav_docs: "Documents",
+    nav_qdrant: "Qdrant",
+    nav_manager: "Manager dashboard",
+    nav_guide: "Documentation",
+    nav_settings: "Settings",
+    chat_send: "Send",
+    chat_new: "+ New chat",
+    chat_history: "History",
+    chat_dialog: "Dialog",
+    chat_role_label: "Role",
+    chat_agents_doc: "How agents work",
+    chat_input_placeholder: "Question or message…",
+    chat_speed_full: "Detailed · with reasoning",
+    chat_speed_fast: "Fast",
+    chat_speed_compare: "Compare",
+    chat_pipeline: "Agent pipeline",
+    expand_stages: "Expand",
+    collapse_stages: "Collapse",
+    pipeline_overflow_title: "{count} more steps · Expand",
+    chat_graph_title: "Context graph",
+    chat_empty_hint: "Pick a role and send a message — L1–L6 agents will respond automatically.",
+    chat_empty_first: "Pick a role and write your first message — AI will reply in Dialog mode.",
+    chat_empty_new: "Write your first message…",
+    chat_typing_agents: "Agents at work",
+    chat_typing: "MKG AI is typing…",
+    chat_upload_hint: "File in chat → OCR → MD → graph → Neo4j → Qdrant → global L4 clustering · sources and Save as MD",
+    chat_no_threads: "No chats",
+    chat_delete_thread: "Delete chat",
+    chat_delete_confirm: "Delete this chat? Messages will be permanently removed.",
+    chat_show_graph: "Show traversal graph",
+    chat_graph_empty: "No MKG data for this query.",
+    chat_graph_empty_hint: "Upload documents on the Documents tab — the pipeline to graph and Qdrant runs automatically.",
+    chat_graph_stats: "{nodes} nodes · {rels} rels",
+    chat_graph_stats_walk: "{nodes} nodes · {rels} rels · {steps} steps",
+    chat_graph_stats_zero: "0 nodes",
+    chat_graph_replay_ok: "Replay graph walk",
+    chat_graph_replay_busy: "Walking graph…",
+    chat_graph_replay_none: "No walk to replay",
+    role_prompt_title: "Role prompt",
+    role_prompt_hint: "System instruction for the selected role. Used in AI requests.",
+    role_prompt_placeholder: "System prompt…",
+    role_prompt_save: "Save",
+    role_prompt_reset: "Reset to default",
+    role_prompt_default: "· default",
+    role_prompt_custom: "· custom",
+    role_prompt_select_role: "Select a role first",
+    role_prompt_empty: "Prompt cannot be empty",
+    role_prompt_save_failed: "Failed to save prompt",
+    role_prompt_saved: "Prompt saved",
+    role_prompt_reset_failed: "Failed to reset",
+    role_prompt_reset_ok: "Prompt reset to default",
+    action_explain: "Explain",
+    action_expand: "Expand",
+    action_regenerate: "Regenerate",
+    action_delete: "Delete",
+    action_expand_prompt: "Expand the previous answer: add details, examples, and context while keeping the structure",
+    chat_answer_extra: "Details",
+    role_admin_name: "Administrator",
+    role_admin_tagline: "System and data management",
+    role_admin_capability: "Pipeline settings, RBAC, Neo4j/Qdrant cleanup",
+    role_researcher_name: "Researcher",
+    role_researcher_tagline: "Hypotheses and links between facts",
+    role_researcher_capability: "Hypothesis, Review, Recommendations modes — synthesis from graph",
+    role_engineer_name: "Data engineer",
+    role_engineer_tagline: "Pipeline: OCR → MD → graph → Neo4j",
+    role_engineer_capability: "Upload, extraction, ingestion diagnostics — no LangGraph agents",
+    role_analyst_name: "Analyst",
+    role_analyst_tagline: "Patterns in graph and Qdrant",
+    role_analyst_capability: "Semantic search, document comparison, charts from MKG data",
+    role_validator_name: "Validator",
+    role_validator_tagline: "Fact checking and contradictions",
+    role_validator_capability: "Audit mode — issue / severity / recommendation",
+    role_security_name: "Security",
+    role_security_tagline: "Classification and L5 access control",
+    role_security_capability: "SecurityRole, classification, RBAC policies",
+    role_viewer_name: "Viewer",
+    role_viewer_tagline: "Read-only: documents and graph",
+    role_viewer_capability: "Explains content without changing data",
+    agent_mode_orchestrator_mode: "Orchestrator L1–L6",
+    agent_mode_hypothesis_mode: "Hypotheses",
+    agent_mode_audit_mode: "Audit",
+    agent_mode_literature_review_mode: "Review",
+    agent_mode_recommendation_mode: "Recommendations",
+    agent_mode_anomaly_mode: "Anomalies",
+    trace_anomaly_seed_loader: "Anomalies",
+    trace_anomaly_graph_walker: "Neo4j walk",
+    trace_anomaly_qdrant_refine: "Qdrant refine",
+    trace_anomaly_mode_builder: "Anomaly explain",
+    agent_mode_dialog: "Dialog",
+    agent_mode_fast: "Fast",
+    settings_title: "Settings",
+    settings_appearance: "Appearance",
+    settings_theme: "Theme",
+    settings_lang: "Interface language",
+    settings_lead: "Pipeline models, data export, and topic subscriptions (MVP).",
+    dashboard_title: "Knowledge overview",
+    dashboard_lead: "Corpus coverage, L4 anomalies, and risk zones (contradictions, sparse clusters).",
+    dashboard_loading: "Loading",
+    dashboard_docs: "Documents",
+    dashboard_anomalies: "L4 anomalies",
+    dashboard_contradictions: "Contradictions",
+    dashboard_domains_empty: "Domains from file titles are not defined yet.",
+    dashboard_risks_title: "Risk zones",
+    dashboard_risks_empty: "No risk zones detected.",
+    dashboard_refresh: "Refresh overview",
+    dashboard_error: "Overview error: {msg}",
+    dashboard_export_json: "Export JSON",
+    dashboard_export_csv: "Export CSV",
+    dashboard_export_risks: "Risks CSV",
+    dashboard_export_docs: "Documents CSV",
+    dashboard_export_compare: "Compare CSV",
+    dashboard_export_empty: "Load the overview first",
+    export_section_title: "Data export",
+    export_section_lead: "Download overview, risks, documents, graph, L4 anomalies, and chat threads — all export formats in one place.",
+    export_all_link: "All exports",
+    export_btn_download: "Download",
+    export_dashboard_json_title: "Dashboard overview (JSON)",
+    export_dashboard_json_desc: "Full snapshot of KPIs, domains, risk zones, and team activity.",
+    export_dashboard_csv_title: "Dashboard overview (CSV)",
+    export_dashboard_csv_desc: "Headline metrics and domain coverage in tabular form.",
+    export_risks_csv_title: "Risk zones (CSV)",
+    export_risks_csv_desc: "Contradictions, L4 anomalies, and sparse clusters with details.",
+    export_documents_csv_title: "Document list (CSV)",
+    export_documents_csv_desc: "ID, file name, status, graph size, and upload date.",
+    export_graph_json_title: "Graph snapshot (JSON)",
+    export_graph_json_desc: "Nodes and relationships of the open document or merged graph.",
+    export_graph_empty: "Graph is empty — open a document or wait for extraction.",
+    export_doc_md_title: "Document (Markdown)",
+    export_doc_md_desc: "Current MD view of the open document (clean / raw / marked).",
+    export_doc_md_empty: "Open a document on the Documents tab.",
+    export_anomalies_csv_title: "L4 anomalies (CSV)",
+    export_anomalies_csv_desc: "HDBSCAN outliers: node_id, score, reason, and source document.",
+    export_anomalies_empty: "No anomalies found — build graphs and run clustering.",
+    export_chat_md_title: "Chat thread (Markdown)",
+    export_chat_md_desc: "All messages in the active dialogue with MKG sources.",
+    export_chat_json_title: "Chat thread (JSON-LD)",
+    export_chat_json_desc: "Structured export of agent answers with source citations.",
+    export_chat_empty: "Open or create a dialogue on the Chat tab.",
+    export_busy: "Exporting…",
+    export_done: "File downloaded",
+    home_tagline: "Mining Knowledge Graph — corporate knowledge map for metallurgy and ecology",
+    home_desc_1: "MKG is a hackathon prototype for Nornickel: a corporate knowledge map built from documents with an L1–L6 extraction pipeline (entities, facts, relations, clusters, contradictions, analytics).",
+    home_desc_2: "Upload documents, build the Neo4j and Qdrant graph, and ask role-based AI agents. All sections are in the top navigation.",
+    mgr_coverage_title: "Knowledge coverage by domain",
+    mgr_activity_title: "Team activity",
+    mgr_compare_title: "Technology comparison",
+    mgr_compare_note: "Process / Material / TechnologySolution from graph. Full CAPEX and eco limits — L6 roadmap.",
+    mgr_col_domain: "Domain",
+    mgr_col_docs: "Documents",
+    mgr_col_nodes: "L4 facts",
+    mgr_col_coverage: "Coverage",
+    mgr_col_tech: "Technology",
+    mgr_col_efficiency: "Efficiency",
+    mgr_col_capex: "CAPEX",
+    mgr_col_cold: "Cold climate",
+    mgr_col_eco: "Eco limits",
+    mgr_col_sources: "Sources",
+    mgr_col_severity: "Severity",
+    mgr_col_topic: "Topic",
+    mgr_col_contradiction: "Contrad.",
+    mgr_col_detail: "Description",
+    mgr_kpi_docs: "Documents in corpus",
+    mgr_kpi_l4: "L4 facts",
+    mgr_kpi_contradictions: "Contradictions",
+    mgr_kpi_anomalies: "L4 anomalies",
+    mgr_kpi_threads: "Chat threads",
+    mgr_kpi_queries: "Queries (7d)",
+    mgr_activity_uploads: "Recent uploads",
+    mgr_activity_chats: "Active chats",
+    mgr_activity_empty_uploads: "No uploaded documents. Upload materials on the Documents tab.",
+    mgr_activity_empty_chats: "No dialogues. Start a chat on the Chat tab.",
+    mgr_coverage_empty: "No domain data — upload documents with thematic file names.",
+    mgr_compare_empty: "No Process/Material in graph. Build graphs from documents to compare.",
+    mgr_severity_high: "High",
+    mgr_severity_medium: "Medium",
+    mgr_severity_low: "Low",
+    mgr_yes: "Yes",
+    mgr_no: "No",
+    manager_lead: "Domain knowledge coverage, team activity, technology comparison, and risk zones.",
+    watchlist_title: "Topic subscriptions (MVP)",
+    watchlist_lead: "Comma-separated keywords. Toast when an uploaded document title matches. Roadmap: email/push.",
+    watchlist_label: "Topics",
+    watchlist_save: "Save subscriptions",
+    settings_models: "Models",
+    settings_models_lead: "Model per pipeline service. Saved in Postgres and applied to new tasks.",
+    settings_model_graph_title: "Graph extraction",
+    settings_model_graph_lead: "LLM for L1–L6 extraction and chunk filtering during ingestion.",
+    settings_model_ocr_title: "OCR (ingestion)",
+    settings_model_ocr_lead: "PDF and image recognition. «auto» picks by file type.",
+    settings_model_qdrant_index_title: "Qdrant — indexing",
+    settings_model_qdrant_index_lead: "Doc embedding when writing points to collections.",
+    settings_model_qdrant_search_title: "Qdrant — search",
+    settings_model_qdrant_search_lead: "Query embedding for semantic search.",
+    settings_model_llm_label: "LLM model",
+    settings_model_ocr_label: "OCR model",
+    settings_model_emb_doc_label: "Doc embedding",
+    settings_model_emb_query_label: "Query embedding",
+    settings_save: "Save",
+    settings_data_access: "Data access",
+    settings_data_access_lead: "Which roles can see documents at each classification level. Admin always has full access.",
+    settings_data_access_role: "Role",
+    settings_data_access_admin_note: "Admin — full access (read-only row).",
+    settings_data_access_save: "Save access matrix",
+    classification_label: "Classification",
+    classification_открытый: "public",
+    classification_внутренний: "internal",
+    classification_конфиденциальный: "confidential",
+    classification_строго: "restricted",
+    docs_restricted_count: "🔒 {count} doc(s) hidden by classification for your role",
+    theme_light: "Light",
+    theme_dark: "Dark",
+    lang_ru: "Русский",
+    lang_en: "English",
+    docs_upload_title: "Upload document",
+    docs_upload_hint: "Upload → OCR → MD → graph → Neo4j → Qdrant → global L4 clustering — runs automatically after upload",
+    docs_drop_text: "Drop file here",
+    docs_drop_hint: "or click to browse",
+    docs_drop_reset: "Drop file or click",
+    docs_drop_formats: "PDF · DOCX · XLSX · MD · TXT",
+    docs_pick: "Browse",
+    docs_upload_btn: "Upload and process",
+    docs_uploading: "Uploading…",
+    docs_upload_meta_toggle: "Metadata (optional)",
+    docs_meta_geography: "Geography / source",
+    docs_meta_geo_unset: "— not specified —",
+    docs_meta_geo_ru: "Russia (RU / domestic)",
+    docs_meta_geo_foreign: "Foreign",
+    docs_meta_geo_intl: "International",
+    docs_meta_source: "Source (text)",
+    docs_meta_source_ph: "organization, country, URL…",
+    docs_meta_date: "Material date",
+    docs_filter_geo_all: "All geographies",
+    docs_filter_geo_ru: "RU / domestic",
+    docs_filter_geo_foreign: "Foreign",
+    docs_filter_geo_intl: "International",
+    docs_filter_year_ph: "Year",
+    docs_meta_geography_label: "Geography",
+    docs_meta_source_label: "Source",
+    docs_meta_material_date: "Material date",
+    docs_meta_ingested_at: "Ingested at",
+    docs_meta_tags: "Tags",
+    docs_list_title: "Documents",
+    docs_filter_placeholder: "Filter by name…",
+    docs_view_all_graph: "Full graph of all documents",
+    docs_loading: "Loading…",
+    docs_list_loading: "Loading documents…",
+    docs_list_empty: "No documents yet — upload a file above",
+    docs_list_no_match: "No documents match filter",
+    docs_list_error: "Failed to load documents",
+    docs_retry: "Retry",
+    docs_back: "← Documents",
+    docs_build_graph: "Build graph",
+    docs_rebuild_rels: "↺ Rebuild relationships",
+    docs_reprocess_ocr: "↺ OCR",
+    docs_md: "Markdown",
+    docs_logs: "Logs",
+    docs_stop: "Stop",
+    docs_meta_nodes: "{nodes} nodes · {rels} rels",
+    docs_mode_chat_only: "chat only",
+    docs_mode_chat_badge: "chat only",
+    docs_all_docs: "All documents",
+    docs_all_graph_badge: "graph",
+    docs_with_graph_count: "{count} docs with graph",
+    docs_step_prefix: "Step: {step}",
+    doc_work_pipeline: "Pipeline",
+    doc_work_graph: "Graph",
+    doc_work_empty: "Select a document on the left or upload a new file.",
+    graph_page_title: "Knowledge graph",
+    graph_page_lead: "Compact mode. Drag nodes; pull the bottom edge of the graph or the node list divider to resize.",
+    graph_compact: "Compact",
+    graph_full: "Full",
+    graph_map: "Map",
+    graph_rels: "Relationships",
+    graph_compare: "Compare",
+    graph_reset: "Reset",
+    graph_cross_layer: "Cross-layer",
+    graph_formation: "How links form",
+    graph_node_list: "Node list",
+    graph_filters: "Filters",
+    graph_filter_apply: "Apply",
+    graph_filter_reset: "Reset",
+    graph_filter_search: "Search",
+    graph_filter_search_ph: "Text in nodes…",
+    graph_filter_entity_type: "Entity type",
+    graph_filter_geography: "Geography",
+    graph_filter_all_regions: "All regions",
+    graph_filter_practice: "Practice",
+    graph_filter_all: "All",
+    graph_filter_practice_domestic: "Domestic (RU)",
+    graph_filter_practice_foreign: "Foreign",
+    graph_filter_year: "Publication year",
+    graph_filter_confidence: "Min. confidence",
+    graph_filter_conf_any: "Any",
+    graph_filter_material: "Material",
+    graph_filter_process: "Process",
+    graph_filter_keyword_ph: "Keyword + synonyms…",
+    graph_filter_doc_type: "Document type",
+    graph_filter_rel_type: "Relation type",
+    graph_filter_language: "Language",
+    graph_filter_param: "Parameter (Measurement)",
+    graph_filter_numeric: "Numeric range",
+    graph_filter_show_contradictions: "Show contradictions",
+    graph_filter_show_gaps: "Show gaps",
+    graph_filter_min: "min",
+    graph_filter_max: "max",
+    graph_filter_param_ph: "conc., temp, flow…",
+    graph_layer_all: "All ({count})",
+    graph_rels_count: "{rels} relationships · {cross} cross-layer",
+    graph_no_nodes: "No nodes",
+    graph_no_rels: "No relationships",
+    graph_context: "context",
+    graph_compare_title: "Comparative analysis",
+    graph_compare_lead: "Select 2–3 Process or Material nodes on the graph (Ctrl+click), then Refresh table.",
+    graph_compare_clear: "Clear",
+    graph_compare_refresh: "Refresh table",
+    graph_empty_no_docs: "No documents with graph",
+    graph_empty_no_docs_desc: "Upload a file on the Documents tab — the full pipeline (OCR → graph → Neo4j → Qdrant) runs automatically.",
+    graph_empty_not_built: "Graph not built yet",
+    graph_empty_pick_doc: "Select a document on the left or upload a file.",
+    graph_empty_not_built_ao: "Graph not built",
+    graph_empty_ao_desc: "Document uploaded in chat-only mode — layers and Neo4j were skipped. Click the button below for full processing.",
+    graph_empty_busy_desc: "Processing in progress — the graph will appear after L1–L6 extraction.",
+    graph_empty_ready_desc: "Markdown is ready. Run extraction to build the knowledge graph.",
+    graph_empty_building: "Building graph…",
+    graph_empty_building_desc: "Wait for the current pipeline stage to finish.",
+    graph_empty_action_full: "↺ Build full graph",
+    graph_empty_action_build: "Build graph",
+    graph_upload_fallback: "Upload",
+    md_download: "Download .md",
+    md_view_clean: "Clean",
+    md_view_raw: "Raw OCR",
+    md_view_marked: "With markup",
+    md_panel_title: "Markdown",
+    md_logs_title: "Pipeline logs",
+    md_inline_hint: "After OCR: Clean — normalized text; Raw OCR — recognition output; With markup — L3 markers after extraction.",
+    detail_node: "Node",
+    detail_close: "Close",
+    detail_metadata: "Node metadata",
+    detail_incoming: "Incoming ({count})",
+    detail_outgoing: "Outgoing ({count})",
+    detail_rel_props: "Relationship properties",
+    detail_nodes: "Nodes",
+    detail_source: "Source",
+    detail_target: "Target",
+    detail_related: "Related relationships",
+    detail_open_node: "Open node",
+    detail_node_missing: "Node not found in graph",
+    detail_no_rel_props: "No relationship properties",
+    detail_no_related: "No other relationships for these nodes yet.",
+    entity_material: "Material",
+    entity_process: "Process",
+    entity_equipment: "Equipment",
+    entity_property: "Property",
+    entity_experiment: "Experiment",
+    entity_publication: "Publication",
+    entity_expert: "Expert",
+    entity_object: "Object",
+    doctype_patent: "Patent",
+    doctype_article: "Article",
+    doctype_report: "Report",
+    doctype_handbook: "Handbook",
+    rel_uses_mat: "Material (USED_FOR)",
+    rel_operates_proc: "Process",
+    rel_showed_effect: "Effect (SHOWED_EFFECT)",
+    rel_authored: "Author (EXPERT_IN)",
+    rel_produced_measure: "Measurement",
+    rel_asserted_by: "Assertion",
+    rel_derived_from: "Derived from",
+    rel_context_for: "Context",
+    rel_data_source_for: "Data source",
+    pipe_upload: "Upload",
+    pipe_upload_short: "File",
+    pipe_ocr: "OCR / ingestion",
+    pipe_ocr_short: "OCR",
+    pipe_md: "Markdown",
+    pipe_md_short: "MD",
+    pipe_graph: "Extraction / graph",
+    pipe_graph_short: "Graph",
+    pipe_neo4j: "Neo4j",
+    pipe_neo4j_short: "Neo4j",
+    pipe_qdrant: "L3+L4 index (Qdrant)",
+    pipe_qdrant_short: "L3+L4",
+    pipe_l4: "Global L4 clustering",
+    pipe_l4_short: "L4",
+    fullpipe_ocr: "OCR and Markdown",
+    fullpipe_layers: "L1–L6 layer extraction",
+    fullpipe_graph: "Knowledge graph (nodes and relationships)",
+    fullpipe_neo4j: "Neo4j sync",
+    fullpipe_qdrant: "L3+L4 index in Qdrant",
+    fullpipe_l4: "Global L4 clustering",
+    journey_upload_title: "File upload",
+    journey_upload_hint: "PDF, DOCX, or another format accepted into storage",
+    journey_ocr_title: "OCR and ingestion",
+    journey_ocr_hint: "Text recognition, cleanup, Markdown assembly",
+    journey_md_title: "Markdown ready",
+    journey_md_hint: "Clean MD and marked (L3 + graph nodes) — Markdown tab, download .md",
+    journey_layers_title: "L1–L6 layer extraction",
+    journey_layers_hint: "LLM extracts entities, paragraphs, facts, access roles…",
+    journey_graph_title: "Knowledge graph",
+    journey_graph_hint: "Nodes and relationships saved locally",
+    journey_neo4j_title: "Neo4j",
+    journey_neo4j_hint: "Sync to graph database",
+    journey_qdrant_title: "L3+L4: embedding index (Qdrant)",
+    journey_qdrant_hint: "TextParagraph → mkg_chunks; Claim/Measurement/… → mkg_claims",
+    journey_l4_title: "L4: global HDBSCAN clustering",
+    journey_l4_hint: "Claim/Measurement → mkg_claims, cluster_id and is_anomaly corpus-wide",
+    journey_skipped: "Skipped (answers-only mode)",
+    journey_layers_heading: "L1–L6 layers",
+    journey_layers_pending: "Layers appear when graph extraction starts.",
+    journey_recent_rels: "Recent relationships",
+    journey_md_detail: "Markdown tab: plain / L3 markers · Download .md",
+    journey_graph_detail: "{nodes} nodes · {rels} relationships",
+    journey_neo4j_synced: "Synced with Neo4j",
+    journey_qdrant_indexed: "L3 TextParagraph indexed in mkg_chunks",
+    journey_l4_detail: "{clustered} points · {clusters} clusters · {anomalies} anomalies",
+    journey_layer_stat: "{status} · {nodes} nodes · {rels} rels",
+    pipeline_answers_banner: "Document uploaded for chat only",
+    pipeline_answers_desc: "L1–L6 layers, graph, and Neo4j were not built. Run the full pipeline for the knowledge map.",
+    pipeline_answers_action: "↺ Build full graph",
+    pipe_retry: "Restart",
+    pipe_retry_full: "Full processing",
+    pipe_retry_ocr: "↺ OCR",
+    pipe_retry_extract: "↺ Extract",
+    pipe_retry_neo4j: "↺ Neo4j",
+    pipe_retry_index: "↺ Index",
+    pipe_retry_l4: "↺ Global L4",
+    pipe_starting: "Starting…",
+    files_selected: "{count} file(s)",
+    docs_formats: "{ext} · up to {max} MB",
+    docs_formats_fallback: "PDF, DOCX, XLSX, MD, TXT…",
+    step_extraction_default: "extraction",
+    step_layer_facts: "facts {current}/{total}",
+    step_ingestion: "OCR / ingestion",
+    step_reprocess: "OCR retry",
+    step_extraction: "extraction",
+    step_layer_L3: "L3 text",
+    step_layer_L5: "L5 access",
+    step_layer_L2_L6: "context and KPIs",
+    step_layer_L2: "L2 context",
+    step_layer_L6: "L6 KPIs",
+    step_layer_L1_L4: "entities and facts",
+    step_neo4j_load: "Neo4j load",
+    step_extraction_failed: "extraction error",
+    step_ingestion_failed: "ingestion error",
+    step_index_failed: "indexing error",
+    step_answers_indexed: "chat index",
+    step_qdrant_index: "L3+L4 index in Qdrant",
+    step_l4_cluster: "global L4 clustering",
+    step_l4_done: "L4 clustering complete",
+    step_l4_failed: "L4 error",
+    step_cancelling: "stopping",
+    step_extraction_cancelled: "stopped",
+    step_extraction_empty: "empty graph",
+    layer_status_pending: "pending",
+    layer_status_running: "running",
+    layer_status_done: "done",
+    layer_status_partial: "partial",
+    layer_status_empty: "empty",
+    layer_status_failed: "failed",
+    status_cancelling: "stopping…",
+    status_queued: "queued",
+    status_ocr: "OCR and cleanup",
+    status_extracting: "extracting",
+    status_failed: "error",
+    status_chat_only: "chat only",
+    status_neo4j: "in Neo4j · {nodes} nodes",
+    status_local_graph: "local graph · {nodes} nodes",
+    status_empty_graph: "empty graph",
+    status_md_graph: "MD + graph · {nodes} nodes",
+    status_md_ready: "MD ready",
+    guide_title: "MKG documentation",
+    guide_lead: "Pipeline architecture, agents, and roles — in-app, no external links.",
+    qdrant_lead: "L3: embedding search (mkg_chunks, no clusters). L4: global HDBSCAN clusters (mkg_claims). AI search uses both layers.",
+    qdrant_search_title: "Search all layers",
+    qdrant_search_ph: "Query L1+L3+L4…",
+    qdrant_search_btn: "Search",
+    qdrant_keyword_ph: "Filter results by keyword…",
+    qdrant_entity_search_title: "Materials & processes search",
+    qdrant_entity_search_lead: "Same unified backend — mkg_entities + L3 + L4.",
+    qdrant_entity_search_ph: "Material or process…",
+    qdrant_index_prompt: "Index in Qdrant?",
+    qdrant_index_ao_msg: "Markdown is ready — index fragments in Qdrant for semantic search in chat.",
+    qdrant_index_full_msg: "Graph is built — L3+L4 Qdrant index not created yet (or indexing was interrupted).",
+    qdrant_index_btn: "⚡ Index in Qdrant",
+    qdrant_open_tab: "Open Qdrant",
+  },
+};
+
+function getUiLang() {
+  return localStorage.getItem(MKG_UI_LANG_KEY) === "en" ? "en" : "ru";
+}
+
+function getTheme() {
+  return localStorage.getItem(MKG_THEME_KEY) === "dark" ? "dark" : "light";
+}
+
+function t(key, vars) {
+  const lang = getUiLang();
+  let text = MKG_I18N[lang]?.[key] ?? MKG_I18N.ru[key] ?? key;
+  if (vars && typeof text === "string") {
+    Object.entries(vars).forEach(([k, v]) => {
+      text = text.replaceAll(`{${k}}`, String(v));
+    });
+  }
+  return text;
+}
+
+function tt(key, fallback = "") {
+  const v = t(key);
+  return v && v !== key ? v : fallback;
+}
+
+function tf(key, vars, fallback = "") {
+  let text = tt(key, fallback);
+  if (vars && typeof text === "string") {
+    Object.entries(vars).forEach(([k, v]) => {
+      text = text.replaceAll(`{${k}}`, String(v));
+    });
+  }
+  return text;
+}
+
+function entityFilterLabel(id) {
+  return t(`entity_${id}`);
+}
+
+function docCategoryLabel(id) {
+  return t(`doctype_${id}`);
+}
+
+function relationFilterLabel(entry) {
+  const id = typeof entry === "string" ? entry : entry.id;
+  const i18n = typeof entry === "object" ? entry.i18n : null;
+  return t(`rel_${i18n || id.toLowerCase()}`);
+}
+
+function pipeLabel(id) {
+  return t(`pipe_${id}`);
+}
+
+function pipeShort(id) {
+  return t(`pipe_${id}_short`);
+}
+
+function fullPipeLabel(id) {
+  return t(`fullpipe_${id}`);
+}
+
+function journeyTitle(id) {
+  return t(`journey_${id}_title`);
+}
+
+function journeyHint(id) {
+  return t(`journey_${id}_hint`);
+}
+
+function layerStatusLabel(status) {
+  return tt(`layer_status_${status}`, status);
+}
+
+function stepLabel(step) {
+  if (!step) return t("step_extraction_default");
+  const m = String(step).match(/^layer_L1_L4_(\d+)\/(\d+)$/);
+  if (m) return tf("step_layer_facts", { current: m[1], total: m[2] });
+  return tt(`step_${step}`, step);
+}
+
+function applyUiLang() {
+  document.documentElement.lang = getUiLang();
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const key = el.dataset.i18n;
+    if (key) el.textContent = t(key);
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const key = el.dataset.i18nPlaceholder;
+    if (key) el.placeholder = t(key);
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const key = el.dataset.i18nTitle;
+    if (key) el.title = t(key);
+  });
+  document.querySelectorAll("option[data-i18n]").forEach((el) => {
+    const key = el.dataset.i18n;
+    if (key) el.textContent = t(key);
+  });
+  window.MKG?.onLangChange?.();
+}
+
+function syncLangToggleUi() {
+  const lang = getUiLang();
+  document.querySelectorAll("[data-lang]").forEach((btn) => {
+    const on = btn.dataset.lang === lang;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function setUiLang(lang) {
+  localStorage.setItem(MKG_UI_LANG_KEY, lang === "en" ? "en" : "ru");
+  applyUiLang();
+  syncLangToggleUi();
+}
+
+function applyTheme() {
+  document.documentElement.setAttribute("data-theme", getTheme());
+  syncThemeToggleUi();
+}
+
+function syncThemeToggleUi() {
+  const dark = getTheme() === "dark";
+  const btn = $("themeToggleBtn");
+  if (btn) {
+    btn.textContent = dark ? "☀" : "🌙";
+    btn.title = dark ? t("theme_light") : t("theme_dark");
+    btn.setAttribute("aria-label", btn.title);
+  }
+  document.querySelectorAll("[data-theme-choice]").forEach((btn) => {
+    const on = btn.dataset.themeChoice === getTheme();
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function setTheme(theme) {
+  localStorage.setItem(MKG_THEME_KEY, theme === "dark" ? "dark" : "light");
+  applyTheme();
+}
+
+function bindAppearanceControls() {
+  document.querySelectorAll("[data-lang]").forEach((btn) => {
+    btn.addEventListener("click", () => setUiLang(btn.dataset.lang));
+  });
+  $("themeToggleBtn")?.addEventListener("click", () => {
+    setTheme(getTheme() === "dark" ? "light" : "dark");
+  });
+  document.querySelectorAll("[data-theme-choice]").forEach((btn) => {
+    btn.addEventListener("click", () => setTheme(btn.dataset.themeChoice));
+  });
+}
+
 const $ = (id) => document.getElementById(id);
 
 const els = {
@@ -14,12 +1148,19 @@ const els = {
   uploadError: $("uploadError"),
   formatsHint: $("formatsHint"),
   classification: $("classification"),
+  uploadGeography: $("uploadGeography"),
+  uploadSourceLocation: $("uploadSourceLocation"),
+  uploadMaterialDate: $("uploadMaterialDate"),
+  docGeoFilter: $("docGeoFilter"),
+  docYearFilter: $("docYearFilter"),
   clearDbBtn: $("clearDbBtn"),
   docs: $("docs"),
   pageDocs: $("pageDocs"),
   pageGraphShell: $("pageGraphShell"),
   graphPanel: $("graphPanel"),
   pageQdrant: $("pageQdrant"),
+  pageManager: $("pageManager"),
+  pageHome: $("pageHome"),
   pageChats: $("pageChats"),
   pageGuide: $("pageGuide"),
   pageSettings: $("pageSettings"),
@@ -101,6 +1242,7 @@ const els = {
   l3Stats: $("l3Stats"),
   l3IndexBtn: $("l3IndexBtn"),
   l3IndexAllBtn: $("l3IndexAllBtn"),
+  l3ReindexEntitiesBtn: $("l3ReindexEntitiesBtn"),
   l4ClusterBtn: $("l4ClusterBtn"),
   graphClusterLegend: $("graphClusterLegend"),
   graphCompactBtn: $("graphCompactBtn"),
@@ -129,6 +1271,10 @@ const els = {
   graphFilterResetBtn: $("graphFilterResetBtn"),
   graphFilterStatus: $("graphFilterStatus"),
   qdrantSearchKeyword: $("qdrantSearchKeyword"),
+  qdrantEntitySearchForm: $("qdrantEntitySearchForm"),
+  qdrantEntitySearchQuery: $("qdrantEntitySearchQuery"),
+  qdrantEntitySearchResults: $("qdrantEntitySearchResults"),
+  qdrantEntitySearchMeta: $("qdrantEntitySearchMeta"),
   qdrantFilterChips: $("qdrantFilterChips"),
   llmModel: $("llmModel"),
   ocrModel: $("ocrModel"),
@@ -136,6 +1282,10 @@ const els = {
   embQueryModel: $("embQueryModel"),
   saveConfigBtn: $("saveConfigBtn"),
   settingsSaveStatus: $("settingsSaveStatus"),
+  dataAccessSection: $("dataAccessSection"),
+  dataAccessMatrix: $("dataAccessMatrix"),
+  saveDataAccessBtn: $("saveDataAccessBtn"),
+  dataAccessSaveStatus: $("dataAccessSaveStatus"),
   diagBtn: $("diagBtn"),
   diagList: $("diagList"),
   liveExtract: $("liveExtract"),
@@ -171,10 +1321,20 @@ const els = {
   graphCompareClearBtn: $("graphCompareClearBtn"),
   graphCompareRefreshBtn: $("graphCompareRefreshBtn"),
   graphCompareTableWrap: $("graphCompareTableWrap"),
-  dashboardCards: $("dashboardCards"),
-  dashboardDomains: $("dashboardDomains"),
-  dashboardRiskList: $("dashboardRiskList"),
   dashboardRefreshBtn: $("dashboardRefreshBtn"),
+  dashboardExportJsonBtn: $("dashboardExportJsonBtn"),
+  dashboardExportCsvBtn: $("dashboardExportCsvBtn"),
+  dashboardExportRisksBtn: $("dashboardExportRisksBtn"),
+  dashboardExportCompareBtn: $("dashboardExportCompareBtn"),
+  dashboardExportDocsBtn: $("dashboardExportDocsBtn"),
+  dashboardAllExportsBtn: $("dashboardAllExportsBtn"),
+  exportCards: $("exportCards"),
+  managerKpiRow: $("managerKpiRow"),
+  domainCoverageBody: $("domainCoverageBody"),
+  teamActivityBlock: $("teamActivityBlock"),
+  techCompareBody: $("techCompareBody"),
+  riskZonesBody: $("riskZonesBody"),
+  homeVersion: $("homeVersion"),
   topicWatchlistInput: $("topicWatchlistInput"),
   topicWatchlistSaveBtn: $("topicWatchlistSaveBtn"),
   topicWatchlistStatus: $("topicWatchlistStatus"),
@@ -388,14 +1548,14 @@ const GRAPH_ADV_FILTERS_SESSION_KEY = "mkg_graph_adv_filters";
 const GRAPH_FILTERS_COLLAPSED_KEY = "mkg_graph_filters_collapsed";
 
 const ENTITY_TYPE_FILTERS = [
-  { id: "material", label: "Материал", labels: ["Material"] },
-  { id: "process", label: "Процесс", labels: ["Process"] },
-  { id: "equipment", label: "Оборудование", labels: ["Equipment"] },
-  { id: "property", label: "Свойство", labels: ["Property"] },
-  { id: "experiment", label: "Эксперимент", labels: ["ExperimentRun"] },
-  { id: "publication", label: "Публикация", labels: ["Document"] },
-  { id: "expert", label: "Эксперт", labels: ["Expert"] },
-  { id: "object", label: "Объект", labels: ["Organization", "Location", "Facility"] },
+  { id: "material", labels: ["Material"] },
+  { id: "process", labels: ["Process"] },
+  { id: "equipment", labels: ["Equipment"] },
+  { id: "property", labels: ["Property"] },
+  { id: "experiment", labels: ["ExperimentRun"] },
+  { id: "publication", labels: ["Document"] },
+  { id: "expert", labels: ["Expert"] },
+  { id: "object", labels: ["Organization", "Location", "Facility"] },
 ];
 const ALL_ENTITY_FILTER_IDS = ENTITY_TYPE_FILTERS.map((e) => e.id);
 const ENTITY_LABELS_BY_FILTER_ID = Object.fromEntries(
@@ -409,23 +1569,23 @@ const GAP_NODE_LABELS = new Set(["KnowledgeGap"]);
 const GAP_REL_TYPES = new Set(["DETECTED_MISSING", "LINKED_GAP"]);
 
 const DOC_CATEGORY_FILTERS = [
-  { id: "patent", label: "Патент" },
-  { id: "article", label: "Статья" },
-  { id: "report", label: "Отчёт" },
-  { id: "handbook", label: "Справочник" },
+  { id: "patent" },
+  { id: "article" },
+  { id: "report" },
+  { id: "handbook" },
 ];
 const ALL_DOC_CATEGORY_IDS = DOC_CATEGORY_FILTERS.map((d) => d.id);
 
 const RELATION_TYPE_FILTERS = [
-  { id: "USES_MAT", label: "Материал (USED_FOR)" },
-  { id: "OPERATES_PROC", label: "Процесс" },
-  { id: "SHOWED_EFFECT", label: "Эффект (SHOWED_EFFECT)" },
-  { id: "AUTHORED", label: "Автор (EXPERT_IN)" },
-  { id: "PRODUCED_MEASURE", label: "Измерение" },
-  { id: "ASSERTED_BY", label: "Утверждение" },
-  { id: "DERIVED_FROM", label: "Выведено из" },
-  { id: "CONTEXT_FOR", label: "Контекст" },
-  { id: "DATA_SOURCE_FOR", label: "Источник данных" },
+  { id: "USES_MAT", i18n: "uses_mat" },
+  { id: "OPERATES_PROC", i18n: "operates_proc" },
+  { id: "SHOWED_EFFECT", i18n: "showed_effect" },
+  { id: "AUTHORED", i18n: "authored" },
+  { id: "PRODUCED_MEASURE", i18n: "produced_measure" },
+  { id: "ASSERTED_BY", i18n: "asserted_by" },
+  { id: "DERIVED_FROM", i18n: "derived_from" },
+  { id: "CONTEXT_FOR", i18n: "context_for" },
+  { id: "DATA_SOURCE_FOR", i18n: "data_source_for" },
 ];
 const ALL_RELATION_FILTER_IDS = RELATION_TYPE_FILTERS.map((r) => r.id);
 
@@ -463,35 +1623,35 @@ function defaultQdrantPostFilters() {
 }
 
 const DOC_PIPELINE = [
-  { id: "upload", label: "Загрузка", short: "Файл" },
-  { id: "ocr", label: "OCR / ingestion", short: "OCR" },
-  { id: "md", label: "Markdown", short: "MD" },
-  { id: "graph", label: "Extraction / граф", short: "Граф" },
-  { id: "neo4j", label: "Neo4j", short: "Neo4j" },
-  { id: "qdrant", label: "L3+L4 индекс (Qdrant)", short: "L3+L4" },
-  { id: "l4", label: "Глобальная кластеризация L4", short: "L4" },
+  { id: "upload" },
+  { id: "ocr" },
+  { id: "md" },
+  { id: "graph" },
+  { id: "neo4j" },
+  { id: "qdrant" },
+  { id: "l4" },
 ];
 
 const JOURNEY_STAGES = [
-  { id: "upload", title: "Загрузка файла", hint: "PDF, DOCX или другой формат принят в хранилище" },
-  { id: "ocr", title: "OCR и ingestion", hint: "Распознавание текста, очистка, сборка Markdown" },
-  { id: "md", title: "Markdown готов", hint: "Чистый MD и размеченный (L3 + узлы графа) — вкладка «Markdown», скачивание .md" },
-  { id: "layers", title: "Извлечение слоёв L1–L6", hint: "LLM извлекает сущности, абзацы, факты, роли доступа…", isLayers: true },
-  { id: "graph", title: "Граф знаний", hint: "Узлы и связи сохранены локально" },
-  { id: "neo4j", title: "Neo4j", hint: "Синхронизация в графовую базу данных" },
-  { id: "qdrant", title: "L3+L4: индекс эмбеддингов (Qdrant)", hint: "TextParagraph → mkg_chunks; Claim/Measurement/… → mkg_claims" },
-  { id: "l4", title: "L4: глобальная HDBSCAN-кластеризация", hint: "Claim/Measurement → mkg_claims, cluster_id и is_anomaly по всему корпусу" },
+  { id: "upload" },
+  { id: "ocr" },
+  { id: "md" },
+  { id: "layers", isLayers: true },
+  { id: "graph" },
+  { id: "neo4j" },
+  { id: "qdrant" },
+  { id: "l4" },
 ];
 
 /** Кнопки ↺ Перезапустить по этапам пайплайна */
 const STAGE_RETRY = {
-  ocr: { action: "reprocess", label: "↺ OCR", showOn: ["failed", "done"] },
-  md: { action: "reprocess", label: "↺ OCR", showOn: ["done"] },
-  layers: { action: "extract", label: "↺ Извлечение", showOn: ["failed", "done"] },
-  graph: { action: "extract", label: "↺ Извлечение", showOn: ["failed", "done"] },
-  neo4j: { action: "neo4j", label: "↺ Neo4j", showOn: ["failed", "done"] },
-  qdrant: { action: "index", label: "↺ Индекс", showOn: ["failed", "done"] },
-  l4: { action: "l4_cluster", label: "↺ Глоб. L4", showOn: ["failed", "done"] },
+  ocr: { action: "reprocess", labelKey: "pipe_retry_ocr", showOn: ["failed", "done"] },
+  md: { action: "reprocess", labelKey: "pipe_retry_ocr", showOn: ["done"] },
+  layers: { action: "extract", labelKey: "pipe_retry_extract", showOn: ["failed", "done"] },
+  graph: { action: "extract", labelKey: "pipe_retry_extract", showOn: ["failed", "done"] },
+  neo4j: { action: "neo4j", labelKey: "pipe_retry_neo4j", showOn: ["failed", "done"] },
+  qdrant: { action: "index", labelKey: "pipe_retry_index", showOn: ["failed", "done"] },
+  l4: { action: "l4_cluster", labelKey: "pipe_retry_l4", showOn: ["failed", "done"] },
 };
 
 function isAnswersOnlyMode(doc) {
@@ -508,12 +1668,12 @@ function needsFullGraphBuild(doc) {
 }
 
 const FULL_PIPELINE_STEPS = [
-  { id: "ocr", label: "OCR и Markdown" },
-  { id: "layers", label: "Извлечение слоёв L1–L6" },
-  { id: "graph", label: "Граф знаний (узлы и связи)" },
-  { id: "neo4j", label: "Синхронизация Neo4j" },
-  { id: "qdrant", label: "Индекс L3+L4 в Qdrant" },
-  { id: "l4", label: "Глобальная кластеризация L4" },
+  { id: "ocr" },
+  { id: "layers" },
+  { id: "graph" },
+  { id: "neo4j" },
+  { id: "qdrant" },
+  { id: "l4" },
 ];
 
 function renderFullPipelineStepsHtml(doc) {
@@ -524,7 +1684,7 @@ function renderFullPipelineStepsHtml(doc) {
     let state = states[s.id] || "pending";
     if (s.id === "layers") state = layersState;
     if (isAnswersOnlyMode(doc) && ["layers", "graph", "neo4j", "l4"].includes(s.id)) state = "skipped";
-    return `<li class="${state}">${esc(s.label)}</li>`;
+    return `<li class="${state}">${esc(fullPipeLabel(s.id))}</li>`;
   }).join("");
 }
 
@@ -533,8 +1693,8 @@ function renderAnswersOnlyBanner(doc) {
   const docId = doc.id || doc.document_id;
   const busy = doc.status === "extracting";
   return `<div class="pipeline-answers-banner">
-    <p><strong>Документ загружен только для чата</strong> — слои L1–L6, граф и Neo4j не строились. Для карты знаний запустите полный пайплайн.</p>
-    <button type="button" class="btn btn-primary btn-small" data-full-pipeline-doc="${esc(docId)}" ${busy ? "disabled" : ""}>↺ Построить полный граф</button>
+    <p><strong>${esc(t("pipeline_answers_banner"))}</strong> — ${esc(t("pipeline_answers_desc"))}</p>
+    <button type="button" class="btn btn-primary btn-small" data-full-pipeline-doc="${esc(docId)}" ${busy ? "disabled" : ""}>${esc(t("pipeline_answers_action"))}</button>
   </div>`;
 }
 
@@ -565,13 +1725,11 @@ function renderQdrantPendingBanner(doc) {
   if (!docNeedsQdrantIndex(doc)) return "";
   const docId = doc.id || doc.document_id;
   const answersOnly = isAnswersOnlyMode(doc);
-  const msg = answersOnly
-    ? "Markdown готов — проиндексируйте фрагменты в Qdrant для семантического поиска в чате."
-    : "Граф построен — индекс L3+L4 в Qdrant ещё не создан (или индексация прервалась).";
+  const msg = answersOnly ? t("qdrant_index_ao_msg") : t("qdrant_index_full_msg");
   return `<div class="pipeline-qdrant-banner">
-    <p><strong>Индексировать в Qdrant?</strong> ${esc(msg)}</p>
-    <button type="button" class="btn btn-primary btn-small" data-qdrant-index-doc="${esc(docId)}">⚡ Индексировать в Qdrant</button>
-    <button type="button" class="btn btn-ghost btn-small" data-open-qdrant-tab>Открыть Qdrant</button>
+    <p><strong>${esc(t("qdrant_index_prompt"))}</strong> ${esc(msg)}</p>
+    <button type="button" class="btn btn-primary btn-small" data-qdrant-index-doc="${esc(docId)}">${esc(t("qdrant_index_btn"))}</button>
+    <button type="button" class="btn btn-ghost btn-small" data-open-qdrant-tab>${esc(t("qdrant_open_tab"))}</button>
   </div>`;
 }
 
@@ -648,9 +1806,9 @@ function updateGraphEmptyState(doc) {
     : null);
 
   if (graphScope === "all") {
-    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Нет документов с графом";
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = t("graph_empty_no_docs");
     if (els.graphEmptyDesc) {
-      els.graphEmptyDesc.textContent = "Загрузите файл на вкладке «Документы» — полный пайплайн (OCR → граф → Neo4j → Qdrant) запустится автоматически.";
+      els.graphEmptyDesc.textContent = t("graph_empty_no_docs_desc");
     }
     if (els.graphEmptySteps) els.graphEmptySteps.innerHTML = "";
     els.graphEmptyActionBtn?.classList.add("hidden");
@@ -658,9 +1816,9 @@ function updateGraphEmptyState(doc) {
   }
 
   if (!data) {
-    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Граф ещё не построен";
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = t("graph_empty_not_built");
     if (els.graphEmptyDesc) {
-      els.graphEmptyDesc.textContent = "Выберите документ слева или загрузите файл.";
+      els.graphEmptyDesc.textContent = t("graph_empty_pick_doc");
     }
     if (els.graphEmptySteps) els.graphEmptySteps.innerHTML = "";
     els.graphEmptyActionBtn?.classList.add("hidden");
@@ -671,20 +1829,20 @@ function updateGraphEmptyState(doc) {
   const answersOnly = isAnswersOnlyMode(data);
 
   if (answersOnly && needsFullGraphBuild(data)) {
-    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Граф не построен";
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = t("graph_empty_not_built_ao");
     if (els.graphEmptyDesc) {
-      els.graphEmptyDesc.textContent = "Документ загружен в режиме «только для ответов» — слои и Neo4j не строились. Нажмите кнопку ниже для полной обработки.";
+      els.graphEmptyDesc.textContent = t("graph_empty_ao_desc");
     }
   } else if (needsFullGraphBuild(data)) {
-    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Граф ещё не построен";
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = t("graph_empty_not_built");
     if (els.graphEmptyDesc) {
       els.graphEmptyDesc.textContent = busy
-        ? "Идёт обработка — граф появится после извлечения слоёв L1–L6."
-        : "Markdown готов. Запустите извлечение, чтобы построить граф знаний.";
+        ? t("graph_empty_busy_desc")
+        : t("graph_empty_ready_desc");
     }
   } else if (busy) {
-    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = "Граф строится…";
-    if (els.graphEmptyDesc) els.graphEmptyDesc.textContent = "Дождитесь завершения текущего этапа пайплайна.";
+    if (els.graphEmptyTitle) els.graphEmptyTitle.textContent = t("graph_empty_building");
+    if (els.graphEmptyDesc) els.graphEmptyDesc.textContent = t("graph_empty_building_desc");
   }
 
   if (els.graphEmptySteps) {
@@ -694,7 +1852,7 @@ function updateGraphEmptyState(doc) {
   const showAction = needsFullGraphBuild(data) && !busy;
   if (els.graphEmptyActionBtn) {
     els.graphEmptyActionBtn.classList.toggle("hidden", !showAction);
-    els.graphEmptyActionBtn.textContent = answersOnly ? "↺ Построить полный граф" : "Построить граф";
+    els.graphEmptyActionBtn.textContent = answersOnly ? t("graph_empty_action_full") : t("graph_empty_action_build");
     els.graphEmptyActionBtn.disabled = busy;
     els.graphEmptyActionBtn.dataset.docId = data.id || data.document_id || "";
   }
@@ -703,7 +1861,7 @@ function updateGraphEmptyState(doc) {
 async function startFullPipeline(docId, btn) {
   if (!docId) return;
   const prev = btn?.textContent;
-  if (btn) { btn.disabled = true; btn.textContent = "Запуск…"; }
+  if (btn) { btn.disabled = true; btn.textContent = t("pipe_starting"); }
   try {
     const r = await fetch(`${API}/documents/${encodeURIComponent(docId)}/reprocess-full`, { method: "POST" });
     if (!r.ok) {
@@ -748,11 +1906,11 @@ function shouldShowStageRetry(stageId, state, doc) {
 
 function renderStageRetryBtn(docId, stageId, state, doc) {
   if (isAnswersOnlyMode(doc) && stageId === "graph" && state === "skipped") {
-    return `<button type="button" class="btn btn-ghost btn-small journey-retry-btn" data-retry-doc="${esc(docId)}" data-retry-action="full" data-retry-stage="${esc(stageId)}" title="Полный пайплайн">↺ Полная обработка</button>`;
+    return `<button type="button" class="btn btn-ghost btn-small journey-retry-btn" data-retry-doc="${esc(docId)}" data-retry-action="full" data-retry-stage="${esc(stageId)}" title="${esc(t("pipe_retry_full"))}">${esc(t("pipe_retry_full"))}</button>`;
   }
   if (!shouldShowStageRetry(stageId, state, doc)) return "";
   const cfg = STAGE_RETRY[stageId];
-  return `<button type="button" class="btn btn-ghost btn-small journey-retry-btn" data-retry-doc="${esc(docId)}" data-retry-action="${esc(cfg.action)}" data-retry-stage="${esc(stageId)}" title="Перезапустить этап">${esc(cfg.label)}</button>`;
+  return `<button type="button" class="btn btn-ghost btn-small journey-retry-btn" data-retry-doc="${esc(docId)}" data-retry-action="${esc(cfg.action)}" data-retry-stage="${esc(stageId)}" title="${esc(t("pipe_retry"))}">${esc(t(cfg.labelKey))}</button>`;
 }
 
 function isL4Done(doc) {
@@ -885,16 +2043,16 @@ function renderDocPipelineHtml(doc, { compact = true, showRetry = true } = {}) {
   const docId = doc.id || doc.document_id;
   const chips = DOC_PIPELINE.map((s, i) => {
     const state = states[s.id] || "pending";
-    const label = compact ? s.short : s.label;
-    const stepHint = doc.step && state === "active" ? (STEP_RU[doc.step] || doc.step) : "";
-    const title = stepHint ? `${s.label} · ${stepHint}` : s.label;
+    const label = compact ? pipeShort(s.id) : pipeLabel(s.id);
+    const stepHint = doc.step && state === "active" ? stepLabel(doc.step) : "";
+    const title = stepHint ? `${pipeLabel(s.id)} · ${stepHint}` : pipeLabel(s.id);
     const retryAction = (isAnswersOnlyMode(doc) && s.id === "graph" && state === "skipped")
       ? "full"
       : (STAGE_RETRY[s.id]?.action || "");
-    const retryLabel = retryAction === "full" ? "↺" : (STAGE_RETRY[s.id]?.label || "↺");
+    const retryLabel = retryAction === "full" ? "↺" : (STAGE_RETRY[s.id] ? t(STAGE_RETRY[s.id].labelKey) : "↺");
     const showGraphFull = isAnswersOnlyMode(doc) && s.id === "graph" && state === "skipped";
     const retry = showRetry && docId && (shouldShowStageRetry(s.id, state, doc) || showGraphFull)
-      ? `<button type="button" class="doc-pipe-retry" data-retry-doc="${esc(docId)}" data-retry-action="${esc(retryAction)}" data-retry-stage="${esc(s.id)}" title="${showGraphFull ? "Полная обработка" : "Перезапустить"}">${esc(retryLabel)}</button>`
+      ? `<button type="button" class="doc-pipe-retry" data-retry-doc="${esc(docId)}" data-retry-action="${esc(retryAction)}" data-retry-stage="${esc(s.id)}" title="${showGraphFull ? esc(t("pipe_retry_full")) : esc(t("pipe_retry"))}">${esc(retryLabel)}</button>`
       : "";
     return `<span class="doc-pipe-step ${state}" title="${esc(title)}">${esc(label)}${retry}</span>`;
   });
@@ -931,13 +2089,13 @@ function journeyMarkerIcon(state) {
 
 function renderJourneyLayerGrid(layers) {
   if (!layers?.length) {
-    return '<p class="muted">Слои появятся при запуске извлечения графа.</p>';
+    return `<p class="muted">${esc(t("journey_layers_pending"))}</p>`;
   }
   return `<div class="journey-layer-grid">${layers.map((l) => `
     <div class="journey-layer st-${l.status}" title="${esc(l.title)}">
       <span class="jl-id l-${l.id}">${esc(l.id)}</span>
       <span class="jl-title">${esc(l.title)}</span>
-      <span class="jl-stat">${esc(LAYER_STATUS_RU[l.status] || l.status)} · ${l.nodes} узл · ${l.relationships} св</span>
+      <span class="jl-stat">${esc(tf("journey_layer_stat", { status: layerStatusLabel(l.status), nodes: l.nodes, rels: l.relationships }))}</span>
     </div>`).join("")}</div>`;
 }
 
@@ -956,18 +2114,18 @@ function renderRelChip(rel, { docId = null } = {}) {
 function renderJourneyRecentRels(rels, docId = null) {
   if (!rels?.length) return "";
   const chips = rels.slice(-8).map((rel) => renderRelChip(rel, { docId })).join("");
-  return `<div class="journey-recent-rels"><h6>Последние связи</h6>${chips}</div>`;
+  return `<div class="journey-recent-rels"><h6>${esc(t("journey_recent_rels"))}</h6>${chips}</div>`;
 }
 
 function renderDocJourneyHtml(doc, layerPayload) {
   if (!doc) {
-    return '<p class="muted doc-work-empty">Выберите документ слева или загрузите новый файл.</p>';
+    return `<p class="muted doc-work-empty">${esc(t("doc_work_empty"))}</p>`;
   }
   const docId = doc.id || doc.document_id;
   const states = getDocPipelineStates(doc);
   const layers = layerPayload?.layers || [];
   const layersState = getLayersJourneyState(doc, layers);
-  const stepHint = doc.step ? (STEP_RU[doc.step] || doc.step) : "";
+  const stepHint = doc.step ? stepLabel(doc.step) : "";
   const showLayerBlock = ["md_ready", "extracting", "loaded", "failed"].includes(doc.status);
 
   const steps = JOURNEY_STAGES.map((stage) => {
@@ -982,18 +2140,18 @@ function renderDocJourneyHtml(doc, layerPayload) {
     } else if (stage.id === "upload" && doc.size_bytes) {
       detail = `<div class="journey-step-detail">${esc(formatBytes(doc.size_bytes))} · ${esc(formatDateTime(doc.upload_date))}</div>`;
     } else if (stage.id === "md" && state === "done") {
-      detail = '<div class="journey-step-detail">Вкладка «Markdown»: без разметки / с L3-маркерами · «Скачать .md»</div>';
+      detail = `<div class="journey-step-detail">${esc(t("journey_md_detail"))}</div>`;
     } else if (stage.id === "graph" && state === "done" && doc.graph_nodes) {
-      detail = `<div class="journey-step-detail">${doc.graph_nodes} узлов · ${doc.graph_relationships || 0} связей</div>`;
+      detail = `<div class="journey-step-detail">${esc(tf("journey_graph_detail", { nodes: doc.graph_nodes, rels: doc.graph_relationships || 0 }))}</div>`;
     } else if (stage.id === "neo4j" && doc.neo4j_synced) {
-      detail = '<div class="journey-step-detail">Синхронизировано с Neo4j</div>';
+      detail = `<div class="journey-step-detail">${esc(t("journey_neo4j_synced"))}</div>`;
     } else if (stage.id === "qdrant" && docId && indexedDocsSet.has(docId)) {
-      detail = '<div class="journey-step-detail">L3 TextParagraph проиндексированы в mkg_chunks</div>';
+      detail = `<div class="journey-step-detail">${esc(t("journey_qdrant_indexed"))}</div>`;
     } else if (stage.id === "l4" && isL4Done(doc)) {
       const clusters = doc.l4_clusters ?? 0;
       const anomalies = doc.l4_anomalies ?? 0;
       const clustered = doc.l4_clustered ?? 0;
-      detail = `<div class="journey-step-detail">${clustered} точек · ${clusters} кластеров · ${anomalies} аномалий</div>`;
+      detail = `<div class="journey-step-detail">${esc(tf("journey_l4_detail", { clustered, clusters, anomalies }))}</div>`;
     } else if (stage.id === "l4" && doc.l4_error) {
       detail = `<div class="journey-step-detail">${esc(doc.l4_error)}</div>`;
     } else if (state === "failed" && doc.error) {
@@ -1001,7 +2159,7 @@ function renderDocJourneyHtml(doc, layerPayload) {
     }
 
     const layerBlock = stage.isLayers && showLayerBlock
-      ? `<div class="journey-layer-block"><h5>Слои L1–L6</h5>${renderJourneyLayerGrid(layers)}${doc.status === "extracting" ? renderJourneyRecentRels(layerPayload?.recent_relationships, docId) : ""}</div>`
+      ? `<div class="journey-layer-block"><h5>${esc(t("journey_layers_heading"))}</h5>${renderJourneyLayerGrid(layers)}${doc.status === "extracting" ? renderJourneyRecentRels(layerPayload?.recent_relationships, docId) : ""}</div>`
       : "";
 
     return `
@@ -1009,10 +2167,10 @@ function renderDocJourneyHtml(doc, layerPayload) {
         <div class="journey-marker">${journeyMarkerIcon(state)}</div>
         <div class="journey-body">
           <div class="journey-step-head">
-            <h4>${esc(stage.title)}</h4>
+            <h4>${esc(journeyTitle(stage.id))}</h4>
             ${renderStageRetryBtn(docId, stage.id, state, doc)}
           </div>
-          <p class="muted">${state === "skipped" ? "Пропущено (режим «только для ответов»)" : esc(stage.hint)}</p>
+          <p class="muted">${state === "skipped" ? esc(t("journey_skipped")) : esc(journeyHint(stage.id))}</p>
           ${detail}
           ${layerBlock}
         </div>
@@ -1057,20 +2215,20 @@ function updateDocWorkHeader(doc) {
     return;
   }
   if (isAll) {
-    if (els.docWorkTitle) els.docWorkTitle.textContent = "Все документы";
+    if (els.docWorkTitle) els.docWorkTitle.textContent = t("docs_all_docs");
     if (els.docWorkBadge) {
-      els.docWorkBadge.textContent = "граф";
+      els.docWorkBadge.textContent = t("docs_all_graph_badge");
       els.docWorkBadge.className = "badge s-search-ready";
     }
     if (els.docWorkMeta) {
       const n = docsWithGraph().length;
-      els.docWorkMeta.textContent = n ? `${n} док. с графом` : "";
+      els.docWorkMeta.textContent = n ? tf("docs_with_graph_count", { count: n }) : "";
     }
   } else if (doc) {
     const label = statusLabel(doc);
     if (els.docWorkTitle) {
       const modeBadge = isAnswersOnlyMode(doc)
-        ? ' <span class="doc-mode-badge">только чат</span>'
+        ? ` <span class="doc-mode-badge">${esc(t("docs_mode_chat_only"))}</span>`
         : "";
       els.docWorkTitle.innerHTML = `${esc(doc.file_name || doc.document_id || doc.id)}${modeBadge}`;
     }
@@ -1080,7 +2238,7 @@ function updateDocWorkHeader(doc) {
     }
     if (els.docWorkMeta) {
       const step = doc.step ? stepLabel(doc.step) : "";
-      els.docWorkMeta.textContent = step ? `Шаг: ${step}` : "";
+      els.docWorkMeta.textContent = step ? tf("docs_step_prefix", { step }) : "";
     }
   }
   els.docWorkTabJourney?.classList.toggle("hidden", isAll);
@@ -1156,44 +2314,14 @@ function updateDocPipelinePanel(doc) {
   updateDocWorkArea(doc);
 }
 
-const STEP_RU = {
-  ingestion: "OCR / ingestion",
-  reprocess: "повтор OCR",
-  extraction: "извлечение",
-  layer_L3: "текст L3",
-  layer_L5: "доступ L5",
-  layer_L2_L6: "контекст и ТЭП",
-  layer_L2: "контекст L2",
-  layer_L6: "ТЭП L6",
-  layer_L1_L4: "сущности и факты",
-  neo4j_load: "загрузка Neo4j",
-  extraction_failed: "ошибка extraction",
-  ingestion_failed: "ошибка ingestion",
-  index_failed: "ошибка индексации",
-  answers_indexed: "индекс для чата",
-  qdrant_index: "индекс L3+L4 в Qdrant",
-  l4_cluster: "глобальная кластеризация L4",
-  l4_done: "кластеризация L4 готова",
-  l4_failed: "ошибка L4",
-  cancelling: "остановка",
-  extraction_cancelled: "остановлено",
-  extraction_empty: "пустой граф",
-};
-
-const LAYER_STATUS_RU = {
-  pending: "ожид.",
-  running: "идёт",
-  done: "готово",
-  partial: "частично",
-  empty: "пусто",
-  failed: "ошибка",
-};
-
 let selectedDoc = null;
-let currentPage = "chats";
+let currentPage = "home";
+let lastDashboardData = null;
 let graphScope = "doc";
 let docPanelMode = null;
 let docListFilterText = "";
+let docListGeoFilter = "";
+let docListYearFilter = "";
 let graphNodeListVisible = false;
 let lastQdrantIndexLog = "";
 let markdownClean = "";
@@ -1207,6 +2335,8 @@ let graphLayerFilter = "all";
 let highlightCrossLayer = false;
 let graphAdvancedFilters = defaultGraphAdvancedFilters();
 let lastQdrantSearchHits = [];
+let lastQdrantSearchNote = "";
+let lastQdrantSearchQuery = "";
 let qdrantPostFilters = defaultQdrantPostFilters();
 let connectionFormationMode = false;
 let connectionFormationStep = 0;
@@ -1385,7 +2515,7 @@ function pickFiles(fileList) {
   const more = selectedFiles.length > 2 ? ` +${selectedFiles.length - 2}` : "";
   const totalKb = selectedFiles.reduce((s, f) => s + f.size, 0) / 1024;
   if (els.dropText) {
-    els.dropText.innerHTML = `<b>${selectedFiles.length} файл(ов)</b><br><span class="muted">${esc(names)}${esc(more)} · ${totalKb.toFixed(1)} КБ</span>`;
+    els.dropText.innerHTML = `<b>${esc(tf("files_selected", { count: selectedFiles.length }))}</b><br><span class="muted">${esc(names)}${esc(more)} · ${totalKb.toFixed(1)} КБ</span>`;
   }
   if (els.uploadBtn) els.uploadBtn.disabled = false;
 }
@@ -1394,7 +2524,7 @@ function resetDropZone() {
   selectedFiles = [];
   if (els.file) els.file.value = "";
   if (els.dropText) {
-    els.dropText.innerHTML = 'Перетащите файл или нажмите<br><span class="muted">PDF · DOCX · XLSX · MD · TXT</span>';
+    els.dropText.innerHTML = `${esc(t("docs_drop_reset"))}<br><span class="muted">${esc(t("docs_drop_formats"))}</span>`;
   }
   if (els.uploadBtn) els.uploadBtn.disabled = true;
 }
@@ -1411,16 +2541,58 @@ async function loadFormats() {
     const r = await fetch(`${API}/formats`);
     if (!r.ok) return;
     const f = await r.json();
-    els.formatsHint.textContent = `${f.extensions.join(" · ")} · до ${(f.max_size_bytes / (1024 * 1024)).toFixed(0)} МБ`;
+    els.formatsHint.textContent = tf("docs_formats", {
+      ext: f.extensions.join(" · "),
+      max: (f.max_size_bytes / (1024 * 1024)).toFixed(0),
+    });
   } catch {
-    els.formatsHint.textContent = "PDF, DOCX, XLSX, MD, TXT…";
+    els.formatsHint.textContent = t("docs_formats_fallback");
   }
+}
+
+function appendUploadMetadata(fd) {
+  const geo = els.uploadGeography?.value?.trim() || "";
+  const src = els.uploadSourceLocation?.value?.trim() || "";
+  const matDate = els.uploadMaterialDate?.value?.trim() || "";
+  if (geo) fd.append("geography", geo);
+  if (src) fd.append("source_location", src);
+  if (matDate) fd.append("material_date", matDate);
+}
+
+function classificationLabel(level) {
+  const key = `classification_${level || "открытый"}`;
+  return t(key) || level || "открытый";
+}
+
+function classificationBadgeHtml(doc) {
+  const level = doc?.classification || "открытый";
+  return `<span class="doc-classification-badge doc-classification-${esc(level)}" title="${esc(t("classification_label"))}">${esc(classificationLabel(level))}</span>`;
+}
+
+function renderDocTagsHtml(doc) {
+  const tags = Array.isArray(doc?.tags) ? doc.tags.filter(Boolean) : [];
+  const classBadge = classificationBadgeHtml(doc);
+  if (!tags.length && !doc?.geography && !doc?.material_date) {
+    return `<div class="doc-tags">${classBadge}</div>`;
+  }
+  const chips = [];
+  if (doc.geography) chips.push(`#geography:${esc(doc.geography)}`);
+  if (doc.material_date) {
+    const year = String(doc.material_date).slice(0, 4);
+    if (year) chips.push(`#year:${esc(year)}`);
+  }
+  tags.forEach((tag) => {
+    const label = String(tag).startsWith("#") ? String(tag).slice(1) : String(tag);
+    if (!chips.some((c) => c.includes(label))) chips.push(`#${esc(label)}`);
+  });
+  if (!chips.length) return `<div class="doc-tags">${classBadge}</div>`;
+  return `<div class="doc-tags">${classBadge}${chips.map((c) => `<span class="doc-tag">${c}</span>`).join("")}</div>`;
 }
 
 async function uploadFiles() {
   if (!selectedFiles.length || !els.uploadBtn) return;
   els.uploadBtn.disabled = true;
-  els.uploadBtn.textContent = "Загрузка…";
+  els.uploadBtn.textContent = t("docs_uploading");
   showBox(els.uploadError, "");
   const fd = new FormData();
   const useBatch = selectedFiles.length > 1;
@@ -1431,6 +2603,7 @@ async function uploadFiles() {
   }
   fd.append("classification", els.classification?.value || "открытый");
   fd.append("processing_mode", "full");
+  appendUploadMetadata(fd);
   let ok = false;
   const uploadedIds = [];
   try {
@@ -1468,7 +2641,7 @@ async function uploadFiles() {
     showBox(els.uploadError, e.message);
     if (selectedFiles.length) els.uploadBtn.disabled = false;
   } finally {
-    els.uploadBtn.textContent = "Загрузить и обработать";
+    els.uploadBtn.textContent = t("docs_upload_btn");
     if (!ok && selectedFiles.length) els.uploadBtn.disabled = false;
     renderDocsList();
   }
@@ -1567,13 +2740,6 @@ function setPreview(el, text, isEmpty) {
   el.classList.toggle("empty", !!isEmpty);
 }
 
-function stepLabel(step) {
-  if (!step) return "извлечение";
-  const m = String(step).match(/^layer_L1_L4_(\d+)\/(\d+)$/);
-  if (m) return `факты ${m[1]}/${m[2]}`;
-  return STEP_RU[step] || step;
-}
-
 function formatBytes(n) {
   const v = Number(n);
   if (!Number.isFinite(v) || v <= 0) return "—";
@@ -1585,7 +2751,8 @@ function formatBytes(n) {
 function formatDateTime(value) {
   if (!value) return "—";
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString("ru-RU");
+  const locale = getUiLang() === "en" ? "en-US" : "ru-RU";
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString(locale);
 }
 
 function renderDocMetadata(data) {
@@ -1594,6 +2761,11 @@ function renderDocMetadata(data) {
     return;
   }
   const rows = [
+    [t("docs_meta_geography_label"), data.geography || "—"],
+    [t("docs_meta_source_label"), data.source_location || "—"],
+    [t("docs_meta_material_date"), data.material_date ? String(data.material_date).slice(0, 10) : "—"],
+    [t("docs_meta_ingested_at"), formatDateTime(data.ingested_at || data.upload_date)],
+    [t("docs_meta_tags"), (data.tags || []).length ? (data.tags || []).map((x) => `#${x}`).join(" · ") : "—"],
     ["Тип", data.doc_type || "—"],
     ["MIME", data.mime_type || "—"],
     ["Классификация", data.classification || "—"],
@@ -1602,7 +2774,7 @@ function renderDocMetadata(data) {
     ["Размер", formatBytes(data.size_bytes)],
     ["Загружен", formatDateTime(data.upload_date)],
     ["SHA-256", data.hash_sum ? `${data.hash_sum.slice(0, 12)}…` : "—"],
-    ["Шаг", data.step ? (STEP_RU[data.step] || data.step) : "—"],
+    ["Шаг", data.step ? stepLabel(data.step) : "—"],
   ];
   els.docMetaGrid.innerHTML = rows.map(
     ([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`,
@@ -1616,7 +2788,7 @@ function applyMarkdownFromPreview(data) {
     setMarkdownViews(data.markdown, data.markdown_raw || "", data.markdown_marked || data.markdown, false);
     return;
   }
-  const stepHint = data.step ? ` · ${STEP_RU[data.step] || data.step}` : "";
+  const stepHint = data.step ? ` · ${stepLabel(data.step)}` : "";
   if (data.status === "processing") {
     setMarkdownViews(`OCR → Markdown${stepHint}…`, "", "", true);
   } else if (data.status === "uploaded") {
@@ -1724,6 +2896,40 @@ function sanitizeMarkdownHtml(html) {
   return String(html || "").replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
 }
 
+function enhanceMarkdownTables(html) {
+  if (!html || !/<table\b/i.test(html)) return html;
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  tmp.querySelectorAll("table").forEach((tbl) => {
+    tbl.classList.add("md-table", "compare-table");
+    if (!tbl.querySelector("thead")) {
+      const tbody = tbl.querySelector("tbody") || tbl;
+      const firstRow = tbody.querySelector("tr");
+      if (firstRow) {
+        const thead = document.createElement("thead");
+        thead.appendChild(firstRow);
+        tbl.insertBefore(thead, tbody);
+        if (!tbl.querySelector("tbody")) {
+          const newTbody = document.createElement("tbody");
+          while (thead.nextSibling) newTbody.appendChild(thead.nextSibling);
+          tbl.appendChild(newTbody);
+        }
+      }
+    }
+    if (tbl.parentElement?.classList.contains("compare-table-wrap")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "compare-table-wrap";
+    tbl.parentNode?.insertBefore(wrap, tbl);
+    wrap.appendChild(tbl);
+  });
+  return tmp.innerHTML;
+}
+
+/** @deprecated use enhanceMarkdownTables */
+function enhanceComparisonTables(html) {
+  return enhanceMarkdownTables(html);
+}
+
 function renderMarkdownHtml(text) {
   const src = stripMdComments(text || "").slice(0, 120000);
   if (!src.trim()) return "";
@@ -1733,7 +2939,7 @@ function renderMarkdownHtml(text) {
   } else {
     html = esc(src).replace(/\n/g, "<br>");
   }
-  return sanitizeMarkdownHtml(html);
+  return sanitizeMarkdownHtml(enhanceMarkdownTables(html));
 }
 
 function setMdViewMode(mode) {
@@ -2010,13 +3216,14 @@ function formatEmbeddingStatus(data) {
   if (!data) return "Эмбеддинги: недоступны";
   const chunks = data.l3_points ?? data.collections?.mkg_chunks?.points ?? 0;
   const claims = data.l4_points ?? data.collections?.mkg_claims?.points ?? 0;
-  const total = data.total_points ?? chunks + claims;
+  const entities = data.entity_points ?? data.collections?.mkg_entities?.points ?? 0;
+  const total = data.total_points ?? chunks + claims + entities;
   const qdrant = data.qdrant_ok !== false ? "OK" : "недоступен";
   const yandex = data.yandex_configured ? "настроен" : "не настроен";
   const docTotal = getCorpusDocTotal();
   const indexedDocs = countCorpusQdrantIndexed();
   const docPart = docTotal > 0 ? `${indexedDocs}/${docTotal} док. · ` : "";
-  return `Qdrant ${qdrant} · ${docPart}${total} точек (L3 chunks ${chunks}, L4 claims ${claims}) · Yandex ${yandex}`;
+  return `Qdrant ${qdrant} · ${docPart}${total} точек (L3 ${chunks}, L4 ${claims}, L1 ${entities}) · Yandex ${yandex}`;
 }
 
 function formatQdrantInfo(data) {
@@ -2076,12 +3283,19 @@ function renderL3Stats() {
   }
   const chunks = data.l3_points ?? data.collections?.mkg_chunks?.points ?? 0;
   const claims = data.l4_points ?? data.collections?.mkg_claims?.points ?? 0;
+  const entities = data.entity_points ?? data.collections?.mkg_entities?.points ?? 0;
   const indexedCount = countCorpusQdrantIndexed();
   const totalCount = getCorpusDocTotal();
   els.l3Stats.innerHTML = `
     <div class="l3-stat"><span class="l3-stat-val">${chunks}</span><span class="l3-stat-label">L3</span></div>
     <div class="l3-stat"><span class="l3-stat-val">${claims}</span><span class="l3-stat-label">L4</span></div>
+    <div class="l3-stat"><span class="l3-stat-val">${entities}</span><span class="l3-stat-label">L1</span></div>
     <div class="l3-stat"><span class="l3-stat-val">${indexedCount} / ${totalCount}</span><span class="l3-stat-label">документов в Qdrant</span></div>`;
+  const emptyBanner = document.getElementById("qdrantEmptyBanner");
+  if (emptyBanner) {
+    const corpusEmpty = chunks + claims + entities === 0;
+    emptyBanner.classList.toggle("hidden", !corpusEmpty);
+  }
 }
 
 async function refreshEmbeddingStatus() {
@@ -2180,12 +3394,16 @@ async function indexAllEmbeddings() {
   const prev = btn.textContent;
   btn.textContent = "Индексация…";
   try {
-    for (const d of docsListCache) {
-      if ((d.graph_nodes || 0) === 0) continue;
-      await indexEmbeddings(d.id, { silent: true, btn: null });
-    }
+    const r = await fetch(`${API}/admin/reindex`, { method: "POST" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Ошибка переиндексации");
+    appendQdrantLog(
+      `Полная переиндексация: ${data.documents} док., L3=${data.indexed_l3}, L4=${data.indexed_l4}, entities=${data.indexed_entities}`,
+    );
     await refreshEmbeddingStatus();
-    appendQdrantLog("Индексация всех документов завершена");
+    await loadQdrantPoints();
+    qdrantClusterAutoDone = false;
+    await loadQdrantClusterMap();
   } catch (e) {
     appendQdrantLog(e.message, true);
   } finally {
@@ -2194,23 +3412,97 @@ async function indexAllEmbeddings() {
   }
 }
 
-async function runSearch(query, targetEl = els.qdrantSearchResults) {
-  if (!query?.trim() || !targetEl) return;
-  targetEl.innerHTML = '<p class="muted">Поиск…</p>';
+async function reindexEntitiesCorpus() {
+  const btn = els.l3ReindexEntitiesBtn;
+  const prev = btn?.textContent;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Индексация…";
+  }
   try {
-    const r = await fetch(`${AGENT_API}/search`, {
+    const r = await fetch(`${API}/admin/reindex-entities`, { method: "POST" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Ошибка reindex entities");
+    appendQdrantLog(`mkg_entities: ${data.documents} док., +${data.indexed} точек, пропущено ${data.skipped ?? 0}`);
+    await refreshEmbeddingStatus();
+    await loadQdrantPoints();
+  } catch (e) {
+    appendQdrantLog(e.message, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = prev || "Сущности";
+    }
+  }
+}
+
+function getQdrantSearchInputs() {
+  const primary = (els.qdrantSearchQuery?.value || "").trim();
+  const keyword = (els.qdrantSearchKeyword?.value || "").trim();
+  if (primary) return { query: primary, keywordFilter: keyword };
+  if (keyword) return { query: keyword, keywordFilter: "" };
+  return { query: "", keywordFilter: "" };
+}
+
+function hasActiveQdrantPostFilters() {
+  const f = qdrantPostFilters;
+  return Boolean(
+    f.docTypes?.length
+    || f.layers?.length
+    || (f.minConfidence || 0) > 0
+    || (els.qdrantSearchKeyword?.value || "").trim(),
+  );
+}
+
+function qdrantActiveLayerLabel() {
+  const layers = qdrantPostFilters.layers || [];
+  return layers.length ? layers.join("+") : "L1+L3+L4";
+}
+
+async function runSearch(query, targetEl = els.qdrantSearchResults, metaEl = els.qdrantSearchMeta) {
+  const resolved = typeof query === "string" ? { query: query.trim(), keywordFilter: "" } : getQdrantSearchInputs();
+  const searchQuery = resolved.query;
+  if (!searchQuery || !targetEl) {
+    if (targetEl && !lastQdrantSearchHits.length) {
+      targetEl.innerHTML = '<p class="muted">Введите запрос в верхнее поле и нажмите «Найти».</p>';
+      if (metaEl) metaEl.textContent = "корпус · L1+L3+L4 · введите запрос";
+    }
+    return;
+  }
+  targetEl.innerHTML = '<p class="muted">Поиск…</p>';
+  lastQdrantSearchNote = "";
+  lastQdrantSearchQuery = searchQuery;
+  try {
+    const r = await fetch(`${API}/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query.trim(), limit: 15, mode: "auto" }),
+      body: JSON.stringify({ query: searchQuery, limit: 15, mode: "auto" }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "Ошибка поиска");
     lastQdrantSearchHits = data.hits || [];
-    renderQdrantSearchResults(targetEl, { showDoc: true, mode: data.mode });
+    lastQdrantSearchNote = data.note || "";
+    if (data.mode === "unavailable") {
+      targetEl.innerHTML = `<p class="muted search-error">${esc(lastQdrantSearchNote || "Семантический поиск недоступен — настройте Yandex embeddings.")}</p>`;
+      if (metaEl) {
+        metaEl.textContent = `весь корпус · режим: unavailable · 0 результатов`;
+      }
+      return;
+    }
+    renderQdrantSearchResults(targetEl, { showDoc: true, mode: data.mode, note: lastQdrantSearchNote, metaEl });
   } catch (e) {
     lastQdrantSearchHits = [];
-    targetEl.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
+    lastQdrantSearchNote = "";
+    targetEl.innerHTML = `<p class="muted search-error">${esc(e.message)}</p>`;
+    if (metaEl) metaEl.textContent = "";
   }
+}
+
+let lastEntitySearchHits = [];
+
+async function runEntitySearch(query, targetEl = els.qdrantEntitySearchResults) {
+  await runSearch(query, targetEl, els.qdrantEntitySearchMeta);
+  lastEntitySearchHits = lastQdrantSearchHits;
 }
 
 function filterQdrantHitsByKeyword(hits, keyword) {
@@ -2227,11 +3519,13 @@ function applyQdrantPostFilters(hits) {
   const f = qdrantPostFilters;
   return (hits || []).filter((hit) => {
     if (f.layers?.length && !f.layers.includes(hit.layer)) return false;
-    if (f.minConfidence > 0) {
+    const factors = hit.retrieval_factors || [];
+    const isKeyword = hit.mode === "keyword" || factors.includes("entity_keyword") || factors.includes("l3_keyword");
+    if (f.minConfidence > 0 && !isKeyword) {
       const score = hit.score != null ? (hit.score <= 1 ? hit.score : hit.score / 100) : 0;
       if (score < f.minConfidence) return false;
     }
-    if (f.docTypes?.length) {
+    if (f.docTypes?.length && hit.layer !== "L1" && hit.layer !== "L2") {
       const d = docsListCache.find((x) => x.id === hit.document_id);
       const cat = inferDocCategory(d || { file_name: hit.document_id || "" });
       if (!f.docTypes.includes(cat)) return false;
@@ -2245,9 +3539,10 @@ const QDRANT_FILTER_CHIP_DEFS = [
   { group: "docTypes", id: "article", label: "Статья" },
   { group: "docTypes", id: "report", label: "Отчёт" },
   { group: "docTypes", id: "handbook", label: "Справочник" },
+  { group: "layers", id: "L1", label: "L1 сущности" },
   { group: "layers", id: "L3", label: "L3" },
   { group: "layers", id: "L4", label: "L4" },
-  { group: "minConfidence", id: "0.5", label: "≥50%" },
+  { group: "minConfidence", id: "0.05", label: "≥5%" },
   { group: "minConfidence", id: "0.7", label: "≥70%" },
   { group: "minConfidence", id: "0.85", label: "≥85%" },
 ];
@@ -2288,23 +3583,53 @@ function initQdrantPostFilters() {
 }
 
 function renderQdrantSearchResults(targetEl, opts = {}) {
-  const keyword = els.qdrantSearchKeyword?.value || "";
+  const { keywordFilter } = getQdrantSearchInputs();
   let hits = applyQdrantPostFilters(lastQdrantSearchHits);
-  hits = filterQdrantHitsByKeyword(hits, keyword);
-  if (els.qdrantSearchMeta) {
-    const total = lastQdrantSearchHits.length;
+  hits = filterQdrantHitsByKeyword(hits, keywordFilter);
+  const metaEl = opts.metaEl || els.qdrantSearchMeta;
+  if (metaEl) {
+    const apiTotal = lastQdrantSearchHits.length;
+    const shown = hits.length;
     const mode = opts.mode ? ` · режим: ${opts.mode}` : "";
-    const filtered = hits.length !== total;
-    const suffix = filtered ? ` · после фильтра: ${hits.length}` : "";
-    els.qdrantSearchMeta.textContent = `весь корпус${mode} · ${total} результатов${suffix}`;
+    const conf = qdrantPostFilters.minConfidence > 0
+      ? ` · ≥${Math.round(qdrantPostFilters.minConfidence * 100)}%`
+      : "";
+    const note = opts.note || lastQdrantSearchNote;
+    const noteSuffix = note ? ` · ${note}` : "";
+    if (!lastQdrantSearchQuery) {
+      metaEl.textContent = `корпус · ${qdrantActiveLayerLabel()}${conf} · введите запрос`;
+    } else if (apiTotal === 0) {
+      metaEl.textContent = `корпус · ${qdrantActiveLayerLabel()}${conf}${mode} · 0 результатов${noteSuffix}`;
+    } else {
+      const countPart = shown === apiTotal
+        ? `${shown} результатов`
+        : `показано ${shown} из ${apiTotal}`;
+      metaEl.textContent = `корпус · ${qdrantActiveLayerLabel()}${conf}${mode} · ${countPart}${noteSuffix}`;
+    }
   }
-  renderSearchHits(hits, targetEl, opts);
+  renderSearchHits(hits, targetEl, { ...opts, apiTotal: lastQdrantSearchHits.length });
+}
+
+function layerBadgeLabel(hit) {
+  const layer = hit.layer || "L?";
+  const type = hit.entity_type || hit.label || "";
+  if (layer === "L1" && type) return `L1 ${type}`;
+  if (layer === "L3") return "L3 chunk";
+  if (layer === "L4") return type === "Measurement" ? "L4 Measurement" : "L4 claim";
+  return layer;
 }
 
 function renderSearchHits(hits, targetEl, opts = {}) {
   if (!targetEl) return;
   if (!hits.length) {
-    targetEl.innerHTML = '<p class="muted">Ничего не найдено.</p>';
+    const apiTotal = opts.apiTotal ?? lastQdrantSearchHits.length;
+    if (!lastQdrantSearchQuery) {
+      targetEl.innerHTML = '<p class="muted">Введите запрос в верхнее поле и нажмите «Найти».</p>';
+    } else if (apiTotal > 0 && hasActiveQdrantPostFilters()) {
+      targetEl.innerHTML = `<p class="muted">Фильтры скрыли все ${apiTotal} результатов по запросу «${esc(lastQdrantSearchQuery)}». Снимите фильтры слоёв, достоверности или слова.</p>`;
+    } else {
+      targetEl.innerHTML = '<p class="muted">Ничего не найдено.</p>';
+    }
     return;
   }
   const docName = (docId) => {
@@ -2315,12 +3640,12 @@ function renderSearchHits(hits, targetEl, opts = {}) {
     <article class="search-hit" data-node-id="${esc(hit.node_id)}" data-doc-id="${esc(hit.document_id || selectedDoc || "")}">
       <div class="search-hit-head">
         ${opts.showDoc && hit.document_id ? `<span class="search-hit-doc">${esc(docName(hit.document_id))}</span>` : ""}
-        <span class="search-hit-layer" style="background:${LAYER_COLOR[hit.layer] || LAYER_COLOR["L?"]}">${esc(hit.layer)}</span>
-        <span class="search-hit-label">${esc(hit.label)}</span>
+        <span class="search-hit-layer" style="background:${LAYER_COLOR[hit.layer] || LAYER_COLOR["L?"]}">${esc(layerBadgeLabel(hit))}</span>
+        <span class="search-hit-label">${esc(hit.entity_type || hit.label)}</span>
         <span class="search-hit-score">${hit.score != null ? (hit.score <= 1 ? `${(hit.score * 100).toFixed(0)}%` : hit.score.toFixed(2)) : "—"}</span>
         <span class="search-hit-mode muted">${esc((hit.retrieval_factors || []).join("+") || hit.mode || "")}</span>
-        ${hit.cluster_id != null ? `<span class="search-hit-cluster muted">c${esc(String(hit.cluster_id))}</span>` : ""}
-        ${hit.is_anomaly ? '<span class="search-hit-anomaly muted">anomaly</span>' : ""}
+        ${!opts.entityMode && hit.cluster_id != null ? `<span class="search-hit-cluster muted">c${esc(String(hit.cluster_id))}</span>` : ""}
+        ${!opts.entityMode && hit.is_anomaly ? '<span class="search-hit-anomaly muted">anomaly</span>' : ""}
       </div>
       <p class="search-hit-text">${esc(hit.text || "—")}</p>
       <code class="search-hit-id">${esc(hit.node_id)}</code>
@@ -2430,7 +3755,7 @@ function renderLivePipeline(layers) {
     return;
   }
   els.livePipeline.innerHTML = layers.map((l) =>
-    `<span class="lp-mini-badge l-${l.id} st-${l.status}" title="${esc(l.title)} — ${LAYER_STATUS_RU[l.status] || l.status} · ${l.nodes} узл · ${l.relationships} св">${esc(l.id)}</span>`,
+    `<span class="lp-mini-badge l-${l.id} st-${l.status}" title="${esc(l.title)} — ${esc(tf("journey_layer_stat", { status: layerStatusLabel(l.status), nodes: l.nodes, rels: l.relationships }))}">${esc(l.id)}</span>`,
   ).join("");
 }
 
@@ -2584,14 +3909,17 @@ function updateGraphsPageState() {
 function renderDocCard(d) {
   const st = statusLabel(d);
   const typeHint = d.doc_type ? ` · ${d.doc_type}` : "";
+  const matHint = d.material_date ? ` · ${String(d.material_date).slice(0, 10)}` : "";
+  const geoHint = d.geography ? ` · ${d.geography}` : "";
   const isLive = ["uploaded", "processing", "extracting"].includes(d.status);
   const modeBadge = isAnswersOnlyMode(d)
-    ? '<span class="doc-mode-badge" title="Загружен только для чата — граф не строился">только чат</span>'
+    ? `<span class="doc-mode-badge" title="${esc(t("docs_mode_chat_badge"))}">${esc(t("docs_mode_chat_only"))}</span>`
     : "";
   return `
     <div class="doc ${selectedDoc === d.id ? "active" : ""} ${isLive ? "doc-live" : ""}" data-id="${esc(d.id)}" role="button">
       <div class="doc-name">${esc(d.file_name)}${modeBadge}</div>
-      <div class="doc-meta">${formatBytes(d.size_bytes)}${esc(typeHint)} · ${formatDateTime(d.upload_date)}</div>
+      <div class="doc-meta">${formatBytes(d.size_bytes)}${esc(typeHint)}${esc(geoHint)}${esc(matHint)} · ${formatDateTime(d.upload_date)}</div>
+      ${renderDocTagsHtml(d)}
       ${renderDocPipelineHtml(d)}
       <span class="badge ${st.cls}">${esc(st.text)}</span>
     </div>`;
@@ -2684,7 +4012,7 @@ function nodeTextPreview(node, limit = 200) {
 
 function renderRelNodeCard(node, roleLabel) {
   if (!node) {
-    return `<div class="rel-node-card rel-node-missing"><h4 class="detail-section-title">${esc(roleLabel)}</h4><p class="muted">Узел не найден в графе</p></div>`;
+    return `<div class="rel-node-card rel-node-missing"><h4 class="detail-section-title">${esc(roleLabel)}</h4><p class="muted">${esc(t("detail_node_missing"))}</p></div>`;
   }
   const layer = layerOf(node.label);
   const preview = nodeTextPreview(node);
@@ -2694,13 +4022,13 @@ function renderRelNodeCard(node, roleLabel) {
       <span class="detail-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)} · ${esc(node.label)}</span>
       <div class="detail-id">${esc(node.id)}</div>
       ${preview ? `<p class="rel-node-preview">${esc(preview)}</p>` : ""}
-      <button type="button" class="btn btn-ghost btn-small rel-open-node-btn" data-node-id="${esc(node.id)}">Открыть узел</button>
+      <button type="button" class="btn btn-ghost btn-small rel-open-node-btn" data-node-id="${esc(node.id)}">${esc(t("detail_open_node"))}</button>
     </div>`;
 }
 
 function renderRelPropsBlock(props) {
   const keys = Object.keys(props || {}).filter((k) => propHasValue(props[k]));
-  if (!keys.length) return '<p class="muted small">Свойства связи не заданы</p>';
+  if (!keys.length) return `<p class="muted small">${esc(t("detail_no_rel_props"))}</p>`;
   return `<dl class="detail-props detail-props-compact">${keys.map((k) =>
     `<div class="prop-row prop-ok"><dt>${esc(k)}</dt><dd>${formatPropValue(props[k])}</dd></div>`,
   ).join("")}</dl>`;
@@ -3027,31 +4355,485 @@ function notifyWatchlistMatches(items) {
 }
 
 async function loadDashboardStats() {
-  if (!els.dashboardCards) return;
-  els.dashboardCards.innerHTML = '<div class="dashboard-card skeleton"><span class="dashboard-card-value">…</span><span class="dashboard-card-label">Загрузка</span></div>';
+  if (!els.managerKpiRow) return;
+  els.managerKpiRow.innerHTML = `<div class="exec-kpi skeleton"><span class="exec-kpi-value">…</span><span class="exec-kpi-label">${esc(t("dashboard_loading"))}</span></div>`;
+  if (els.domainCoverageBody) {
+    els.domainCoverageBody.innerHTML = `<tr><td colspan="4" class="exec-empty">${esc(t("dashboard_loading"))}</td></tr>`;
+  }
+  if (els.teamActivityBlock) els.teamActivityBlock.innerHTML = `<p class="exec-empty">${esc(t("dashboard_loading"))}</p>`;
+  if (els.techCompareBody) {
+    els.techCompareBody.innerHTML = `<tr><td colspan="6" class="exec-empty">${esc(t("dashboard_loading"))}</td></tr>`;
+  }
+  if (els.riskZonesBody) {
+    els.riskZonesBody.innerHTML = `<tr><td colspan="5" class="exec-empty">${esc(t("dashboard_loading"))}</td></tr>`;
+  }
   try {
     const r = await fetch(`${API}/dashboard/stats`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-    els.dashboardCards.innerHTML = `
-      <div class="dashboard-card"><span class="dashboard-card-value">${data.doc_count ?? 0}</span><span class="dashboard-card-label">Документов</span></div>
-      <div class="dashboard-card dashboard-card-warn"><span class="dashboard-card-value">${data.l4_anomalies_count ?? 0}</span><span class="dashboard-card-label">L4-аномалии</span></div>
-      <div class="dashboard-card dashboard-card-danger"><span class="dashboard-card-value">${data.contradiction_nodes_count ?? 0}</span><span class="dashboard-card-label">Contradiction</span></div>`;
-    const domains = data.domains || [];
-    els.dashboardDomains.innerHTML = domains.length
-      ? `<div class="dashboard-domain-chips">${domains.map((d) =>
-        `<span class="dashboard-domain-chip">${esc(d.label)} · ${d.doc_count}</span>`,
-      ).join("")}</div>`
-      : '<p class="muted small">Домены по заголовкам файлов пока не определены.</p>';
-    const risks = data.risk_zones || [];
-    els.dashboardRiskList.innerHTML = risks.length
-      ? risks.map((rz) =>
-        `<li class="dashboard-risk-item severity-${esc(rz.severity || "low")}"><strong>${esc(rz.title || rz.type)}</strong><span class="muted small">${esc(rz.detail || "")}</span></li>`,
-      ).join("")
-      : '<li class="muted small">Зоны риска не обнаружены.</li>';
+    lastDashboardData = data;
+    renderDashboardStats(data);
   } catch (e) {
-    els.dashboardCards.innerHTML = `<p class="muted small">Ошибка обзора: ${esc(e.message)}</p>`;
+    lastDashboardData = null;
+    const err = esc(t("dashboard_error", { msg: e.message }));
+    if (els.managerKpiRow) els.managerKpiRow.innerHTML = `<p class="exec-empty exec-empty-error">${err}</p>`;
   }
+}
+
+function _severityLabel(sev) {
+  const map = { high: "mgr_severity_high", medium: "mgr_severity_medium", low: "mgr_severity_low" };
+  return t(map[sev] || "mgr_severity_low");
+}
+
+function _domainLabel(dom) {
+  if (getUiLang() === "en" && dom.label_en) return dom.label_en;
+  return dom.label || dom.id;
+}
+
+function renderDashboardStats(data) {
+  if (!els.managerKpiRow || !data) return;
+
+  const activity = data.team_activity || {};
+  els.managerKpiRow.innerHTML = `
+    <div class="exec-kpi"><span class="exec-kpi-value">${data.doc_count ?? 0}</span><span class="exec-kpi-label">${esc(t("mgr_kpi_docs"))}</span></div>
+    <div class="exec-kpi"><span class="exec-kpi-value">${data.total_l4_nodes ?? 0}</span><span class="exec-kpi-label">${esc(t("mgr_kpi_l4"))}</span></div>
+    <div class="exec-kpi exec-kpi-warn"><span class="exec-kpi-value">${data.contradiction_nodes_count ?? 0}</span><span class="exec-kpi-label">${esc(t("mgr_kpi_contradictions"))}</span></div>
+    <div class="exec-kpi exec-kpi-warn"><span class="exec-kpi-value">${data.l4_anomalies_count ?? 0}</span><span class="exec-kpi-label">${esc(t("mgr_kpi_anomalies"))}</span></div>
+    <div class="exec-kpi"><span class="exec-kpi-value">${activity.thread_count ?? 0}</span><span class="exec-kpi-label">${esc(t("mgr_kpi_threads"))}</span></div>
+    <div class="exec-kpi"><span class="exec-kpi-value">${activity.queries_7d ?? 0}</span><span class="exec-kpi-label">${esc(t("mgr_kpi_queries"))}</span></div>`;
+
+  const coverage = data.domain_coverage || {};
+  const coverageRows = ["hydromet", "ecology", "waste"].map((id) => coverage[id]).filter(Boolean);
+  if (els.domainCoverageBody) {
+    els.domainCoverageBody.innerHTML = coverageRows.length
+      ? coverageRows.map((dom) => `
+        <tr>
+          <td class="exec-cell-strong">${esc(_domainLabel(dom))}</td>
+          <td class="exec-mono">${dom.doc_count ?? 0}</td>
+          <td class="exec-mono">${dom.node_count ?? 0}</td>
+          <td class="exec-mono">${dom.coverage_pct ?? 0}%</td>
+        </tr>`).join("")
+      : `<tr><td colspan="4" class="exec-empty">${esc(t("mgr_coverage_empty"))}</td></tr>`;
+  }
+
+  if (els.teamActivityBlock) {
+    const uploads = activity.recent_uploads || [];
+    const threads = activity.recent_threads || [];
+    const uploadsHtml = uploads.length
+      ? `<ul class="exec-activity-list">${uploads.map((u) =>
+        `<li><span class="exec-mono">${esc((u.upload_date || "").slice(0, 10) || "—")}</span> ${esc(u.file_name || u.id || "—")}</li>`,
+      ).join("")}</ul>`
+      : `<p class="exec-empty">${esc(t("mgr_activity_empty_uploads"))}</p>`;
+    const threadsHtml = threads.length
+      ? `<ul class="exec-activity-list">${threads.map((th) =>
+        `<li>${esc(th.title || th.id)} <span class="exec-mono muted">· ${th.message_count ?? 0}</span></li>`,
+      ).join("")}</ul>`
+      : `<p class="exec-empty">${esc(t("mgr_activity_empty_chats"))}</p>`;
+    els.teamActivityBlock.innerHTML = `
+      <div class="exec-activity-col">
+        <h3 class="exec-subheading">${esc(t("mgr_activity_uploads"))}</h3>
+        ${uploadsHtml}
+      </div>
+      <div class="exec-activity-col">
+        <h3 class="exec-subheading">${esc(t("mgr_activity_chats"))}</h3>
+        ${threadsHtml}
+      </div>`;
+  }
+
+  const techRows = data.tech_comparison || [];
+  if (els.techCompareBody) {
+    els.techCompareBody.innerHTML = techRows.length
+      ? techRows.map((row) => `
+        <tr>
+          <td class="exec-cell-strong">${esc(row.technology || "—")}<span class="exec-type-tag exec-mono">${esc(row.type || "")}</span></td>
+          <td>${esc(row.efficiency || "—")}</td>
+          <td>${esc(row.capex || "—")}</td>
+          <td>${esc(row.cold_climate || "—")}</td>
+          <td>${esc(row.eco_restrictions || "—")}</td>
+          <td class="exec-mono">${esc(row.sources || (row.source_count ?? 0))}</td>
+        </tr>`).join("")
+      : `<tr><td colspan="6" class="exec-empty">${esc(t("mgr_compare_empty"))}</td></tr>`;
+    els.techCompareTable?.classList.add("compare-table");
+  }
+
+  const risks = data.risk_zones || [];
+  if (els.riskZonesBody) {
+    els.riskZonesBody.innerHTML = risks.length
+      ? risks.map((rz) => `
+        <tr class="exec-severity-${esc(rz.severity || "low")}">
+          <td><span class="exec-severity-badge">${esc(_severityLabel(rz.severity))}</span></td>
+          <td class="exec-cell-strong">${esc(rz.topic || rz.title || rz.type || "—")}</td>
+          <td class="exec-mono">${rz.source_count ?? "—"}</td>
+          <td class="exec-mono">${rz.contradiction_flag ? esc(t("mgr_yes")) : esc(t("mgr_no"))}</td>
+          <td class="exec-cell-detail">${esc(rz.detail || "")}</td>
+        </tr>`).join("")
+      : `<tr><td colspan="5" class="exec-empty">${esc(t("dashboard_risks_empty"))}</td></tr>`;
+  }
+}
+
+function renderHomeInfo(data) {
+  if (els.homeVersion) {
+    const ver = data?.app_version || "0.9.0";
+    els.homeVersion.textContent = `v${ver}`;
+  }
+}
+
+async function loadHomeInfo() {
+  renderHomeInfo(null);
+  try {
+    const r = await fetch(`${API}/dashboard/stats`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    renderHomeInfo(data);
+  } catch {
+    renderHomeInfo({ app_version: "0.9.0" });
+  }
+}
+
+function downloadTextFile(filename, text, mime = "text/plain;charset=utf-8") {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function csvEscape(val) {
+  const s = String(val ?? "");
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function exportStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function ensureDashboardData() {
+  if (lastDashboardData) return lastDashboardData;
+  const r = await fetch(`${API}/dashboard/stats`);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+  lastDashboardData = data;
+  return data;
+}
+
+function buildDashboardCsv(d) {
+  const rows = [
+    ["metric", "value"],
+    ["app_version", d.app_version ?? ""],
+    ["doc_count", d.doc_count ?? 0],
+    ["total_l4_nodes", d.total_l4_nodes ?? 0],
+    ["l4_anomalies_count", d.l4_anomalies_count ?? 0],
+    ["contradiction_nodes_count", d.contradiction_nodes_count ?? 0],
+    [],
+    ["domain_id", "domain_label", "doc_count", "node_count", "coverage_pct"],
+    ...["hydromet", "ecology", "waste"].map((id) => {
+      const dom = (d.domain_coverage || {})[id] || {};
+      return [id, dom.label || id, dom.doc_count ?? 0, dom.node_count ?? 0, dom.coverage_pct ?? 0];
+    }),
+  ];
+  return rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+}
+
+function buildRisksCsv(riskZones) {
+  const header = ["type", "severity", "topic", "source_count", "contradiction_flag", "document_id", "detail", "node_id", "cluster_id"];
+  const rows = (riskZones || []).map((rz) => [
+    rz.type, rz.severity, rz.topic || rz.title, rz.source_count ?? "", rz.contradiction_flag ? "yes" : "no",
+    rz.document_id, rz.detail, rz.node_id || "", rz.cluster_id ?? "",
+  ]);
+  return [header, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
+}
+
+function buildChatMdFromMessages(items) {
+  const lines = [];
+  (items || []).forEach((m) => {
+    const role = m.author_name || m.author_role || "user";
+    const time = m.created_at ? new Date(m.created_at).toISOString() : "";
+    lines.push(`## ${role}${time ? ` · ${time}` : ""}`, "", m.body || "", "");
+    const sources = m.meta?.sources;
+    if (sources?.length) {
+      lines.push("### Источники MKG", "");
+      sources.forEach((s, i) => {
+        const name = s.file_name || s.document_id || "?";
+        const layer = s.layer ? ` · ${s.layer}` : "";
+        lines.push(`${i + 1}. **${name}**${layer}`);
+        if (s.text) lines.push(`   > ${String(s.text).replace(/\n/g, " ").slice(0, 300)}`);
+      });
+      lines.push("");
+    }
+  });
+  return lines.join("\n").trim();
+}
+
+function buildChatJsonLdFromMessages(items) {
+  return {
+    "@context": {
+      "@vocab": "https://schema.org/",
+      "mkg": "https://mkg.local/ontology#",
+    },
+    "@type": "Conversation",
+    "@id": `urn:mkg:chat:thread:${exportStamp()}`,
+    "hasPart": (items || []).map((m) => ({
+      "@type": m.msg_type === "user" ? "Question" : "Answer",
+      "@id": `urn:mkg:chat:${m.id || "msg"}`,
+      "text": m.body || "",
+      "dateCreated": m.created_at || undefined,
+      "author": {
+        "@type": "Person",
+        "name": m.author_name || m.author_role || "MKG",
+        "jobTitle": m.author_role || undefined,
+      },
+      "citation": (m.meta?.sources || []).map((s, i) => ({
+        "@type": "CreativeWork",
+        "name": s.file_name || s.document_id || `source-${i + 1}`,
+        "identifier": s.document_id || undefined,
+        "mkg:layer": s.layer || undefined,
+      })),
+    })),
+  };
+}
+
+const EXPORT_CATALOG = [
+  { id: "dashboard_json", icon: "📊", titleKey: "export_dashboard_json_title", descKey: "export_dashboard_json_desc", fn: "dashboardJson" },
+  { id: "dashboard_csv", icon: "📋", titleKey: "export_dashboard_csv_title", descKey: "export_dashboard_csv_desc", fn: "dashboardCsv" },
+  { id: "risks_csv", icon: "⚠️", titleKey: "export_risks_csv_title", descKey: "export_risks_csv_desc", fn: "risksCsv" },
+  { id: "documents_csv", icon: "📁", titleKey: "export_documents_csv_title", descKey: "export_documents_csv_desc", fn: "documentsCsv" },
+  { id: "graph_json", icon: "🔗", titleKey: "export_graph_json_title", descKey: "export_graph_json_desc", fn: "graphSnapshot" },
+  { id: "doc_md", icon: "📝", titleKey: "export_doc_md_title", descKey: "export_doc_md_desc", fn: "documentMd" },
+  { id: "anomalies_csv", icon: "🔬", titleKey: "export_anomalies_csv_title", descKey: "export_anomalies_csv_desc", fn: "l4AnomaliesCsv" },
+  { id: "chat_md", icon: "💬", titleKey: "export_chat_md_title", descKey: "export_chat_md_desc", fn: "chatThreadMd" },
+  { id: "chat_json", icon: "🧩", titleKey: "export_chat_json_title", descKey: "export_chat_json_desc", fn: "chatThreadJson" },
+];
+
+const MKGExport = {
+  async dashboardJson() {
+    const d = await ensureDashboardData();
+    downloadTextFile(
+      `mkg-dashboard-${exportStamp()}.json`,
+      JSON.stringify(d, null, 2),
+      "application/json;charset=utf-8",
+    );
+  },
+
+  async dashboardCsv() {
+    const d = await ensureDashboardData();
+    downloadTextFile(`mkg-dashboard-${exportStamp()}.csv`, buildDashboardCsv(d), "text/csv;charset=utf-8");
+  },
+
+  async risksCsv() {
+    const d = await ensureDashboardData();
+    if (!d.risk_zones?.length) {
+      showQdrantToast(t("dashboard_export_empty"), { error: true });
+      return;
+    }
+    downloadTextFile(`mkg-risks-${exportStamp()}.csv`, buildRisksCsv(d.risk_zones), "text/csv;charset=utf-8");
+  },
+
+  async compareCsv() {
+    const r = await fetch(`${API}/dashboard/export/compare.csv`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    if (!data.content?.trim()) {
+      showQdrantToast(t("mgr_compare_empty"), { error: true });
+      return;
+    }
+    downloadTextFile(data.filename || `mkg-tech-comparison-${exportStamp()}.csv`, data.content, "text/csv;charset=utf-8");
+  },
+
+  async documentsCsv() {
+    const r = await fetch(`${API}/documents?page=1&page_size=500`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    const header = ["id", "file_name", "status", "graph_nodes", "graph_relationships", "l4_anomalies", "upload_date"];
+    const rows = (data.items || []).map((doc) => [
+      doc.id, doc.file_name, doc.status, doc.graph_nodes ?? "", doc.graph_relationships ?? "",
+      doc.l4_anomalies ?? "", doc.upload_date ?? "",
+    ]);
+    const csv = [header, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
+    downloadTextFile(`mkg-documents-${exportStamp()}.csv`, csv, "text/csv;charset=utf-8");
+  },
+
+  async graphSnapshot() {
+    let payload;
+    if (graphData?.nodes?.length) {
+      payload = graphData;
+    } else {
+      const docId = selectedDoc && selectedDoc !== GRAPH_ALL_ID ? selectedDoc : null;
+      const url = docId
+        ? `${API}/graph/documents/${encodeURIComponent(docId)}`
+        : `${API}/graph/all`;
+      const r = await fetch(url);
+      payload = await r.json();
+      if (!r.ok) throw new Error(payload.detail || `HTTP ${r.status}`);
+    }
+    if (!payload?.nodes?.length) {
+      showQdrantToast(t("export_graph_empty"), { error: true });
+      return;
+    }
+    const suffix = selectedDoc && selectedDoc !== GRAPH_ALL_ID ? selectedDoc.replace(/[^a-zA-Z0-9_-]+/g, "_") : "all";
+    downloadTextFile(
+      `mkg-graph-${suffix}-${exportStamp()}.json`,
+      JSON.stringify(payload, null, 2),
+      "application/json;charset=utf-8",
+    );
+  },
+
+  documentMd() {
+    if (!selectedDoc || selectedDoc === GRAPH_ALL_ID) {
+      showQdrantToast(t("export_doc_md_empty"), { error: true });
+      return;
+    }
+    downloadDocumentMd();
+  },
+
+  async l4AnomaliesCsv() {
+    const r = await fetch(`${API}/graph/anomalies?limit=500`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    const items = data.items || [];
+    if (!items.length) {
+      showQdrantToast(t("export_anomalies_empty"), { error: true });
+      return;
+    }
+    const header = ["document_id", "node_id", "label", "text", "anomaly_score", "anomaly_reason", "cluster_id"];
+    const rows = items.map((a) => [
+      a.document_id ?? "", a.node_id ?? "", a.label ?? "", a.text ?? "",
+      a.anomaly_score ?? "", a.anomaly_reason ?? "", a.cluster_id ?? "",
+    ]);
+    const csv = [header, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
+    downloadTextFile(`mkg-l4-anomalies-${exportStamp()}.csv`, csv, "text/csv;charset=utf-8");
+  },
+
+  async chatThreadMd() {
+    const threadId = window.MKGAuth?.getActiveThreadId?.();
+    if (!threadId) {
+      showQdrantToast(t("export_chat_empty"), { error: true });
+      return;
+    }
+    const r = await fetch(`${API}/chat/threads/${encodeURIComponent(threadId)}/messages`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    const items = data.items || [];
+    if (!items.length) {
+      showQdrantToast(t("export_chat_empty"), { error: true });
+      return;
+    }
+    downloadTextFile(`mkg-chat-${exportStamp()}.md`, buildChatMdFromMessages(items), "text/markdown;charset=utf-8");
+  },
+
+  async chatThreadJson() {
+    const threadId = window.MKGAuth?.getActiveThreadId?.();
+    if (!threadId) {
+      showQdrantToast(t("export_chat_empty"), { error: true });
+      return;
+    }
+    const r = await fetch(`${API}/chat/threads/${encodeURIComponent(threadId)}/messages`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    const items = data.items || [];
+    if (!items.length) {
+      showQdrantToast(t("export_chat_empty"), { error: true });
+      return;
+    }
+    downloadTextFile(
+      `mkg-chat-${exportStamp()}.jsonld`,
+      JSON.stringify(buildChatJsonLdFromMessages(items), null, 2),
+      "application/ld+json;charset=utf-8",
+    );
+  },
+
+  async run(id) {
+    const item = EXPORT_CATALOG.find((e) => e.id === id);
+    if (!item) return;
+    const fn = MKGExport[item.fn];
+    if (typeof fn !== "function") return;
+    try {
+      await fn.call(MKGExport);
+      showQdrantToast(t("export_done"));
+    } catch (e) {
+      showQdrantToast(e.message || String(e), { error: true });
+    }
+  },
+
+  catalog: EXPORT_CATALOG,
+};
+
+function exportDashboardJson() { MKGExport.dashboardJson(); }
+function exportDashboardCsv() { MKGExport.dashboardCsv(); }
+function exportDashboardRisksCsv() { MKGExport.risksCsv(); }
+function exportDashboardCompareCsv() { MKGExport.compareCsv(); }
+function exportDocumentsSummaryCsv() { MKGExport.documentsCsv(); }
+
+function renderExportPanel() {
+  const host = els.exportCards;
+  if (!host) return;
+  host.innerHTML = EXPORT_CATALOG.map((item) => `
+    <article class="export-card" role="listitem" data-export-id="${esc(item.id)}">
+      <div class="export-card-icon" aria-hidden="true">${item.icon}</div>
+      <div class="export-card-body">
+        <h3 class="export-card-title">${esc(t(item.titleKey))}</h3>
+        <p class="export-card-desc">${esc(t(item.descKey))}</p>
+      </div>
+      <div class="export-card-action">
+        <button type="button" class="btn btn-primary btn-small export-card-btn" data-export-id="${esc(item.id)}">${esc(t("export_btn_download"))}</button>
+      </div>
+    </article>`).join("");
+  host.querySelectorAll(".export-card-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.exportId;
+      if (!id || btn.disabled) return;
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = t("export_busy");
+      try {
+        await MKGExport.run(id);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = prev;
+      }
+    });
+  });
+}
+
+function openExportSettings() {
+  switchPage("settings");
+  requestAnimationFrame(() => {
+    document.getElementById("exportSection")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+function initExportPanel() {
+  renderExportPanel();
+}
+
+function onAppLangChange() {
+  if (currentPage === "manager" && lastDashboardData) renderDashboardStats(lastDashboardData);
+  else if (currentPage === "manager") loadDashboardStats();
+  if (currentPage === "home" && lastDashboardData) renderHomeStats(lastDashboardData);
+  if (currentPage === "settings") renderExportPanel();
+  refreshDocsPageOnLangChange();
+}
+
+function refreshDocsPageOnLangChange() {
+  if (!selectedFiles.length) resetDropZone();
+  loadFormats();
+  if (els.uploadBtn && !els.uploadBtn.disabled) {
+    els.uploadBtn.textContent = t("docs_upload_btn");
+  }
+  if (docsListLoaded) renderDocsList({ silent: true });
+  const doc = graphScope === "doc" && selectedDoc
+    ? docsListCache.find((d) => d.id === selectedDoc)
+    : null;
+  updateGraphEmptyState(doc);
+  if (isInlineGraphPage()) updateDocWorkArea(doc || null);
+  refreshGraphFilterLabels();
+  if (graphData.nodes.length) {
+    renderLayerFilters();
+    scheduleGraphViewsRender();
+  }
+  updateGraphAdvFiltersNodeCount();
 }
 
 function openRelationshipDetailPanel(data, docId) {
@@ -3061,15 +4843,15 @@ function openRelationshipDetailPanel(data, docId) {
     <span class="detail-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)} · ${esc(data.type)}</span>
     <p class="rel-detail-desc">${esc(data.description || REL_TYPE_HINTS[data.type] || `Связь ${data.type}`)}</p>
     <p class="muted small rel-detail-route"><code>${esc(data.from)}</code> → <code>${esc(data.to)}</code></p>
-    <h4 class="detail-section-title">Свойства связи</h4>
+    <h4 class="detail-section-title">${esc(t("detail_rel_props"))}</h4>
     ${renderRelPropsBlock(data.props || {})}
-    <h4 class="detail-section-title">Узлы</h4>
-    ${renderRelNodeCard(data.source_node, "Источник")}
-    ${renderRelNodeCard(data.target_node, "Цель")}
+    <h4 class="detail-section-title">${esc(t("detail_nodes"))}</h4>
+    ${renderRelNodeCard(data.source_node, t("detail_source"))}
+    ${renderRelNodeCard(data.target_node, t("detail_target"))}
     ${renderExpertEditBlock(data, docId)}`;
   const sideHtml = `
-    <h4 class="detail-section-title">Смежные связи</h4>
-    ${renderRelatedEdgesList(data.related_edges, "Других связей у этих узлов пока нет.")}`;
+    <h4 class="detail-section-title">${esc(t("detail_related"))}</h4>
+    ${renderRelatedEdgesList(data.related_edges, t("detail_no_related"))}`;
   openSideDetailPanel(title, mainHtml, sideHtml);
   bindRelDetailActions(els.detailBody, docId);
   bindExpertEditActions(els.detailBody, docId);
@@ -3831,26 +5613,25 @@ function updateDocPageBar(data) {
 function statusLabel(doc) {
   const nodes = doc.graph_nodes || 0;
   const synced = doc.neo4j_synced === true;
-  const stepRu = doc.step ? (STEP_RU[doc.step] || doc.step) : "";
-  const stepSuffix = stepRu ? ` · ${stepRu}` : "";
+  const stepSuffix = doc.step ? ` · ${stepLabel(doc.step)}` : "";
   if (doc.status === "extracting" && doc.step === "cancelling") {
-    return { text: "остановка…", cls: "s-processing s-live" };
+    return { text: t("status_cancelling"), cls: "s-processing s-live" };
   }
   switch (doc.status) {
-    case "uploaded": return { text: `в очереди${stepSuffix}`, cls: "s-uploaded s-live" };
-    case "processing": return { text: `OCR и очистка${stepSuffix}`, cls: "s-processing s-live" };
-    case "extracting": return { text: `извлечение${stepSuffix}`, cls: "s-extracting s-live" };
-    case "failed": return { text: "ошибка", cls: "s-failed" };
+    case "uploaded": return { text: `${t("status_queued")}${stepSuffix}`, cls: "s-uploaded s-live" };
+    case "processing": return { text: `${t("status_ocr")}${stepSuffix}`, cls: "s-processing s-live" };
+    case "extracting": return { text: `${t("status_extracting")}${stepSuffix}`, cls: "s-extracting s-live" };
+    case "failed": return { text: t("status_failed"), cls: "s-failed" };
     case "loaded":
       if (isAnswersOnlyMode(doc) && nodes === 0) {
-        return { text: "только для чата", cls: "s-md_ready" };
+        return { text: t("status_chat_only"), cls: "s-md_ready" };
       }
-      if (nodes > 0 && synced) return { text: `в Neo4j · ${nodes} узл.`, cls: "s-loaded" };
-      if (nodes > 0) return { text: `граф локально · ${nodes} узл.`, cls: "s-md_ready" };
-      return { text: "граф пуст", cls: "s-failed" };
+      if (nodes > 0 && synced) return { text: tf("status_neo4j", { nodes }), cls: "s-loaded" };
+      if (nodes > 0) return { text: tf("status_local_graph", { nodes }), cls: "s-md_ready" };
+      return { text: t("status_empty_graph"), cls: "s-failed" };
     case "md_ready":
-      if (nodes > 0) return { text: `MD + граф · ${nodes} узл.`, cls: "s-md_ready" };
-      return { text: "MD готов", cls: "s-md_ready" };
+      if (nodes > 0) return { text: tf("status_md_graph", { nodes }), cls: "s-md_ready" };
+      return { text: t("status_md_ready"), cls: "s-md_ready" };
     default: return { text: doc.status, cls: "s-uploaded" };
   }
 }
@@ -4127,6 +5908,38 @@ function isGapNode(node) {
   return GAP_NODE_LABELS.has(node?.label);
 }
 
+function allowedEntityLabelsFromFilter(entityTypes) {
+  const entitySet = new Set(entityTypes || []);
+  const labels = new Set();
+  entitySet.forEach((id) => {
+    (ENTITY_LABELS_BY_FILTER_ID[id] || new Set()).forEach((l) => labels.add(l));
+  });
+  return labels;
+}
+
+/** BFS expansion along optional relation-type subset (for material/process/search focus). */
+function expandGraphNeighborhood(keepIds, rels, { allowedRelTypes = null } = {}) {
+  const next = new Set(keepIds);
+  const relAllow = allowedRelTypes && allowedRelTypes.size > 0 ? allowedRelTypes : null;
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    rels.forEach((r) => {
+      if (relAllow && !relAllow.has(r.type)) return;
+      const { from, to } = relEndpoints(r);
+      if (next.has(from) && !next.has(to)) {
+        next.add(to);
+        expanded = true;
+      }
+      if (next.has(to) && !next.has(from)) {
+        next.add(from);
+        expanded = true;
+      }
+    });
+  }
+  return next;
+}
+
 function applyAdvancedGraphFilters(nodes, rels) {
   const f = graphAdvancedFilters;
   if (!f.active) return { nodes, rels };
@@ -4136,17 +5949,22 @@ function applyAdvancedGraphFilters(nodes, rels) {
 
   const entitySet = new Set(f.entityTypes || []);
   const allEntitiesSelected = entitySet.size >= ALL_ENTITY_FILTER_IDS.length;
-  if (!allEntitiesSelected && entitySet.size > 0) {
-    const allowedLabels = new Set();
-    entitySet.forEach((id) => {
-      (ENTITY_LABELS_BY_FILTER_ID[id] || new Set()).forEach((l) => allowedLabels.add(l));
-    });
-    keepIds = new Set([...keepIds].filter((id) => allowedLabels.has(nodeById.get(id)?.label)));
-  }
+  const allowedEntityLabels = allEntitiesSelected ? null : allowedEntityLabelsFromFilter(f.entityTypes);
 
+  const relSet = new Set(f.relationTypes || []);
+  const allRelsSelected = relSet.size >= ALL_RELATION_FILTER_IDS.length;
+
+  const materialQ = (f.materialKeyword || "").trim();
+  const processQ = (f.processKeyword || "").trim();
   const searchQ = (f.searchText || "").trim().toLowerCase();
-  if (searchQ) {
-    keepIds = new Set([...keepIds].filter((id) => nodeSearchText(nodeById.get(id)).includes(searchQ)));
+  const hasFocusFilter = !!(materialQ || processQ || searchQ);
+
+  if (searchQ && !materialQ && !processQ) {
+    keepIds = new Set([...keepIds].filter((id) => {
+      const n = nodeById.get(id);
+      if (allowedEntityLabels && !allowedEntityLabels.has(n?.label)) return false;
+      return nodeSearchText(n).includes(searchQ);
+    }));
   }
 
   const docCatSet = new Set(f.docCategories || []);
@@ -4284,41 +6102,35 @@ function applyAdvancedGraphFilters(nodes, rels) {
     }));
   }
 
-  if ((f.materialKeyword || "").trim()) {
-    const q = f.materialKeyword.trim();
+  if (materialQ) {
     const matMatch = new Set(
       [...keepIds].filter((id) => {
         const n = nodeById.get(id);
-        return n?.label === "Material" && nodeMatchesKeyword(n, q);
+        if (n?.label !== "Material") return false;
+        if (allowedEntityLabels && !allowedEntityLabels.has("Material")) return false;
+        return nodeMatchesKeyword(n, materialQ);
       }),
     );
     keepIds = matMatch.size ? matMatch : new Set();
   }
-  if ((f.processKeyword || "").trim()) {
-    const q = f.processKeyword.trim();
+  if (processQ) {
     const procMatch = new Set(
       [...keepIds].filter((id) => {
         const n = nodeById.get(id);
-        return n?.label === "Process" && nodeMatchesKeyword(n, q);
+        if (n?.label !== "Process") return false;
+        if (allowedEntityLabels && !allowedEntityLabels.has("Process")) return false;
+        return nodeMatchesKeyword(n, processQ);
       }),
     );
     keepIds = procMatch.size ? procMatch : new Set();
   }
 
-  let expanded = true;
-  while (expanded) {
-    expanded = false;
-    rels.forEach((r) => {
-      const { from, to } = relEndpoints(r);
-      if (keepIds.has(from) && !keepIds.has(to)) {
-        keepIds.add(to);
-        expanded = true;
-      }
-      if (keepIds.has(to) && !keepIds.has(from)) {
-        keepIds.add(from);
-        expanded = true;
-      }
+  if (hasFocusFilter && keepIds.size > 0) {
+    keepIds = expandGraphNeighborhood(keepIds, rels, {
+      allowedRelTypes: allRelsSelected ? null : relSet,
     });
+  } else if (allowedEntityLabels && allowedEntityLabels.size > 0) {
+    keepIds = new Set([...keepIds].filter((id) => allowedEntityLabels.has(nodeById.get(id)?.label)));
   }
 
   let filteredRels = rels.filter((r) => {
@@ -4326,8 +6138,7 @@ function applyAdvancedGraphFilters(nodes, rels) {
     return keepIds.has(from) && keepIds.has(to);
   });
 
-  const relSet = new Set(f.relationTypes || []);
-  if (relSet.size > 0 && relSet.size < ALL_RELATION_FILTER_IDS.length) {
+  if (!allRelsSelected && relSet.size > 0) {
     filteredRels = filteredRels.filter((r) => relSet.has(r.type));
     const relNodeIds = new Set();
     filteredRels.forEach((r) => {
@@ -4492,26 +6303,42 @@ function resetGraphAdvancedFilters({ rerender = true } = {}) {
   }
 }
 
+function refreshGraphFilterLabels() {
+  if (!els.graphEntityTypeChecks) return;
+  ENTITY_TYPE_FILTERS.forEach((e) => {
+    const span = els.graphEntityTypeChecks.querySelector(`[data-entity-id="${e.id}"]`)?.closest("label")?.querySelector("span");
+    if (span) span.textContent = entityFilterLabel(e.id);
+  });
+  DOC_CATEGORY_FILTERS.forEach((d) => {
+    const span = els.graphDocTypeChecks?.querySelector(`[data-doc-cat-id="${d.id}"]`)?.closest("label")?.querySelector("span");
+    if (span) span.textContent = docCategoryLabel(d.id);
+  });
+  RELATION_TYPE_FILTERS.forEach((r) => {
+    const span = els.graphRelationTypeChecks?.querySelector(`[data-rel-type-id="${r.id}"]`)?.closest("label")?.querySelector("span");
+    if (span) span.textContent = relationFilterLabel(r);
+  });
+}
+
 function initGraphAdvancedFilters() {
   if (!els.graphEntityTypeChecks) return;
   loadGraphAdvancedFiltersSession();
   els.graphEntityTypeChecks.innerHTML = ENTITY_TYPE_FILTERS.map((e) => `
     <label class="graph-adv-check">
       <input type="checkbox" data-entity-id="${esc(e.id)}" checked />
-      <span>${esc(e.label)}</span>
+      <span>${esc(entityFilterLabel(e.id))}</span>
     </label>`).join("");
   if (els.graphDocTypeChecks) {
     els.graphDocTypeChecks.innerHTML = DOC_CATEGORY_FILTERS.map((d) => `
       <label class="graph-adv-check">
         <input type="checkbox" data-doc-cat-id="${esc(d.id)}" checked />
-        <span>${esc(d.label)}</span>
+        <span>${esc(docCategoryLabel(d.id))}</span>
       </label>`).join("");
   }
   if (els.graphRelationTypeChecks) {
     els.graphRelationTypeChecks.innerHTML = RELATION_TYPE_FILTERS.map((r) => `
       <label class="graph-adv-check">
         <input type="checkbox" data-rel-type-id="${esc(r.id)}" checked />
-        <span>${esc(r.label)}</span>
+        <span>${esc(relationFilterLabel(r))}</span>
       </label>`).join("");
   }
   syncGraphFilterFormFromState(graphAdvancedFilters);
@@ -4782,7 +6609,7 @@ function openDocGuide(slug) {
 function switchPage(page) {
   if (!page) return;
   if (page === "graphs" || page === "fullgraph") page = "doc";
-  if (page === "search" || page === "home") page = "docs";
+  if (page === "search") page = "docs";
   const prevGraphScope = graphScope;
   const prevGraphDocId = lastGraphDocId;
   currentPage = page;
@@ -4792,6 +6619,8 @@ function switchPage(page) {
   els.pageDocs?.classList.toggle("hidden", page !== "docs");
   els.pageGraphShell?.classList.toggle("hidden", !isGraphView);
   els.pageQdrant?.classList.toggle("hidden", page !== "qdrant");
+  els.pageManager?.classList.toggle("hidden", page !== "manager");
+  els.pageHome?.classList.toggle("hidden", page !== "home");
   els.pageChats?.classList.toggle("hidden", page !== "chats");
   els.pageGuide?.classList.toggle("hidden", page !== "guide");
   els.pageSettings?.classList.toggle("hidden", page !== "settings");
@@ -4869,9 +6698,16 @@ function switchPage(page) {
   if (page === "guide") {
     loadDocSections().then(() => loadDocSection(activeGuideSection));
   }
-  if (page === "settings") {
+  if (page === "manager") {
     loadDashboardStats();
+  }
+  if (page === "home") {
+    loadHomeInfo();
+  }
+  if (page === "settings") {
     initTopicWatchlistUi();
+    initExportPanel();
+    loadDataAccessSettings();
   }
   if (page === "chats") window.MKGAuth?.refreshChatsPage();
 }
@@ -4880,10 +6716,21 @@ window.MKG = {
   get selectedDoc() { return selectedDoc; },
   get currentPage() { return currentPage; },
   switchPage,
+  t,
+  onAppLangChange,
+  getUiLang,
+  setUiLang,
+  getTheme,
+  setTheme,
   openDocGuide,
   openDocWithMd,
   downloadDocumentMd,
+  export: MKGExport,
+  openExportSettings,
+  renderExportPanel,
   renderMarkdownHtml,
+  enhanceMarkdownTables,
+  enhanceComparisonTables,
   renderDocPipelineHtml,
   getDocPipelineStates,
   formatLogEntry,
@@ -4946,14 +6793,14 @@ function openDetailPanel(node) {
         <span class="detail-layer" style="background:${LAYER_COLOR[layer] || LAYER_COLOR["L?"]}">${esc(layer)} · ${esc(node.label)}</span>
         <div class="detail-id">${esc(node.id)} ${clusterBadge}${anomalyBadge}${multiDocBadge}</div>
         <section class="detail-section">
-          <h4 class="detail-section-title">Метаданные узла</h4>
+          <h4 class="detail-section-title">${esc(t("detail_metadata"))}</h4>
           ${propsHtml}
         </section>
       </div>
       <div class="detail-body-side detail-rels">
-        <h4 class="detail-section-title">Входящие (${incoming.length})</h4>
+        <h4 class="detail-section-title">${esc(tf("detail_incoming", { count: incoming.length }))}</h4>
         ${renderRelBlock(incoming, "in")}
-        <h4 class="detail-section-title">Исходящие (${outgoing.length})</h4>
+        <h4 class="detail-section-title">${esc(tf("detail_outgoing", { count: outgoing.length }))}</h4>
         ${renderRelBlock(outgoing, "out")}
       </div>
     </div>`;
@@ -4975,7 +6822,7 @@ function renderLayerFilters() {
   els.layerFilters.innerHTML = layers
     .filter((l) => l === "all" || counts[l])
     .map((l) => {
-      const label = l === "all" ? `Все (${counts.all})` : `${l} (${counts[l] || 0})`;
+      const label = l === "all" ? tf("graph_layer_all", { count: counts.all }) : `${l} (${counts[l] || 0})`;
       return `<button type="button" class="layer-chip ${graphLayerFilter === l ? "active" : ""}" data-layer="${l}">${label}</button>`;
     }).join("");
   els.layerFilters.querySelectorAll(".layer-chip").forEach((btn) => {
@@ -5003,7 +6850,7 @@ function renderLayerFilters() {
 
 function renderGraphNodeList(nodes) {
   if (!nodes.length) {
-    els.graphNodeList.innerHTML = '<div class="muted" style="padding:12px">Нет узлов</div>';
+    els.graphNodeList.innerHTML = `<div class="muted" style="padding:12px">${esc(t("graph_no_nodes"))}</div>`;
     return;
   }
   els.graphNodeList.innerHTML = nodes.slice(0, 200).map((n) => {
@@ -5014,7 +6861,7 @@ function renderGraphNodeList(nodes) {
     <button type="button" class="graph-node-item${ghostCls}${multiCls}" data-id="${esc(n.id)}">
       <div class="gn-label">${esc(n.label)}${esc(multiBadge)}</div>
       <div class="gn-id">${esc(shortNodeLabel(n))}</div>
-      <div class="gn-layer">${esc(layerOf(n.label))}${n._ghost ? " · контекст" : ""}</div>
+      <div class="gn-layer">${esc(layerOf(n.label))}${n._ghost ? ` · ${esc(t("graph_context"))}` : ""}</div>
     </button>`;
   }).join("");
   els.graphNodeList.querySelectorAll(".graph-node-item").forEach((btn) => {
@@ -5032,10 +6879,10 @@ function renderAllRelationshipsList() {
   const rels = graphData.relationships;
   if (els.graphRelsCount) {
     const cross = rels.filter((r) => isCrossLayerRel(r, layerMap)).length;
-    els.graphRelsCount.textContent = `${rels.length} связей · ${cross} межслойных`;
+    els.graphRelsCount.textContent = tf("graph_rels_count", { rels: rels.length, cross });
   }
   if (!rels.length) {
-    els.graphRelsList.innerHTML = '<div class="muted">Нет связей</div>';
+    els.graphRelsList.innerHTML = `<div class="muted">${esc(t("graph_no_rels"))}</div>`;
     return;
   }
   els.graphRelsList.innerHTML = rels.map((r) => {
@@ -5139,12 +6986,12 @@ function getVisNetworkOptions(nodeCount) {
         enabled: true,
         stabilization: { iterations: 55, fit: false, updateInterval: 20 },
         barnesHut: {
-          gravitationalConstant: -1100,
-          centralGravity: 0.1,
-          springLength: 190,
-          springConstant: 0.018,
+          gravitationalConstant: -1400,
+          centralGravity: 0.12,
+          springLength: 210,
+          springConstant: 0.02,
           damping: 0.22,
-          avoidOverlap: 0.4,
+          avoidOverlap: 0.45,
         },
         maxVelocity: 5,
         minVelocity: 0.04,
@@ -5157,12 +7004,12 @@ function getVisNetworkOptions(nodeCount) {
       enabled: true,
       stabilization: { iterations: 80, fit: false, updateInterval: 25 },
       barnesHut: {
-        gravitationalConstant: -3000,
-        centralGravity: 0.2,
-        springLength: 140,
-        springConstant: 0.04,
-        damping: 0.12,
-        avoidOverlap: 0.15,
+        gravitationalConstant: -3600,
+        centralGravity: 0.22,
+        springLength: 165,
+        springConstant: 0.045,
+        damping: 0.14,
+        avoidOverlap: 0.22,
       },
     },
     interaction,
@@ -5189,8 +7036,8 @@ function buildVisGraphItems(nodes, rels) {
     let label = shortGraphLabel(n);
     if (multiDoc >= 2) label = `${label}\n🔗${multiDoc}`;
     const colorBg = isGhost ? "rgba(176, 190, 197, 0.45)" : baseColor;
-    let colorBorder = multiDoc >= 2 ? "#ff9800" : (isGhost ? "#b0bec5" : "#fff");
-    let borderWidth = multiDoc >= 2 ? 2.5 : (isGhost ? 1 : 1);
+    let colorBorder = multiDoc >= 2 ? "#ff9800" : (isGhost ? "#90a4ae" : "#ffffff");
+    let borderWidth = multiDoc >= 2 ? 3 : (isGhost ? 1.5 : 2);
     if (isL4 && clusterId != null && !isGhost) {
       if (isAnomaly) {
         colorBorder = QDRANT_VIZ_ANOMALY_COLOR;
@@ -5216,13 +7063,15 @@ function buildVisGraphItems(nodes, rels) {
         highlight: { background: isGhost ? "#78909c" : "#01579b", border: "#fff" },
       },
       font: {
-        color: isGhost ? "#546e7a" : "#fff",
-        size: compact ? 9 : 11,
-        face: "Inter, sans-serif",
+        color: isGhost ? "#607d8b" : "#ffffff",
+        size: compact ? 11 : 13,
+        face: "Inter, system-ui, sans-serif",
+        strokeWidth: compact ? 0 : 2,
+        strokeColor: compact ? undefined : "rgba(0,0,0,0.35)",
       },
       shape: n._collapsed ? "ellipse" : "box",
-      margin: compact ? 4 : 8,
-      widthConstraint: compact ? { maximum: 90 } : undefined,
+      margin: compact ? 6 : 10,
+      widthConstraint: compact ? { maximum: 110 } : { maximum: 160 },
       borderWidth,
       opacity: isGhost ? 0.55 : 1,
     };
@@ -5242,24 +7091,25 @@ function buildVisGraphItems(nodes, rels) {
       to: r.to,
       label: showLabel ? r.type : undefined,
       title: r.type,
-      arrows: { to: { enabled: true, scaleFactor: compact ? 0.45 : 0.6 } },
+      arrows: { to: { enabled: true, scaleFactor: compact ? 0.55 : 0.75 } },
       font: {
-        size: emphasize || contradiction ? 9 : 8,
+        size: emphasize || contradiction ? 10 : 9,
         align: "middle",
-        strokeWidth: 0,
-        color: contradiction ? "#c62828" : (emphasize ? "#e65100" : (cross ? "#e65100" : "#546e7a")),
+        strokeWidth: 2,
+        strokeColor: "#ffffff",
+        color: contradiction ? "#c62828" : (emphasize ? "#e65100" : (cross ? "#e65100" : "#37474f")),
       },
       color: contradiction
         ? { color: "rgba(198,40,40,0.95)", highlight: "#b71c1c" }
         : gapEdge
-          ? { color: "rgba(183,28,28,0.75)", highlight: "#c62828" }
+          ? { color: "rgba(183,28,28,0.85)", highlight: "#c62828" }
           : cross
             ? {
-              color: emphasize ? "rgba(255,152,0,0.95)" : "rgba(255,152,0,0.55)",
+              color: emphasize ? "rgba(255,152,0,0.95)" : "rgba(255,152,0,0.7)",
               highlight: "#e65100",
             }
-            : { color: "rgba(144,202,249,0.7)", highlight: "#0288d1" },
-      width: contradiction ? 3 : (gapEdge ? 2.2 : (cross ? (emphasize ? 2.8 : (compact ? 1.2 : 2)) : 0.8)),
+            : { color: "rgba(55,90,130,0.82)", highlight: "#0288d1" },
+      width: contradiction ? 3.2 : (gapEdge ? 2.4 : (cross ? (emphasize ? 3 : (compact ? 1.6 : 2.4)) : (compact ? 1.4 : 1.8))),
       smooth: { type: "dynamic", roundness: compact ? 0.35 : 0.5 },
       dashes: contradiction ? [8, 4] : (cross ? false : undefined),
     };
@@ -5610,7 +7460,7 @@ function fillModelSelect(selectEl, models, labels, current) {
   if (!selectEl) return;
   selectEl.innerHTML = models.map((m) => {
     const label = labels?.[m] || m;
-    return `<option value="${esc(m)}" ${m === current ? "selected" : ""}>${esc(label)}</option>`;
+    return `<option value="${esc(m)}" title="${esc(label)}" ${m === current ? "selected" : ""}>${esc(label)}</option>`;
   }).join("");
 }
 
@@ -5624,6 +7474,73 @@ async function loadConfig() {
     fillModelSelect(els.embDocModel, cfg.emb_doc_models, cfg.emb_model_labels, cfg.emb_doc_model);
     fillModelSelect(els.embQueryModel, cfg.emb_query_models, cfg.emb_model_labels, cfg.emb_query_model);
   } catch { /* ignore */ }
+  await loadDataAccessSettings();
+}
+
+let dataAccessConfig = null;
+
+function isAdminRole() {
+  const role = window.MKGAuth?.getRole?.();
+  return Boolean(role?.can_admin || role?.id === "admin");
+}
+
+function renderDataAccessMatrix(cfg) {
+  if (!els.dataAccessMatrix || !cfg?.matrix) return;
+  const classifications = cfg.classifications || [];
+  const roleNames = cfg.role_names || {};
+  const canEdit = isAdminRole();
+  const head = `<tr><th>${esc(t("settings_data_access_role"))}</th>${classifications.map((c) => `<th>${esc(classificationLabel(c))}</th>`).join("")}</tr>`;
+  const rows = (cfg.roles || []).map((roleId) => {
+    const cells = classifications.map((level) => {
+      const checked = cfg.matrix?.[roleId]?.[level] ? "checked" : "";
+      const disabled = roleId === "admin" || !canEdit ? "disabled" : "";
+      return `<td><input type="checkbox" data-role="${esc(roleId)}" data-level="${esc(level)}" ${checked} ${disabled} /></td>`;
+    }).join("");
+    const note = roleId === "admin" ? ` <span class="muted small">${esc(t("settings_data_access_admin_note"))}</span>` : "";
+    return `<tr><th scope="row">${esc(roleNames[roleId] || roleId)}${note}</th>${cells}</tr>`;
+  }).join("");
+  els.dataAccessMatrix.innerHTML = `<table class="data-access-table"><thead>${head}</thead><tbody>${rows}</tbody></table>`;
+  if (els.saveDataAccessBtn) els.saveDataAccessBtn.disabled = !canEdit;
+}
+
+async function loadDataAccessSettings() {
+  try {
+    const r = await fetch(`${API}/settings/data-access`);
+    if (!r.ok) return;
+    dataAccessConfig = await r.json();
+    renderDataAccessMatrix(dataAccessConfig);
+  } catch { /* ignore */ }
+}
+
+async function saveDataAccessSettings() {
+  if (!isAdminRole() || !els.dataAccessMatrix) return;
+  const matrix = {};
+  els.dataAccessMatrix.querySelectorAll('input[type="checkbox"][data-role]').forEach((el) => {
+    const roleId = el.dataset.role;
+    const level = el.dataset.level;
+    if (!roleId || !level) return;
+    matrix[roleId] ||= {};
+    matrix[roleId][level] = el.checked;
+  });
+  if (els.saveDataAccessBtn) els.saveDataAccessBtn.disabled = true;
+  if (els.dataAccessSaveStatus) els.dataAccessSaveStatus.textContent = t("settings_save") + "…";
+  try {
+    const r = await fetch(`${API}/settings/data-access`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ matrix }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "save failed");
+    dataAccessConfig = data;
+    renderDataAccessMatrix(dataAccessConfig);
+    if (els.dataAccessSaveStatus) els.dataAccessSaveStatus.textContent = t("settings_save");
+    setTimeout(() => { if (els.dataAccessSaveStatus) els.dataAccessSaveStatus.textContent = ""; }, 2000);
+  } catch (e) {
+    if (els.dataAccessSaveStatus) els.dataAccessSaveStatus.textContent = e.message;
+  } finally {
+    if (els.saveDataAccessBtn) els.saveDataAccessBtn.disabled = !isAdminRole();
+  }
 }
 
 async function saveConfig() {
@@ -5996,7 +7913,7 @@ async function loadDocuments() {
 
 function renderDocsListLoading() {
   if (!els.docs) return;
-  els.docs.innerHTML = '<div class="muted docs-list-loading">Загрузка документов…</div>';
+  els.docs.innerHTML = `<div class="muted docs-list-loading">${esc(t("docs_list_loading"))}</div>`;
 }
 
 function isTransientFetchError(err) {
@@ -6005,7 +7922,10 @@ function isTransientFetchError(err) {
 }
 
 async function fetchDocumentsPage() {
-  const url = `${API}/documents?page=1&page_size=50`;
+  const params = new URLSearchParams({ page: "1", page_size: "50" });
+  if (docListGeoFilter) params.set("geography", docListGeoFilter);
+  if (docListYearFilter) params.set("material_year", docListYearFilter);
+  const url = `${API}/documents?${params.toString()}`;
   let lastErr;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -6026,9 +7946,9 @@ function renderDocsListError(message, status) {
   if (!els.docs) return;
   const detail = status ? `HTTP ${status}` : esc(message || "неизвестная ошибка");
   els.docs.innerHTML = `<div class="doc-error-box docs-list-error">
-    <p>Не удалось загрузить документы</p>
+    <p>${esc(t("docs_list_error"))}</p>
     <p class="muted small">${detail}</p>
-    <button type="button" class="btn btn-small btn-ghost doc-retry-btn" id="docsListRetryBtn">Повторить</button>
+    <button type="button" class="btn btn-small btn-ghost doc-retry-btn" id="docsListRetryBtn">${esc(t("docs_retry"))}</button>
   </div>`;
   els.docs.querySelector("#docsListRetryBtn")?.addEventListener("click", () => renderDocsList());
   window.MKGAuth?.syncDocsUploadFallback?.();
@@ -6064,7 +7984,7 @@ async function renderDocsList({ silent = false } = {}) {
       els.l3EmbeddingStatus.textContent = formatEmbeddingStatus(embeddingStatusCache);
     }
     if (!data.items?.length) {
-      els.docs.innerHTML = '<div class="muted">Пока нет документов — загрузите файл выше</div>';
+      els.docs.innerHTML = `<div class="muted">${esc(t("docs_list_empty"))}</div>`;
       window.MKGAuth?.syncDocsUploadFallback?.();
       return;
     }
@@ -6073,11 +7993,14 @@ async function renderDocsList({ silent = false } = {}) {
       ? data.items.filter((d) => (d.file_name || d.id || "").toLowerCase().includes(q))
       : data.items;
     if (!filtered.length) {
-      els.docs.innerHTML = '<div class="muted">Нет документов по фильтру</div>';
+      els.docs.innerHTML = `<div class="muted">${esc(t("docs_list_no_match"))}</div>`;
       window.MKGAuth?.syncDocsUploadFallback?.();
       return;
     }
-    els.docs.innerHTML = filtered.map(renderDocCard).join("");
+    const restrictedBanner = (data.restricted_count || 0) > 0
+      ? `<div class="docs-restricted-banner muted small">${esc(t("docs_restricted_count").replace("{count}", String(data.restricted_count)))}</div>`
+      : "";
+    els.docs.innerHTML = `${restrictedBanner}${filtered.map(renderDocCard).join("")}`;
     bindDocCards(els.docs);
     const sel = docsListCache.find((x) => x.id === selectedDoc);
     updateDocWorkArea(sel || null);
@@ -6096,7 +8019,7 @@ async function renderDocsList({ silent = false } = {}) {
 }
 
 function bindNavigation() {
-  document.querySelectorAll(".page-nav-link").forEach((link) => {
+  document.querySelectorAll(".page-nav-link, .home-card[data-page]").forEach((link) => {
     link.addEventListener("click", () => switchPage(link.dataset.page));
   });
 }
@@ -6121,6 +8044,7 @@ function bindEvents() {
   });
   els.uploadBtn?.addEventListener("click", (e) => { e.stopPropagation(); uploadFiles(); });
   els.saveConfigBtn?.addEventListener("click", saveConfig);
+  els.saveDataAccessBtn?.addEventListener("click", saveDataAccessSettings);
   els.clearDbBtn?.addEventListener("click", clearDatabase);
   els.diagBtn?.addEventListener("click", runDiagnostics);
   els.l3IndexBtn?.addEventListener("click", () => {
@@ -6131,18 +8055,46 @@ function bindEvents() {
     indexEmbeddings(selectedDoc);
   });
   els.l3IndexAllBtn?.addEventListener("click", indexAllEmbeddings);
+  document.getElementById("qdrantEmptyReindexBtn")?.addEventListener("click", indexAllEmbeddings);
+  els.l3ReindexEntitiesBtn?.addEventListener("click", reindexEntitiesCorpus);
   els.l4ClusterBtn?.addEventListener("click", runL4Clustering);
   els.qdrantSearchForm?.addEventListener("submit", (e) => {
     e.preventDefault();
-    runSearch(els.qdrantSearchQuery?.value, els.qdrantSearchResults);
+    runSearch(undefined, els.qdrantSearchResults);
+  });
+  els.qdrantEntitySearchForm?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    runEntitySearch(els.qdrantEntitySearchQuery?.value, els.qdrantEntitySearchResults);
+  });
+  els.qdrantSearchKeyword?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      runSearch(undefined, els.qdrantSearchResults);
+    }
   });
   els.qdrantSearchKeyword?.addEventListener("input", () => {
-    if (!lastQdrantSearchHits.length) return;
+    const { query, keywordFilter } = getQdrantSearchInputs();
+    if (!lastQdrantSearchHits.length && query && !els.qdrantSearchQuery?.value?.trim()) return;
+    if (!lastQdrantSearchHits.length && !query) return;
     renderQdrantSearchResults(els.qdrantSearchResults, { showDoc: true });
   });
   els.docListFilter?.addEventListener("input", (e) => {
     docListFilterText = e.target.value;
     renderDocsList();
+  });
+  els.docGeoFilter?.addEventListener("change", (e) => {
+    docListGeoFilter = e.target.value || "";
+    renderDocsList();
+  });
+  els.docYearFilter?.addEventListener("change", (e) => {
+    docListYearFilter = e.target.value?.trim() || "";
+    renderDocsList();
+  });
+  els.docYearFilter?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      docListYearFilter = e.target.value?.trim() || "";
+      renderDocsList();
+    }
   });
   els.viewAllGraphBtn?.addEventListener("click", viewAllGraph);
   els.docBackBtn?.addEventListener("click", () => switchPage("docs"));
@@ -6211,6 +8163,12 @@ function bindEvents() {
   });
   els.graphCompareRefreshBtn?.addEventListener("click", renderCompareTable);
   els.dashboardRefreshBtn?.addEventListener("click", loadDashboardStats);
+  els.dashboardExportJsonBtn?.addEventListener("click", exportDashboardJson);
+  els.dashboardExportCsvBtn?.addEventListener("click", exportDashboardCsv);
+  els.dashboardExportRisksBtn?.addEventListener("click", exportDashboardRisksCsv);
+  els.dashboardExportCompareBtn?.addEventListener("click", exportDashboardCompareCsv);
+  els.dashboardExportDocsBtn?.addEventListener("click", exportDocumentsSummaryCsv);
+  els.dashboardAllExportsBtn?.addEventListener("click", openExportSettings);
   bindTopicWatchlistEvents();
   initGraphAdvFiltersCollapse();
   initGraphAdvancedFilters();
@@ -6226,13 +8184,24 @@ function boot() {
   if (typeof mermaid !== "undefined") {
     mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
   }
-  switchPage("chats");
+  document.getElementById("chatUploadModal")?.classList.add("hidden");
+  document.getElementById("graphFullscreenModal")?.classList.add("hidden");
+  applyTheme();
+  applyUiLang();
+  syncLangToggleUi();
+  bindAppearanceControls();
   bindNavigation();
+  try {
+    switchPage("home");
+  } catch (err) {
+    console.error("MKG switchPage error:", err);
+  }
   try {
     bindEvents();
   } catch (err) {
     console.error("MKG UI init error:", err);
   }
+  initExportPanel();
   updateDensityToggleUI();
   els.appRoot?.classList.add("js-ready");
   loadFormats();

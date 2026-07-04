@@ -144,6 +144,40 @@ async def list_users(limit: int = 50) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+async def collab_activity_stats() -> dict[str, Any]:
+    """Aggregate chat activity for manager dashboard."""
+    await init_collab_schema()
+    p = await pool()
+    async with p.acquire() as conn:
+        thread_count = int(await conn.fetchval("SELECT COUNT(*) FROM chat_threads") or 0)
+        message_count = int(await conn.fetchval("SELECT COUNT(*) FROM chat_messages") or 0)
+        queries_7d = int(
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM chat_messages WHERE created_at >= now() - interval '7 days'"
+            )
+            or 0
+        )
+        recent_threads = await conn.fetch(
+            """
+            SELECT t.id, t.title,
+              (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id = t.id) AS message_count,
+              (SELECT MAX(created_at) FROM chat_messages m WHERE m.thread_id = t.id) AS last_message_at
+            FROM chat_threads t
+            ORDER BY COALESCE(
+              (SELECT MAX(created_at) FROM chat_messages m WHERE m.thread_id = t.id),
+              t.created_at
+            ) DESC
+            LIMIT 5
+            """
+        )
+    return {
+        "thread_count": thread_count,
+        "message_count": message_count,
+        "queries_7d": queries_7d,
+        "recent_threads": [dict(r) for r in recent_threads],
+    }
+
+
 async def list_threads(limit: int = 50) -> list[dict[str, Any]]:
     await init_collab_schema()
     p = await pool()

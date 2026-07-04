@@ -13,6 +13,16 @@ ANSWER_SECTION_TITLES: tuple[str, ...] = (
     "Уточняющий вопрос",
 )
 
+ANSWER_SECTION_TITLES_EN: tuple[str, ...] = (
+    "Summary",
+    "Sources by group (method / year / geography)",
+    "Consensus and disagreements",
+    "Confidence (N sources, reliability level)",
+    "Knowledge gaps",
+    "Recommendations (cases, experts, topics)",
+    "Follow-up question",
+)
+
 ANSWER_STRUCTURE_TEMPLATE = """\
 ## Сводка
 Краткий вывод по вопросу (2–4 предложения).
@@ -43,30 +53,63 @@ N источников · уровень: высокая / средняя / ни
 (опционально — один вопрос, если ответ неполный)
 """
 
-CHAT_STRUCTURE_RULES = (
-    "Структура ответа — Markdown с разделами ## (обязательно на русском):\n"
-    + "\n".join(f"- ## {title}" for title in ANSWER_SECTION_TITLES[:-1])
-    + "\n- ## Уточняющий вопрос (опционально, если ответ неполный)\n"
-    "В «Источники по группам» группируй evidence по методу/процессу, году, географии (РФ/зарубеж), "
-    "уровню детализации. В «Консенсус и разногласия» явно раздели согласованные выводы и расхождения. "
-    "В «Уверенность» укажи число опорных источников и уровень достоверности (высокая/средняя/низкая) "
-    "по extraction_confidence, если он есть во входе. "
-    "В «Пробелы» перечисли непокрытые material–mode–condition и технологии только РФ или только зарубеж. "
-    "В «Рекомендации» — похожие кейсы, эксперты из графа, темы для углубления. "
-    "Раздел «Уточняющий вопрос» опускай, если ответ полный."
-)
+def chat_structure_rules(lang: str = "ru") -> str:
+    """Markdown section rules for chat answers; headers match reply language."""
+    if lang == "en":
+        titles = ANSWER_SECTION_TITLES_EN
+        return (
+            "Answer structure — Markdown with ## sections (headers in English, same as the answer):\n"
+            + "\n".join(f"- ## {title}" for title in titles[:-1])
+            + "\n- ## Follow-up question (optional if the answer is complete)\n"
+            "Never include graph counters (nodes, edges, hits), L1–L6 layer codes, "
+            "situation evaluation strings, or retrieval jargon (Qdrant, Neo4j, keyword-fallback) "
+            "in user-facing sections — those belong in trace/pipeline only. "
+            "In Sources by group, group evidence by method/process, year, geography (domestic/abroad), "
+            "and detail level. In Consensus and disagreements, separate agreed conclusions from conflicts. "
+            "In Confidence, cite source count and reliability (high/medium/low) using extraction_confidence when present. "
+            "In Knowledge gaps, list uncovered material–mode–condition combos and technologies covered only domestically or abroad. "
+            "In Recommendations, suggest similar cases, graph experts, and topics to explore. "
+            "Use GFM pipe tables when tabular data fits. "
+            "Omit Follow-up question when the answer is complete."
+        )
+    return (
+        "Структура ответа — Markdown с разделами ## (заголовки на том же языке, что и ответ):\n"
+        + "\n".join(f"- ## {title}" for title in ANSWER_SECTION_TITLES[:-1])
+        + "\n- ## Уточняющий вопрос (опционально, если ответ неполный)\n"
+        "Никогда не включай в разделы ответа счётчики графа (узл., св., хитов), метки L1–L6, "
+        "«Оценка ситуации», названия retrieval (Qdrant, Neo4j, keyword-fallback) — "
+        "это только для trace/пайплайна, не для пользователя. "
+        "В «Источники по группам» группируй evidence по методу/процессу, году, географии (РФ/зарубеж), "
+        "уровню детализации. В «Консенсус и разногласия» явно раздели согласованные выводы и расхождения. "
+        "В «Уверенность» укажи число опорных источников и уровень достоверности (высокая/средняя/низкая) "
+        "по extraction_confidence, если он есть во входе. "
+        "В «Пробелы» перечисли непокрытые material–mode–condition и технологии только РФ или только зарубеж. "
+        "В «Рекомендации» — похожие кейсы, эксперты из графа, темы для углубления. "
+        "Для табличных данных используй GFM pipe-таблицы Markdown: | Колонка A | Колонка B |, "
+        "строка-разделитель | --- | --- |, затем строки данных. "
+        "Раздел «Уточняющий вопрос» опускай, если ответ полный."
+    )
+
+
+CHAT_STRUCTURE_RULES = chat_structure_rules("ru")
 
 SYNTH_STRUCTURE_RULES = (
     "Поле summary — Markdown-текст для пользователя строго по шаблону разделов ##:\n"
     + ANSWER_STRUCTURE_TEMPLATE
-    + "\nИспользуй переданные layer_results, sources, knowledge_gaps, experts, anomalies, gaps. "
+    + "\nНе копируй situation_evaluation, reasoning_step и прочие техстроки из layer_results — "
+    "используй только смысл найденных узлов/фрагментов. "
+    "Используй переданные layer_results, sources, knowledge_gaps, experts, anomalies, gaps. "
     "KnowledgeGap из графа → раздел «Пробелы в знаниях». Expert → «Рекомендации». "
     "L4-аномалии (cluster_id=-1) упоминай в «Консенсус и разногласия» или «Пробелы», если релевантно."
 )
 
 FAST_STRUCTURE_NOTE = (
-    "В режиме быстрого ответа разделы могут быть короче, но заголовки ## сохрани; "
-    "«Рекомендации» и «Уточняющий вопрос» — по необходимости."
+    "В режиме быстрого ответа разделы ## сохрани, но будь лаконичен: "
+    "«Сводка» — 2–3 предложения; остальные разделы — по 1–2 пункта; "
+    "«Рекомендации» и «Уточняющий вопрос» — только если нужны. "
+    "Если переданы фрагменты MKG — опирайся на них и цитируй doc/node; "
+    "не пиши «нет данных в контексте», если фрагменты релевантны. "
+    "Если фрагментов нет — в «Источники» явно укажи, что поиск MKG не нашёл совпадений."
 )
 
 

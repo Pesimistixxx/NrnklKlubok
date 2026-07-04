@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     qdrant_collection_claims: str = Field(
         default="mkg_claims", alias="QDRANT_COLLECTION_CLAIMS"
     )
+    qdrant_collection_entities: str = Field(
+        default="mkg_entities", alias="QDRANT_COLLECTION_ENTITIES"
+    )
     qdrant_vector_size: int = Field(default=256, alias="QDRANT_VECTOR_SIZE")
 
     # Postgres / Redis

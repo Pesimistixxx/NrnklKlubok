@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from app.chat_engine import run_chat_query
+from app.data_access import allowed_classifications
 from app.collab_db import (
     add_message,
     create_thread,
@@ -55,7 +56,12 @@ router = APIRouter(tags=["collab"])
 
 @router.get("/roles", response_model=RolesOut)
 async def get_roles() -> RolesOut:
-    return RolesOut(roles=[RoleOut(**r) for r in MKG_ROLES])
+    items: list[RoleOut] = []
+    for raw in MKG_ROLES:
+        payload = dict(raw)
+        payload["allowed_classifications"] = await allowed_classifications(str(raw["id"]))
+        items.append(RoleOut(**payload))
+    return RolesOut(roles=items)
 
 
 @router.get("/roles/{role_id}/prompt", response_model=RolePromptOut)
@@ -307,6 +313,7 @@ async def chat_complete(body: ChatCompleteIn) -> ChatCompleteOut:
         include_artifacts=body.include_artifacts,
         document_ids=body.document_ids or None,
         speed_mode=body.speed_mode,
+        ui_lang=body.ui_lang,
     )
 
 

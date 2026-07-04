@@ -57,13 +57,49 @@ def is_continuation_query(query: str) -> bool:
     return len(q.split()) <= 4 and any(marker in q for marker in _CONTINUATION_MARKERS)
 
 
+_TOKEN_RE = re.compile(r"[\w\u0400-\u04FF]+", re.UNICODE)
+
+
+def _norm_token(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def is_standalone_topic_query(query: str) -> bool:
+    """Короткий самостоятельный запрос (материал, термин) — не смешивать с прошлым вопросом."""
+    q = query.strip()
+    if not q or is_continuation_query(q):
+        return False
+    try:
+        from mkg_core.query_classify import is_conversational_query
+
+        if is_conversational_query(q):
+            return True
+    except Exception:
+        pass
+    words = q.split()
+    if len(words) > 3:
+        return False
+    try:
+        from mkg_core.alias_expansion import get_alias_lookup
+
+        lookup = get_alias_lookup()
+        tokens = [_norm_token(t) for t in _TOKEN_RE.findall(q) if len(_norm_token(t)) >= 2]
+        if any(t in lookup for t in tokens):
+            return True
+    except Exception:
+        pass
+    return len(words) <= 2
+
+
 def effective_search_query(query: str, history: list[dict[str, str]] | None, *, limit: int = 600) -> str:
     """Поисковый запрос с учётом истории для коротких и продолжающих реплик."""
     q = query.strip()
     if not q:
         return q
     prior_user, prior_assistant = prior_turns(history)
-    if is_continuation_query(q) and prior_user:
+    if is_standalone_topic_query(q):
+        base = q
+    elif is_continuation_query(q) and prior_user:
         parts = [prior_user, q]
         if prior_assistant:
             parts.append(prior_assistant[:200])
@@ -79,3 +115,23 @@ def effective_search_query(query: str, history: list[dict[str, str]] | None, *, 
         return expanded
     except Exception:
         return base
+
+
+def search_query_variants(
+    query: str,
+    history: list[dict[str, str]] | None,
+    *,
+    limit: int = 600,
+) -> list[str]:
+    """Варианты запроса для retrieval: сначала расширенный, затем сырой (без истории)."""
+    raw = query.strip()
+    effective = effective_search_query(query, history, limit=limit)
+    variants: list[str] = []
+    seen: set[str] = set()
+    for candidate in (effective, raw):
+        key = candidate.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        variants.append(candidate.strip())
+    return variants

@@ -5,12 +5,61 @@
   const ROLE_PROMPT_OPEN_KEY = "mkg_role_prompt_open";
   const CHAT_GRAPH_OPEN_KEY = "mkg_chat_graph_open";
   const CHAT_SPEED_KEY = "mkg_chat_speed_mode";
+  const CHAT_THREAD_SPEED_KEY = "mkg_chat_thread_speed";
+  const CHAT_ACTIVE_THREAD_KEY = "mkg_chat_active_thread";
   const $ = (id) => document.getElementById(id);
+
+  function tt(key, fallback = "") {
+    const v = window.MKG?.t?.(key);
+    return v && v !== key ? v : fallback;
+  }
+
+  function tf(key, vars, fallback = "") {
+    let text = tt(key, fallback);
+    if (vars && typeof text === "string") {
+      Object.entries(vars).forEach(([k, v]) => {
+        text = text.replaceAll(`{${k}}`, String(v));
+      });
+    }
+    return text;
+  }
+
+  function roleDisplay(ro) {
+    const id = ro?.id || "";
+    return {
+      name: tt(`role_${id}_name`, ro.name_ru || id),
+      tagline: tt(`role_${id}_tagline`, ro.tagline || ro.description || ""),
+      capability: tt(`role_${id}_capability`, ro.capability_ru || ro.description || ""),
+      differs: ro.differs_from || "",
+    };
+  }
+
+  function parseApiError(data, fallback = "AI недоступен") {
+    const d = data?.detail;
+    if (typeof d === "string") return d;
+    if (Array.isArray(d)) return d[0]?.msg || fallback;
+    return fallback;
+  }
+
+  function traceModeLabel(mode) {
+    return tt(`agent_mode_${mode}`, AGENT_MODE_TRACE[mode] || mode);
+  }
+
+  function speedModeLabel(mode) {
+    if (mode === "compare") return tt("chat_speed_compare", "Сравнение");
+    if (mode === "direct") return tt("chat_speed_direct", "Прямой ответ");
+    return mode === "fast" ? tt("chat_speed_fast", "Быстрый") : tt("chat_speed_full", "Подробный · с рассуждениями");
+  }
+
+  function chatLocale() {
+    return window.MKG?.getUiLang?.() === "en" ? "en-US" : "ru-RU";
+  }
 
   const FALLBACK_ROLES = [
     { id: "researcher", name_ru: "Исследователь", can_run_agents: true, can_upload: true, icon: "🔬", tagline: "Гипотезы и связи", capability_ru: "Синтез из графа MKG" },
     { id: "analyst", name_ru: "Аналитик", can_run_agents: true, can_upload: false, icon: "📊", tagline: "Паттерны в данных", capability_ru: "Qdrant + графики + L4-кластеры" },
     { id: "validator", name_ru: "Валидатор", can_run_agents: true, can_upload: false, icon: "✓", tagline: "Проверка фактов", capability_ru: "Аудит фактов и противоречий" },
+    { id: "security", name_ru: "Безопасность", can_run_agents: false, can_upload: false, icon: "🔒", tagline: "Грифы и RBAC", capability_ru: "SecurityRole, классификация L5" },
     { id: "engineer", name_ru: "Инженер", can_run_agents: false, can_upload: true, icon: "🛠", tagline: "Пайплайн данных", capability_ru: "OCR → MD → Neo4j → Qdrant" },
     { id: "admin", name_ru: "Администратор", can_run_agents: true, can_upload: true, can_admin: true, icon: "⚙️", tagline: "Полный доступ", capability_ru: "Настройки и очистка" },
     { id: "viewer", name_ru: "Наблюдатель", can_run_agents: false, can_upload: false, icon: "👁", tagline: "Только просмотр", capability_ru: "Read-only" },
@@ -30,28 +79,64 @@
     anomaly_mode: "Аномалии",
     dialog: "Диалог",
     fast: "Быстрый",
+    direct: "Прямой ответ",
   };
 
   const SPEED_MODE_LABELS = {
     fast: "Быстрый",
     full: "Подробный · с рассуждениями",
+    compare: "Сравнение",
   };
 
-  function getChatSpeedMode() {
+  const threadSpeedModes = new Map();
+
+  function loadThreadSpeedModes() {
+    try {
+      const raw = localStorage.getItem(CHAT_THREAD_SPEED_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        Object.entries(parsed).forEach(([tid, mode]) => {
+          if (tid && (mode === "fast" || mode === "compare" || mode === "full")) {
+            threadSpeedModes.set(tid, mode);
+          }
+        });
+      }
+    } catch { /* ignore */ }
+  }
+
+  function persistThreadSpeedModes() {
+    try {
+      localStorage.setItem(CHAT_THREAD_SPEED_KEY, JSON.stringify(Object.fromEntries(threadSpeedModes)));
+    } catch { /* ignore */ }
+  }
+
+  loadThreadSpeedModes();
+
+  function getChatSpeedMode(threadId = activeThreadId) {
+    if (threadId && threadSpeedModes.has(threadId)) return threadSpeedModes.get(threadId);
     try {
       const v = localStorage.getItem(CHAT_SPEED_KEY);
-      return v === "fast" ? "fast" : "full";
+      if (v === "fast") return "fast";
+      if (v === "compare") return "compare";
+      return "full";
     } catch {
       return "full";
     }
   }
 
-  function setChatSpeedMode(mode) {
-    const next = mode === "fast" ? "fast" : "full";
-    try {
-      localStorage.setItem(CHAT_SPEED_KEY, next);
-    } catch { /* ignore */ }
-    syncChatSpeedToggleUi(next);
+  function setChatSpeedMode(mode, { threadId = activeThreadId, persistGlobal = true } = {}) {
+    const next = mode === "fast" ? "fast" : mode === "compare" ? "compare" : "full";
+    if (threadId) {
+      threadSpeedModes.set(threadId, next);
+      persistThreadSpeedModes();
+    }
+    if (persistGlobal) {
+      try {
+        localStorage.setItem(CHAT_SPEED_KEY, next);
+      } catch { /* ignore */ }
+    }
+    if (!threadId || threadId === activeThreadId) syncChatSpeedToggleUi(next);
     return next;
   }
 
@@ -103,6 +188,54 @@
   let activeStreamPreview = null;
   let currentThreadMessages = [];
   let chatBusy = false;
+  const CHAT_SEND_WATCHDOG_MS = 12 * 60 * 1000;
+
+  function composeHasSendableContent() {
+    const text = ($("chatMessageInput")?.value ?? "").trim();
+    return !!text || !!(pendingComposeAttachments?.files?.length);
+  }
+
+  function isChatSending() {
+    return chatBusy
+      || !!activeStreamPreview?.isConnected
+      || !$("chatTyping")?.classList.contains("hidden");
+  }
+
+  function syncComposeSendButton() {
+    const btn = $("chatSendBtn");
+    if (!btn) return;
+    const canSend = composeHasSendableContent() && !isChatSending();
+    btn.disabled = !canSend;
+    btn.classList.toggle("disabled", !canSend);
+    btn.setAttribute("aria-disabled", canSend ? "false" : "true");
+  }
+
+  function healOrphanChatBusyUi() {
+    if (chatBusy) return;
+    const typingVisible = $("chatTyping") && !$("chatTyping").classList.contains("hidden");
+    if (typingVisible || activeStreamPreview?.isConnected) {
+      showTyping(false);
+      removeStreamPreview();
+    }
+    syncComposeSendButton();
+  }
+
+  function releaseChatComposeLock() {
+    chatBusy = false;
+    showTyping(false);
+    removeStreamPreview();
+    cancelActiveGraphWalk();
+    setChatGraphBuilding(false);
+    const btn = $("chatSendBtn");
+    if (btn) btn.textContent = window.MKG?.t?.("chat_send") || "Отправить";
+    const attachBtn = $("chatAttachBtn");
+    if (attachBtn) attachBtn.disabled = !canShowUpload(roleMeta(currentUser?.role_id));
+    syncComposeSendButton();
+  }
+
+  /** Выбранный раунд в блоке «Агенты · гибкий цикл» по id сообщения */
+  const layerAgentsRoundByMsg = new Map();
+  let layerRoundNavDelegated = false;
 
   function showChatUploadError(msg) {
     const el = $("chatUploadError");
@@ -320,6 +453,7 @@
   function clearPendingComposeAttachments() {
     pendingComposeAttachments = null;
     renderPendingAttachmentsPreview();
+    syncComposeSendButton();
   }
 
   function renderPendingAttachmentsPreview() {
@@ -329,6 +463,7 @@
     if (!pending?.files?.length) {
       el.innerHTML = "";
       el.classList.add("hidden");
+      syncComposeSendButton();
       return;
     }
     const modeLabel = pending.processingMode === "answers_only"
@@ -343,6 +478,7 @@
       </span>`).join("");
     el.innerHTML = chips;
     el.classList.remove("hidden");
+    syncComposeSendButton();
     el.querySelectorAll(".chat-pending-chip-remove").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = parseInt(btn.dataset.pendingIdx, 10);
@@ -370,6 +506,7 @@
     };
     hideChatUploadModal();
     renderPendingAttachmentsPreview();
+    syncComposeSendButton();
     $("chatMessageInput")?.focus();
   }
 
@@ -506,15 +643,47 @@
     return esc(text).replace(/\n/g, "<br>");
   }
 
-  /** Обернуть ##-разделы структурированного ответа в collapsible blocks. */
-  function wrapAnswerSectionsHtml(html, msgId) {
-    if (!html || !/<h2\b/i.test(html)) return html;
+  function sectionNodesHaveContent(nodes) {
+    if (!nodes?.length) return false;
+    const tmp = document.createElement("div");
+    nodes.forEach((n) => tmp.appendChild(n.cloneNode(true)));
+    return tmp.textContent.replace(/\s+/g, "").length > 0;
+  }
+
+  const SECTION_SHORT_LABELS = [
+    [/^сводка/i, "Сводка"],
+    [/^источники/i, "Источники"],
+    [/^консенсус/i, "Консенсус"],
+    [/^уверенность/i, "Уверенность"],
+    [/^пробелы/i, "Пробелы"],
+    [/^рекоменда/i, "Рекомендации"],
+    [/^уточня/i, "Вопрос"],
+  ];
+
+  function sectionShortLabel(title) {
+    const t = String(title || "").trim();
+    for (const [re, label] of SECTION_SHORT_LABELS) {
+      if (re.test(t)) return label;
+    }
+    return t.length > 22 ? `${t.slice(0, 20)}…` : t;
+  }
+
+  function truncatePlainText(text, maxChars = 280) {
+    const s = String(text || "").replace(/\s+/g, " ").trim();
+    if (s.length <= maxChars) return s;
+    const cut = s.slice(0, maxChars);
+    const lastDot = cut.lastIndexOf(". ");
+    if (lastDot > maxChars * 0.45) return cut.slice(0, lastDot + 1);
+    return `${cut.trimEnd()}…`;
+  }
+
+  function parseAnswerSectionsFromHtml(html) {
+    if (!html || !/<h2\b/i.test(html)) return null;
     const tmp = document.createElement("div");
     tmp.innerHTML = html;
-    const children = [...tmp.childNodes];
     const sections = [];
     let current = null;
-    for (const node of children) {
+    for (const node of [...tmp.childNodes]) {
       if (node.nodeType === 1 && node.tagName === "H2") {
         if (current) sections.push(current);
         current = { title: node.textContent.trim(), nodes: [] };
@@ -523,64 +692,158 @@
       }
     }
     if (current) sections.push(current);
-    if (sections.length < 2) return html;
+    return sections.filter((s) => sectionNodesHaveContent(s.nodes));
+  }
+
+  let answerSectionWalkTimer = null;
+
+  function stopAnswerSectionWalk() {
+    if (answerSectionWalkTimer) {
+      clearTimeout(answerSectionWalkTimer);
+      answerSectionWalkTimer = null;
+    }
+  }
+
+  function activateAnswerSection(nav, idx) {
+    if (!nav) return;
+    const root = nav.closest(".chat-answer-plain");
+    if (!root) return;
+    nav.querySelectorAll(".chat-answer-section-pill:not(.chat-answer-section-collapse)").forEach((pill, i) => {
+      pill.classList.toggle("active", i === idx);
+      pill.setAttribute("aria-selected", i === idx ? "true" : "false");
+    });
+    root.querySelectorAll(".chat-answer-section").forEach((det, i) => {
+      det.open = true;
+      det.classList.toggle("is-active", i === idx);
+    });
+    const target = root.querySelector(`.chat-answer-section[data-section-idx="${idx}"]`);
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function collapseAllAnswerSections(nav) {
+    stopAnswerSectionWalk();
+    const root = nav?.closest(".chat-answer-plain");
+    if (!root) return;
+    nav.querySelectorAll(".chat-answer-section-pill").forEach((pill) => {
+      pill.classList.remove("active");
+      pill.setAttribute("aria-selected", "false");
+    });
+    root.querySelectorAll(".chat-answer-section").forEach((det) => {
+      det.open = false;
+      det.classList.remove("is-active");
+    });
+  }
+
+  function bindAnswerSectionNav(nav, { autoWalk = false } = {}) {
+    if (!nav || nav.dataset.bound) return;
+    nav.dataset.bound = "1";
+    nav.querySelector(".chat-answer-section-collapse")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      collapseAllAnswerSections(nav);
+    });
+    const pills = [...nav.querySelectorAll(".chat-answer-section-pill:not(.chat-answer-section-collapse)")];
+    pills.forEach((pill, idx) => {
+      pill.addEventListener("click", (e) => {
+        e.preventDefault();
+        stopAnswerSectionWalk();
+        activateAnswerSection(nav, idx);
+      });
+    });
+    if (autoWalk && pills.length > 1) {
+      stopAnswerSectionWalk();
+      let step = 0;
+      const tick = () => {
+        activateAnswerSection(nav, step);
+        step += 1;
+        if (step < pills.length) {
+          answerSectionWalkTimer = setTimeout(tick, 2200);
+        } else {
+          answerSectionWalkTimer = null;
+        }
+      };
+      answerSectionWalkTimer = setTimeout(tick, 600);
+    }
+  }
+
+  /** Компактная сводка + навигация по ##-разделам + свёрнутые секции. */
+  function wrapAnswerSectionsHtml(html) {
+    if (!html || !/<h2\b/i.test(html)) return html;
+    const sections = parseAnswerSectionsFromHtml(html);
+    if (!sections?.length) return html;
+
+    const summaryRe = /^(сводка|summary)$/i;
+    let mainIdx = sections.findIndex((s) => summaryRe.test(s.title) && sectionNodesHaveContent(s.nodes));
+    if (mainIdx < 0) mainIdx = sections.findIndex((s) => sectionNodesHaveContent(s.nodes));
+    if (mainIdx < 0) return html;
+
+    const mainSection = sections[mainIdx];
+    const tmpMain = document.createElement("div");
+    mainSection.nodes.forEach((n) => tmpMain.appendChild(n.cloneNode(true)));
+    const summaryText = truncatePlainText(tmpMain.textContent || "");
 
     const out = document.createElement("div");
-    out.className = "chat-answer-sections";
+    out.className = "chat-answer-plain";
+
+    if (sections.length >= 2) {
+      const nav = document.createElement("nav");
+      nav.className = "chat-answer-sections-nav";
+      nav.setAttribute("role", "tablist");
+      nav.setAttribute("aria-label", tt("chat_answer_sections", "Разделы ответа"));
+      sections.forEach((sec, idx) => {
+        const pill = document.createElement("button");
+        pill.type = "button";
+        pill.className = `chat-answer-section-pill${idx === mainIdx ? " active" : ""}`;
+        pill.dataset.sectionIdx = String(idx);
+        pill.setAttribute("role", "tab");
+        pill.setAttribute("aria-selected", idx === mainIdx ? "true" : "false");
+        pill.textContent = sectionShortLabel(sec.title);
+        nav.appendChild(pill);
+      });
+      const collapseBtn = document.createElement("button");
+      collapseBtn.type = "button";
+      collapseBtn.className = "chat-answer-section-pill chat-answer-section-collapse";
+      collapseBtn.textContent = tt("chat_answer_collapse_all", "Свернуть");
+      collapseBtn.title = tt("chat_answer_collapse_all_hint", "Свернуть все разделы");
+      nav.appendChild(collapseBtn);
+      out.appendChild(nav);
+    }
+
+    const main = document.createElement("div");
+    main.className = "chat-answer-main";
+    const p = document.createElement("p");
+    p.textContent = summaryText;
+    main.appendChild(p);
+    out.appendChild(main);
+
+    const body = document.createElement("div");
+    body.className = "chat-answer-sections";
     sections.forEach((sec, idx) => {
-      const details = document.createElement("details");
-      details.className = "chat-answer-section";
-      if (idx === 0) details.open = true;
-      const summary = document.createElement("summary");
-      summary.className = "chat-answer-section-summary";
-      const titleSpan = document.createElement("span");
-      titleSpan.className = "chat-answer-section-title";
-      titleSpan.textContent = sec.title;
-      summary.appendChild(titleSpan);
-      const explainBtn = document.createElement("button");
-      explainBtn.type = "button";
-      explainBtn.className = "chat-section-explain";
-      explainBtn.textContent = "Пояснить";
-      explainBtn.dataset.msgId = msgId || "";
-      explainBtn.dataset.section = sec.title;
-      explainBtn.title = "Пояснить этот раздел";
-      summary.appendChild(explainBtn);
-      details.appendChild(summary);
-      const body = document.createElement("div");
-      body.className = "chat-answer-section-body";
-      sec.nodes.forEach((n) => body.appendChild(n.cloneNode(true)));
-      details.appendChild(body);
-      out.appendChild(details);
+      const det = document.createElement("details");
+      det.className = "chat-answer-section";
+      det.dataset.sectionIdx = String(idx);
+      det.open = true;
+      const sum = document.createElement("summary");
+      sum.className = "chat-answer-section-summary";
+      const title = document.createElement("span");
+      title.className = "chat-answer-section-title";
+      title.textContent = sec.title;
+      sum.appendChild(title);
+      det.appendChild(sum);
+      const secBody = document.createElement("div");
+      secBody.className = "chat-answer-section-body md-render-view";
+      sec.nodes.forEach((n) => secBody.appendChild(n.cloneNode(true)));
+      det.appendChild(secBody);
+      body.appendChild(det);
     });
+    out.appendChild(body);
     return out.innerHTML;
   }
 
-  function renderAgentAnswerHtml(text, msgId) {
+  function renderAgentAnswerHtml(text) {
     const clean = sanitizeAgentAnswerBody(text);
-    return wrapAnswerSectionsHtml(renderChatMarkdown(clean), msgId);
-  }
-
-  function bindAnswerSectionExplain(el) {
-    if (!el) return;
-    el.querySelectorAll(".chat-section-explain").forEach((btn) => {
-      if (btn.dataset.bound) return;
-      btn.dataset.bound = "1";
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const section = btn.dataset.section || "";
-        const msgId = btn.dataset.msgId || "";
-        const details = btn.closest("details.chat-answer-section");
-        if (details) details.open = true;
-        if (msgId && section) {
-          sendChatMessage({
-            explain: true,
-            targetAgentMsgId: msgId,
-            explainSection: section,
-          });
-        }
-      });
-    });
+    const html = wrapAnswerSectionsHtml(renderChatMarkdown(clean));
+    const enhance = window.MKG?.enhanceMarkdownTables || window.MKG?.enhanceComparisonTables;
+    return typeof enhance === "function" ? enhance(html) : html;
   }
 
   /** Убрать внутренние предупреждения и метки шагов из текста ответа (только синтез для пользователя). */
@@ -635,8 +898,28 @@
 
   function messagesFingerprint(items) {
     return (items || []).map((m) =>
-      `${m.id}:${m.created_at}:${(m.meta?.sources?.length || 0)}`,
+      `${m.id}:${m.created_at}:${m.msg_type}:${(m.body || "").length}:${(m.meta?.graph?.nodes?.length || 0)}:${m.meta?.speed_mode || ""}:${(m.meta?.trace?.length || 0)}:${m.meta?.mode || ""}`,
     ).join("|");
+  }
+
+  function persistActiveThreadId(threadId) {
+    try {
+      if (threadId) localStorage.setItem(CHAT_ACTIVE_THREAD_KEY, threadId);
+      else localStorage.removeItem(CHAT_ACTIVE_THREAD_KEY);
+    } catch { /* ignore */ }
+  }
+
+  function loadPersistedActiveThreadId() {
+    try {
+      return localStorage.getItem(CHAT_ACTIVE_THREAD_KEY) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function shouldOpenReasoningTrace(meta) {
+    const speed = meta?.speed_mode || meta?.mode;
+    return speed !== "fast" && speed !== "compare";
   }
 
   function downloadTextAsMd(filename, content) {
@@ -866,8 +1149,33 @@
     btn.disabled = !ok;
     btn.classList.toggle("disabled", !ok);
     btn.title = ok
-      ? "Пройти по графу заново"
-      : (graphReplayBusy ? "Обход графа…" : "Нет обхода для повтора");
+      ? tt("chat_graph_replay_ok", "Пройти по графу заново")
+      : (graphReplayBusy ? tt("chat_graph_replay_busy", "Обход графа…") : tt("chat_graph_replay_none", "Нет обхода для повтора"));
+    updateGraphStopButton();
+  }
+
+  function updateGraphStopButton() {
+    const btn = $("chatGraphStop");
+    if (!btn) return;
+    const active = graphReplayBusy || !!activeWalkCancel || window.MKGMiniGraph?.isWalkActive?.();
+    btn.disabled = !active;
+    btn.classList.toggle("hidden", !active);
+    btn.title = tt("chat_graph_stop", "Остановить обход графа");
+  }
+
+  function cancelActiveGraphWalk() {
+    if (activeWalkCancel) {
+      try { activeWalkCancel(); } catch { /* ignore */ }
+      activeWalkCancel = null;
+    }
+    window.MKGMiniGraph?.stopWalk?.();
+    updateGraphStopButton();
+  }
+
+  function stopGraphWalk() {
+    cancelActiveGraphWalk();
+    graphReplayBusy = false;
+    updateGraphReplayButton();
   }
 
   async function replayLastGraphWalk() {
@@ -875,10 +1183,7 @@
     graphReplayBusy = true;
     updateGraphReplayButton();
     try {
-      if (activeWalkCancel) {
-        activeWalkCancel();
-        activeWalkCancel = null;
-      }
+      cancelActiveGraphWalk();
       await replayAnswerWithWalk({ ...lastReplayableWalk, graphOnly: true });
     } catch (err) {
       console.warn("graph walk replay failed:", err);
@@ -965,7 +1270,9 @@
       badge.textContent = "";
       return;
     }
-    badge.textContent = rolePromptData.is_custom ? "· изменён" : "· по умолчанию";
+    badge.textContent = rolePromptData.is_custom
+      ? tt("role_prompt_custom", "· изменён")
+      : tt("role_prompt_default", "· по умолчанию");
   }
 
   async function loadRolePrompt(roleId) {
@@ -982,12 +1289,12 @@
 
   async function saveRolePrompt() {
     if (!currentUser?.role_id) {
-      showNotice("Сначала выберите роль", true);
+      showNotice(tt("role_prompt_select_role", "Сначала выберите роль"), true);
       return;
     }
     const text = ($("rolePromptText")?.value || "").trim();
     if (!text) {
-      showNotice("Промпт не может быть пустым", true);
+      showNotice(tt("role_prompt_empty", "Промпт не может быть пустым"), true);
       return;
     }
     const btn = $("rolePromptSave");
@@ -1001,13 +1308,13 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        showNotice(data.detail || "Не удалось сохранить промпт", true);
+        showNotice(data.detail || tt("role_prompt_save_failed", "Не удалось сохранить промпт"), true);
         return;
       }
       rolePromptData = data;
       updatePromptBadge();
       setRolePromptOpen(false);
-      showNotice("Промпт сохранён");
+      showNotice(tt("role_prompt_saved", "Промпт сохранён"));
       setTimeout(() => showNotice(""), 2000);
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = prev; }
@@ -1025,14 +1332,14 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        showNotice(data.detail || "Не удалось сбросить", true);
+        showNotice(data.detail || tt("role_prompt_reset_failed", "Не удалось сбросить"), true);
         return;
       }
       rolePromptData = data;
       if ($("rolePromptText")) $("rolePromptText").value = data.system_prompt || "";
       updatePromptBadge();
       setRolePromptOpen(false);
-      showNotice("Промпт по умолчанию");
+      showNotice(tt("role_prompt_reset_ok", "Промпт по умолчанию"));
       setTimeout(() => showNotice(""), 2000);
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = prev; }
@@ -1046,11 +1353,12 @@
     grid.innerHTML = roles.map((ro) => {
       const active = activeId === ro.id ? " active" : "";
       const icon = ro.icon || ROLE_ICONS[ro.id] || "•";
-      const tagline = ro.tagline || ro.description || "";
-      const diff = ro.differs_from ? ` title="${esc(ro.differs_from)}"` : "";
+      const disp = roleDisplay(ro);
+      const tagline = disp.tagline;
+      const diff = disp.differs ? ` title="${esc(disp.differs)}"` : "";
       return `<button type="button" class="role-card role-${esc(ro.id)}${active}" data-role="${esc(ro.id)}"${diff}>
         <span class="role-card-icon">${icon}</span>
-        <span class="role-card-name">${esc(ro.name_ru)}</span>
+        <span class="role-card-name">${esc(disp.name)}</span>
         <span class="role-card-desc">${esc(tagline)}</span>
       </button>`;
     }).join("");
@@ -1067,14 +1375,15 @@
     const roleId = currentUser?.role_id || selectedRoleId;
     if (!roleId || !header) return;
     const role = roleMeta(roleId);
+    const disp = roleDisplay(role);
     header.classList.remove("hidden");
     if (badge) {
       badge.className = `user-role-badge role-${esc(role.id)}`;
-      badge.textContent = `${role.icon || ROLE_ICONS[role.id] || ""} ${role.name_ru || role.id}`.trim();
+      badge.textContent = `${role.icon || ROLE_ICONS[role.id] || ""} ${disp.name || role.id}`.trim();
     }
     if (cap) {
-      cap.textContent = role.capability_ru || role.description || "";
-      cap.title = role.differs_from || "";
+      cap.textContent = disp.capability || "";
+      cap.title = disp.differs || "";
     }
   }
 
@@ -1108,6 +1417,8 @@
     if (chatHint) chatHint.style.display = showUpload ? "" : "none";
     if (chatAttach) chatAttach.disabled = !showUpload;
     syncDocsUploadFallback();
+    syncComposeSendButton();
+    if (typeof loadDataAccessSettings === "function") loadDataAccessSettings();
   }
 
   function syncDocsUploadFallback() {
@@ -1134,13 +1445,16 @@
   async function fetchRoles() {
     try {
       const r = await fetch(`${API}/roles`);
-      if (!r.ok) return;
-      const data = await r.json();
-      if (data.roles?.length) {
-        roles = data.roles;
+      if (!r.ok) {
         renderRoleCards();
+        return;
+      }
+      const data = await r.json();
+      if (Array.isArray(data.roles) && data.roles.length) {
+        roles = data.roles;
       }
     } catch { /* fallback ok */ }
+    renderRoleCards();
   }
 
   const TRACE_LABELS = {
@@ -1180,6 +1494,7 @@
     anomaly_graph_walker: "Neo4j walk",
     anomaly_qdrant_refine: "Qdrant",
     anomaly_mode_builder: "Объяснение",
+    direct_reply: "Прямой ответ",
     orchestrator_init: "Старт",
     orchestrator_plan: "План слоёв",
     orchestrator_router: "Маршрутизатор",
@@ -1238,11 +1553,16 @@
     { step: "llm_compose" },
   ];
 
+  const DIRECT_PIPELINE_STEPS = [
+    { step: "direct_reply", intent: "greeting", skipped_retrieval: true },
+    { step: "llm_compose", pipeline: "direct" },
+  ];
+
   const PIPELINE_SETUP_STEPS = new Set([
     "orchestrator_init", "orchestrator_plan", "agent_loop_start", "layer_loop_start",
     "chat_memory", "qdrant_l3", "qdrant_l4_cluster", "fast_retrieval",
     "graph_walk_step", "graph_traversal", "retrieval_search", "graph_context_loader",
-    "graph_keyword_fallback",
+    "graph_keyword_fallback", "direct_reply",
   ]);
 
   const PIPELINE_TAIL_STEPS = new Set([
@@ -1250,12 +1570,21 @@
   ]);
 
   function agentStepToLayer(step) {
-    const m = /^l([1-6])_agent$/.exec(String(step || ""));
+    const s = String(step || "");
+    if (/^anomaly_/.test(s)) return "L4";
+    const m = /^l([1-6])_agent$/.exec(s);
     return m ? `L${m[1]}` : null;
+  }
+
+  function agentStepDisplayLabel(step) {
+    const s = String(step || "");
+    if (/^anomaly_/.test(s)) return traceStepLabel(s);
+    return agentStepToLayer(s) || s;
   }
 
   function agentIdToLayer(agentId) {
     const step = String(agentId || "");
+    if (/^anomaly_/.test(step) || step === "anomaly_mode" || step === "anomaly_mode_builder") return "L4";
     if (/^l[1-6]_agent$/i.test(step)) return agentStepToLayer(step);
     const raw = step.replace(/_agent$/i, "").toUpperCase();
     return /^L[1-6]$/.test(raw) ? raw : null;
@@ -1272,6 +1601,44 @@
   }
 
   const PIPELINE_MAX_CHIPS_PER_ROUND = 12;
+  const pipelineExpandedRounds = new Set();
+  const pipelineRenderCache = new Map();
+  let pipelineScopeSeq = 0;
+
+  function nextPipelineScopeId(prefix = "pipe") {
+    pipelineScopeSeq += 1;
+    return `${prefix}-${pipelineScopeSeq}`;
+  }
+
+  function pipelineRoundKey(scopeId, round) {
+    return `${scopeId}:${round}`;
+  }
+
+  function isPipelineRoundExpanded(scopeId, round) {
+    return pipelineExpandedRounds.has(pipelineRoundKey(scopeId, round));
+  }
+
+  function togglePipelineRoundExpanded(scopeId, round) {
+    const key = pipelineRoundKey(scopeId, round);
+    if (pipelineExpandedRounds.has(key)) pipelineExpandedRounds.delete(key);
+    else pipelineExpandedRounds.add(key);
+  }
+
+  function registerPipelineRender(scopeId, model, { live = false, activeId = -1 } = {}) {
+    pipelineRenderCache.set(scopeId, { model, live, activeId });
+  }
+
+  function refreshPipelineScope(scopeId) {
+    const cached = pipelineRenderCache.get(scopeId);
+    if (!cached) return;
+    const el = document.querySelector(`.agent-pipeline[data-pipeline-id="${scopeId}"]`);
+    if (!el) return;
+    el.outerHTML = renderAgentPipeline(cached.model, {
+      live: cached.live,
+      activeId: cached.activeId,
+      scopeId,
+    });
+  }
 
   function pipelineBusChipKey(m, roundNum) {
     const fromLayer = pipelineBusEndpoint(m.from);
@@ -1292,7 +1659,9 @@
   }
 
   function pipelineAgentChipKey(item) {
-    const layer = item.layer || agentStepToLayer(item.step) || "";
+    const step = item.step || "";
+    if (/^anomaly_/.test(step)) return `anomaly:${step}:${item.round ?? 0}`;
+    const layer = item.layer || agentStepToLayer(step) || "";
     return `${item.round ?? 0}|${layer}|${item.skipped ? 1 : 0}`;
   }
 
@@ -1301,12 +1670,13 @@
     return { items: items.slice(0, max), overflow: items.length - max };
   }
 
-  function pipelineModelFingerprint(model, { live = false, activeId = -1 } = {}) {
+  function pipelineModelFingerprint(model, { live = false, activeId = -1, scopeId = "default" } = {}) {
     const parts = [`live:${live ? 1 : 0}`, `active:${activeId}`];
     model.setup.forEach((item) => parts.push(`s:${item.step}`));
     model.rounds.forEach((round) => {
       parts.push(`r:${round.round}`);
       if (round.overflow) parts.push(`ov:${round.overflow}`);
+      if (isPipelineRoundExpanded(scopeId, round.round)) parts.push(`exp:${round.round}`);
       round.items.forEach((item) => {
         if (item.kind === "agent") {
           parts.push(`a:${pipelineAgentChipKey(item)}`);
@@ -1350,6 +1720,7 @@
     let dialogLayerBatch = null;
     const seenBusKeys = new Map();
     const seenAgentKeys = new Set();
+    const seenRouterKeys = new Set();
 
     const flushDialogLayers = () => {
       if (!dialogLayerBatch?.length) return;
@@ -1434,6 +1805,9 @@
         if (pipelineKind === "fast" && (step === "chat_role" || step === "chat_memory")) {
           return;
         }
+        if (pipelineKind === "direct" && (step === "chat_role" || step === "chat_memory")) {
+          return;
+        }
         if (pipelineKind === "fast" && step === "graph_keyword_fallback" && t.skipped) {
           return;
         }
@@ -1443,7 +1817,7 @@
 
       if (step === "chat_role") {
         flushDialogLayers();
-        if (pipelineKind === "orchestrator") return;
+        if (pipelineKind === "orchestrator" || pipelineKind === "direct") return;
         setup.push({ kind: "setup", step, data: t, id: seq++ });
         return;
       }
@@ -1459,8 +1833,11 @@
       if (step === "orchestrator_router") {
         flushDialogLayers();
         currentRound = t.round ?? currentRound;
-        ensureRound(currentRound).items.push({ kind: "router", ...t, id: seq++ });
-        pushBusMessages(t.bus_preview, currentRound);
+        const routerKey = `${currentRound}|${t.next_agent || ""}`;
+        if (!seenRouterKeys.has(routerKey)) {
+          seenRouterKeys.add(routerKey);
+          ensureRound(currentRound).items.push({ kind: "router", ...t, id: seq++ });
+        }
         return;
       }
 
@@ -1486,6 +1863,22 @@
         return;
       }
 
+      if (/^anomaly_/.test(step)) {
+        flushDialogLayers();
+        const agentItem = {
+          kind: "agent",
+          step,
+          layer: t.layer || "L4",
+          agent_kind: "anomaly",
+          round: t.round ?? currentRound,
+          skipped: false,
+          id: seq++,
+          data: t,
+        };
+        pushAgentItem(agentItem);
+        return;
+      }
+
       if (step === "__bus__" || (t.bus_messages && !step)) {
         flushDialogLayers();
         pushBusMessages(t.bus_messages, currentRound);
@@ -1501,11 +1894,20 @@
 
     flushDialogLayers();
 
+    for (let r = 0; r < maxRounds; r += 1) {
+      ensureRound(r);
+    }
+
     const rounds = [...roundMap.values()]
       .sort((a, b) => a.round - b.round)
       .map((round) => {
         const capped = capPipelineRoundItems(round.items);
-        return { round: round.round, items: capped.items, overflow: capped.overflow };
+        return {
+          round: round.round,
+          items: capped.items,
+          allItems: round.items,
+          overflow: capped.overflow,
+        };
       });
     const flatItems = [
       ...setup.slice(0, 8),
@@ -1525,9 +1927,10 @@
   }
 
   function renderPipelineAgentChip(item, state) {
-    const layer = item.layer || agentStepToLayer(item.step) || "?";
+    const isAnomaly = item.agent_kind === "anomaly" || /^anomaly_/.test(item.step || "");
+    const layer = isAnomaly ? agentStepDisplayLabel(item.step) : (item.layer || agentStepToLayer(item.step) || "?");
     const skipped = item.skipped ? " skipped" : "";
-    const layerCls = /^L[1-6]$/.test(layer) ? ` layer-${layer}` : "";
+    const layerCls = isAnomaly ? " layer-L4 anomaly-agent" : (/^L[1-6]$/.test(item.layer || "") ? ` layer-${item.layer}` : "");
     const detail = item.data ? traceStepDetail(item.data) : "";
     const title = detail ? `${layer} · ${detail}` : layer;
     const roundTag = item.round != null ? `<span class="agent-pipeline-round-tag">R${item.round}</span>` : "";
@@ -1550,8 +1953,15 @@
     return `<span class="agent-pipeline-bus st-${state}" title="${esc(title)}"><span class="agent-pipeline-bus-icon" aria-hidden="true">⇄</span><span class="agent-pipeline-bus-label">Шина</span><span class="agent-pipeline-bus-route">${esc(fromLayer)}→${esc(toLayer)}</span>${item.count > 1 ? `<span class="agent-pipeline-bus-count">×${item.count}</span>` : ""}</span>`;
   }
 
-  function renderPipelineOverflowChip(count) {
-    return `<span class="agent-pipeline-overflow muted" title="Ещё ${count} шагов в этом раунде">+${count}</span>`;
+  function renderPipelineOverflowChip(count, scopeId, round) {
+    const expandLabel = tt("expand_stages", "Развернуть");
+    const title = tf("pipeline_overflow_title", { count }, `Ещё ${count} шагов · ${expandLabel}`);
+    return `<button type="button" class="agent-pipeline-overflow agent-pipeline-expand muted" data-pipeline-scope="${esc(scopeId)}" data-round="${round}" title="${esc(title)}" aria-label="${esc(expandLabel)}">+${count}</button>`;
+  }
+
+  function renderPipelineCollapseBtn(scopeId, round) {
+    const label = tt("collapse_stages", "Свернуть");
+    return `<button type="button" class="agent-pipeline-expand agent-pipeline-collapse muted" data-pipeline-scope="${esc(scopeId)}" data-round="${round}" title="${esc(label)}" aria-label="${esc(label)}">${esc(label)}</button>`;
   }
 
   function renderPipelineSetupChip(item, state) {
@@ -1591,10 +2001,12 @@
     return parts.join("");
   }
 
-  function renderAgentPipeline(traceOrModel, { live = false, activeId = -1 } = {}) {
+  function renderAgentPipeline(traceOrModel, { live = false, activeId = -1, scopeId = "default" } = {}) {
     const model = traceOrModel?.flatItems ? traceOrModel : buildPipelineModel(traceOrModel);
     const opts = { live, activeId };
     if (!model.setup.length && !model.rounds.length && !model.tail.length) return "";
+
+    registerPipelineRender(scopeId, model, { live, activeId });
 
     const setupHtml = model.setup.length
       ? `<div class="agent-pipeline-setup">${model.setup.map((item) => renderPipelineSetupChip(item, pipelineItemState(item, opts))).join('<span class="agent-pipeline-link" aria-hidden="true">→</span>')}</div>`
@@ -1603,11 +2015,19 @@
     const roundsHtml = model.rounds.length
       ? `<div class="agent-pipeline-rounds">${model.rounds.map((round) => {
         const maxR = model.maxRounds || "?";
-        const track = joinPipelineTrack(round.items, opts);
-        const overflow = round.overflow ? renderPipelineOverflowChip(round.overflow) : "";
-        return `<div class="agent-pipeline-round" data-round="${round.round}">
+        const expanded = isPipelineRoundExpanded(scopeId, round.round);
+        const displayItems = expanded && round.allItems ? round.allItems : round.items;
+        const track = joinPipelineTrack(displayItems, opts);
+        const overflow = !expanded && round.overflow
+          ? renderPipelineOverflowChip(round.overflow, scopeId, round.round)
+          : "";
+        const collapseBtn = expanded && round.overflow
+          ? renderPipelineCollapseBtn(scopeId, round.round)
+          : "";
+        const roundCls = expanded ? " agent-bus-expanded" : "";
+        return `<div class="agent-pipeline-round${roundCls}" data-round="${round.round}">
           <div class="agent-pipeline-round-head"><span class="agent-pipeline-round-id">R${round.round}</span><span class="agent-pipeline-round-cap muted">/${maxR}</span></div>
-          <div class="agent-pipeline-round-track">${track || '<span class="muted small">…</span>'}${overflow}</div>
+          <div class="agent-pipeline-round-track">${track || '<span class="muted small">…</span>'}${overflow}${collapseBtn}</div>
         </div>`;
       }).join("")}</div>`
       : "";
@@ -1616,7 +2036,7 @@
       ? `<div class="agent-pipeline-tail">${model.tail.map((item) => renderPipelineTailChip(item, pipelineItemState(item, opts))).join('<span class="agent-pipeline-link" aria-hidden="true">→</span>')}</div>`
       : "";
 
-    return `<div class="agent-pipeline${live ? " is-live" : ""}">${setupHtml}${roundsHtml}${tailHtml}</div>`;
+    return `<div class="agent-pipeline${live ? " is-live" : ""}" data-pipeline-id="${esc(scopeId)}">${setupHtml}${roundsHtml}${tailHtml}</div>`;
   }
 
   function inferAgentQuestion(ws) {
@@ -1671,20 +2091,22 @@
 
   function extractLayerAgentSteps(trace, layerResults) {
     const fromTrace = (trace || [])
-      .filter((t) => /^l[1-6]_agent$/.test(t.step || ""))
+      .filter((t) => /^l[1-6]_agent$/.test(t.step || "") || t.step === "anomaly_mode_builder")
       .map((t, i) => ({
-        layer: t.layer || String(t.step || "").replace("_agent", "").toUpperCase(),
+        step: t.step,
+        layer: /^anomaly_/.test(t.step || "") ? agentStepDisplayLabel(t.step) : (t.layer || String(t.step || "").replace("_agent", "").toUpperCase()),
         loop_index: t.loop_index ?? i + 1,
         loop_total: t.loop_total ?? 6,
         loop_phase: t.loop_phase || "",
         round: t.round ?? null,
         max_rounds: t.max_rounds ?? null,
-        node_count: t.node_count ?? 0,
+        node_count: t.node_count ?? t.anomaly_count ?? 0,
         rel_count: t.rel_count ?? 0,
         situation: t.situation_evaluation || t.reasoning || "",
         agent_question: t.agent_question || "",
         bus_messages: t.bus_messages || [],
         skipped: !!t.skipped,
+        agent_kind: /^anomaly_/.test(t.step || "") ? "anomaly" : "",
       }));
     if (fromTrace.length) return fromTrace;
     return (layerResults || []).map((lr, i) => ({
@@ -1712,12 +2134,16 @@
         || t.step === "layer_loop_start"
         || t.step === "orchestrator_router"
         || /^l[1-6]_agent$/.test(t.step || "")
+        || /^anomaly_/.test(t.step || "")
       ) {
         nums.add(Number(t.round));
       }
     });
-    if (!nums.size && loopMeta?.round_count) {
-      for (let i = 0; i < loopMeta.round_count; i += 1) nums.add(i);
+    const countFromMeta = loopMeta?.round_count ?? 0;
+    if (countFromMeta > 1) {
+      for (let i = 0; i < countFromMeta; i += 1) nums.add(i);
+    } else if (!nums.size && countFromMeta === 1) {
+      nums.add(0);
     }
     if (!nums.size) nums.add(0);
     return [...nums].sort((a, b) => a - b);
@@ -1782,7 +2208,8 @@
   }
 
   function handleLayerRoundNavClick(e) {
-    const btn = e.target.closest(".layer-round-prev, .layer-round-next");
+    const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+    const btn = target?.closest?.(".layer-round-prev, .layer-round-next");
     if (!btn || btn.disabled) return;
     e.preventDefault();
     e.stopPropagation();
@@ -1799,12 +2226,11 @@
     }
   }
 
-  function bindLayerRoundNavEvents(root) {
-    root?.querySelectorAll(".layer-round-prev, .layer-round-next").forEach((btn) => {
-      if (btn.dataset.roundBound) return;
-      btn.dataset.roundBound = "1";
-      btn.addEventListener("click", handleLayerRoundNavClick);
-    });
+  function ensureLayerRoundNavDelegation() {
+    const root = $("chatMessages");
+    if (!root || layerRoundNavDelegated) return;
+    layerRoundNavDelegated = true;
+    root.addEventListener("click", handleLayerRoundNavClick);
   }
 
   function captureLayerAgentsUiState(container) {
@@ -1812,9 +2238,11 @@
     container?.querySelectorAll(".chat-layer-agents[data-msg-id]").forEach((det) => {
       const nav = det.querySelector(".layer-round-nav");
       const roundRaw = nav?.dataset.round ?? det.dataset.selectedRound;
+      const round = roundRaw != null && roundRaw !== "" ? Number(roundRaw) : null;
+      if (round != null) layerAgentsRoundByMsg.set(det.dataset.msgId, round);
       state.set(det.dataset.msgId, {
         open: det.open,
-        round: roundRaw != null && roundRaw !== "" ? Number(roundRaw) : null,
+        round,
       });
     });
     return state;
@@ -1832,7 +2260,7 @@
     });
   }
 
-  function renderAgentBusHtml(trace, round = null) {
+  function renderAgentBusHtml(trace, round = null, { open = false } = {}) {
     let msgs = extractBusMessages(trace);
     if (round != null) msgs = msgs.filter((m) => m.round === round);
     if (!msgs.length) return "";
@@ -1845,7 +2273,8 @@
         ${preview}
       </li>`;
     }).join("");
-    return `<details class="chat-agent-bus">
+    const openAttr = open ? " open" : "";
+    return `<details class="chat-agent-bus"${openAttr}>
       <summary>Шина агентов · ${msgs.length} сообщ.</summary>
       <ul class="agent-bus-list">${rows}</ul>
     </details>`;
@@ -1872,8 +2301,11 @@
   function renderLayerAgentRow(s, i, activeRound) {
     const num = s.loop_index || i + 1;
     const round = s.round ?? 0;
-    const statusCls = s.skipped ? "layer-agent-skipped" : "layer-agent-active";
-    const status = s.skipped ? "нет данных" : `${s.node_count} узл · ${s.rel_count} св`;
+    const isAnomaly = s.agent_kind === "anomaly" || /^anomaly_/.test(s.step || "");
+    const statusCls = s.skipped ? "layer-agent-skipped" : (isAnomaly ? "layer-agent-anomaly" : "layer-agent-active");
+    const status = s.skipped
+      ? (isAnomaly ? "нет аномалий" : "нет данных")
+      : (isAnomaly ? `${s.node_count} аном.` : `${s.node_count} узл · ${s.rel_count} св`);
     const situation = s.situation
       ? `<span class="layer-agent-situation">${esc(s.situation)}</span>`
       : "";
@@ -1899,7 +2331,7 @@
     </li>`;
   }
 
-  function renderLayerAgentsHtml(trace, layerResults, selectedRound = null, msgId = null) {
+  function renderLayerAgentsHtml(trace, layerResults, selectedRound = null, msgId = null, { open = false } = {}) {
     const steps = extractLayerAgentSteps(trace, layerResults);
     if (!steps.length) return "";
     const loopMeta = extractLoopMeta(trace);
@@ -1914,7 +2346,7 @@
       return `<div class="layer-loop-flow-panel${roundPanelCls(r, defaultRound)}" data-round="${r}">${renderLayerLoopFlowHtml(roundSteps, flowMeta)}</div>`;
     }).join("");
     const busPanels = roundNums.map((r) => {
-      const bus = renderAgentBusHtml(trace, r);
+      const bus = renderAgentBusHtml(trace, r, { open });
       if (!bus) return "";
       return `<div class="layer-round-bus-panel${roundPanelCls(r, defaultRound)}" data-round="${r}">${bus}</div>`;
     }).join("");
@@ -1923,7 +2355,8 @@
     const navModel = { ...roundModel, defaultRound };
     const nav = renderRoundNav(navModel);
     const msgAttr = msgId ? ` data-msg-id="${esc(msgId)}"` : "";
-    return `<details class="chat-layer-agents" data-selected-round="${defaultRound}"${msgAttr}>
+    const openAttr = open ? " open" : "";
+    return `<details class="chat-layer-agents" data-selected-round="${defaultRound}"${msgAttr}${openAttr}>
       <summary>Агенты · гибкий цикл (до ${maxLabel} раундов)</summary>
       ${nav}
       ${flows}
@@ -1950,23 +2383,45 @@
     if (el) el.innerHTML = "";
   }
 
-  function resetThreadViewState() {
-    if (activeWalkCancel) {
-      activeWalkCancel();
-      activeWalkCancel = null;
-    }
+  function resetThreadViewState({ clearGraph = true } = {}) {
+    cancelActiveGraphWalk();
+    stopAnswerSectionWalk();
     removeStreamPreview();
     clearAgentQuestions();
     hideTraceLive();
     showTyping(false);
     setChatGraphBuilding(false);
-    lastFullscreenGraph = null;
-    lastFullscreenTrace = null;
-    liveAccumulatedGraph = null;
     stopGraphPoll();
-    setLastReplayableWalk(null);
-    updateChatGraphStats(null);
-    window.MKGMiniGraph?.destroy($("chatGraphCanvas"));
+    syncComposeSendButton();
+    if (clearGraph) {
+      lastFullscreenGraph = null;
+      lastFullscreenTrace = null;
+      liveAccumulatedGraph = null;
+      setLastReplayableWalk(null);
+      updateChatGraphStats(null);
+      window.MKGMiniGraph?.destroy($("chatGraphCanvas"));
+    }
+  }
+
+  function findLastAgentMessage(items) {
+    const list = items || [];
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i].msg_type === "agent") return list[i];
+    }
+    return null;
+  }
+
+  function restoreThreadUiFromMessages(items) {
+    const lastAgent = findLastAgentMessage(items);
+    if (lastAgent?.meta?.speed_mode) {
+      setChatSpeedMode(lastAgent.meta.speed_mode, { persistGlobal: false });
+    }
+    if (chatBusy) return;
+    if (lastAgent?.meta?.trace?.length) {
+      showTraceComplete(lastAgent.meta.trace);
+    } else {
+      hideTraceLive();
+    }
   }
 
   function removeStreamPreview() {
@@ -1981,6 +2436,7 @@
     const box = $("chatMessages");
     if (!box) return null;
     const role = roleMeta(currentUser?.role_id);
+    const disp = roleDisplay(role);
     const article = document.createElement("article");
     article.className = "chat-msg msg-agent chat-stream-preview";
     article.innerHTML = `
@@ -1988,9 +2444,10 @@
       <div class="chat-msg-content">
         <header>
           <strong>MKG AI</strong>
-          <span class="user-role-badge role-${esc(role.id)}">${esc(role.name_ru || role.id)}</span>
+          <span class="user-role-badge role-${esc(role.id)}">${esc(disp.name || role.id)}</span>
           <span class="chat-mode-badge">Формирование ответа…</span>
         </header>
+        <div class="chat-stream-trace" id="chatStreamTrace"></div>
         <div class="chat-msg-body md-render-view"></div>
       </div>`;
     box.appendChild(article);
@@ -1999,10 +2456,24 @@
     return article;
   }
 
+  function mountCompletedTraceInPreview(trace) {
+    if (!trace?.length) return;
+    const preview = ensureStreamPreview();
+    const slot = preview?.querySelector(".chat-stream-trace");
+    if (!slot) return;
+    const scopeId = nextPipelineScopeId("preview");
+    const model = buildPipelineModel(trace);
+    const pipeline = renderAgentPipeline(model, { live: false, activeId: -1, scopeId });
+    slot.innerHTML = pipeline
+      ? `<details class="chat-agent-pipeline-trace"><summary>${esc(tt("chat_pipeline", "Пайплайн"))}</summary>${pipeline}</details>`
+      : "";
+    scrollChatToBottom(false);
+  }
+
   function updateStreamPreviewBody(text) {
     const preview = ensureStreamPreview();
     const body = preview?.querySelector(".chat-msg-body");
-    if (body) body.innerHTML = renderAgentAnswerHtml(text, "");
+    if (body) body.innerHTML = renderAgentAnswerHtml(text);
     scrollChatToBottom(false);
   }
 
@@ -2053,7 +2524,9 @@
     }
 
     if (walkPath.length && canvas) {
-      if (activeWalkCancel) activeWalkCancel();
+      cancelActiveGraphWalk();
+      graphReplayBusy = true;
+      updateGraphReplayButton();
       const walkPromise = window.MKGMiniGraph?.highlightWalkPath(canvas, walkPath, {
         intervalMs: GRAPH_WALK_UI_STEP_MS,
         onStep: (step, idx) => {
@@ -2067,8 +2540,11 @@
         },
       });
       activeWalkCancel = walkPromise?.cancel || null;
+      updateGraphStopButton();
       await walkPromise;
       activeWalkCancel = null;
+      graphReplayBusy = false;
+      updateGraphReplayButton();
     } else if (fullText && !graphOnly) {
       await typewriterReveal(fullText, { totalMs: totalWalkMs });
       return;
@@ -2146,8 +2622,9 @@
   function renderAgentMessageTrace(m, layerUiState = null) {
     const trace = m.meta?.trace;
     if (!trace?.length) return "";
-    const selectedRound = layerUiState?.round ?? null;
     const msgId = m.id || null;
+    const selectedRound = layerUiState?.round ?? (msgId ? layerAgentsRoundByMsg.get(msgId) : null) ?? null;
+    const openTrace = shouldOpenReasoningTrace(m.meta);
     if (m.meta?.speed_mode === "fast" || m.meta?.mode === "fast") {
       return renderFastTraceHtml(trace, m.meta?.timing_ms);
     }
@@ -2155,9 +2632,9 @@
     const layerResults = graphMeta?.layer_results || m.meta?.layer_results;
     const isOrchestrator = m.meta?.mode === "orchestrator_mode";
     const isDialog = !m.meta?.mode || m.meta.mode === "dialog";
-    if (isOrchestrator) return renderOrchestratorTraceHtml(trace, layerResults, selectedRound, msgId);
-    if (isDialog) return renderDialogTraceHtml(trace, graphMeta, layerResults, selectedRound, msgId);
-    return `${renderLayerAgentsHtml(trace, layerResults, selectedRound, msgId)}${renderGraphWalkTimelineHtml(trace, graphMeta)}${renderReasoningChainHtml(trace)}`;
+    if (isOrchestrator) return renderOrchestratorTraceHtml(trace, layerResults, selectedRound, msgId, { open: openTrace });
+    if (isDialog) return renderDialogTraceHtml(trace, graphMeta, layerResults, selectedRound, msgId, { open: openTrace });
+    return `${renderLayerAgentsHtml(trace, layerResults, selectedRound, msgId, { open: openTrace })}${renderGraphWalkTimelineHtml(trace, graphMeta)}${renderReasoningChainHtml(trace, { open: openTrace })}`;
   }
 
   function renderFastTraceHtml(trace, timingMs) {
@@ -2176,12 +2653,32 @@
     </details>`;
   }
 
-  function renderOrchestratorTraceHtml(trace, layerResults, selectedRound = null, msgId = null) {
-    return `${renderLayerAgentsHtml(trace, layerResults, selectedRound, msgId)}${renderGraphWalkTimelineHtml(trace, null)}${renderReasoningChainHtml(trace)}`;
+  function renderOrchestratorTraceHtml(trace, layerResults, selectedRound = null, msgId = null, { open = false } = {}) {
+    const scopeId = msgId ? `msg-${msgId}` : nextPipelineScopeId("msg");
+    const model = trace?.flatItems ? trace : buildPipelineModel(trace);
+    const pipeline = renderAgentPipeline(model, { live: false, activeId: -1, scopeId });
+    const openAttr = open ? " open" : "";
+    const pipelineHtml = pipeline
+      ? `<details class="chat-agent-pipeline-trace"${openAttr}>
+          <summary>${esc(tt("chat_pipeline", "Пайплайн агентов"))}</summary>
+          ${pipeline}
+        </details>`
+      : "";
+    return `${pipelineHtml}${renderLayerAgentsHtml(trace, layerResults, selectedRound, msgId, { open })}${renderGraphWalkTimelineHtml(trace, null)}${renderReasoningChainHtml(trace, { open })}`;
   }
 
-  function renderDialogTraceHtml(trace, graph, layerResults, selectedRound = null, msgId = null) {
-    return `${renderLayerAgentsHtml(trace, layerResults, selectedRound, msgId)}${renderGraphWalkTimelineHtml(trace, graph)}${renderReasoningChainHtml(trace)}`;
+  function renderDialogTraceHtml(trace, graph, layerResults, selectedRound = null, msgId = null, { open = false } = {}) {
+    const hasAnomaly = (trace || []).some((t) => /^anomaly_/.test(t.step || ""));
+    const scopeId = msgId ? `msg-${msgId}` : nextPipelineScopeId("dlg");
+    const pipelineModel = hasAnomaly ? buildPipelineModel(trace) : null;
+    const openAttr = open ? " open" : "";
+    const pipelineHtml = pipelineModel?.flatItems?.length
+      ? `<details class="chat-agent-pipeline-trace"${openAttr}>
+          <summary>${esc(tt("chat_pipeline", "Пайплайн агентов"))}</summary>
+          ${renderAgentPipeline(pipelineModel, { live: false, activeId: -1, scopeId })}
+        </details>`
+      : "";
+    return `${pipelineHtml}${renderLayerAgentsHtml(trace, layerResults, selectedRound, msgId, { open })}${renderGraphWalkTimelineHtml(trace, graph)}${renderReasoningChainHtml(trace, { open })}`;
   }
 
   const AGENT_TRACE_PREVIEW = [
@@ -2198,7 +2695,7 @@
   ];
 
   function traceStepLabel(step) {
-    return TRACE_LABELS[step] || step.replace(/_/g, " ");
+    return tt(`trace_${step}`, TRACE_LABELS[step] || step.replace(/_/g, " "));
   }
 
   function traceStepDetail(item) {
@@ -2271,7 +2768,10 @@
       const rel = item.rel_type ? ` · ${item.rel_type}` : "";
       return `${item.label || item.node_id || ""}${rel}`.trim();
     }
-    if (item.doc_count != null) return `${item.doc_count} док.`;
+    if (item.step === "anomaly_mode_builder" || item.step === "anomaly_seed_loader") {
+      if (item.anomaly_count != null) return `${item.anomaly_count} аном.`;
+      if (item.hit_count != null) return `${item.hit_count} хитов`;
+    }
     if (item.evidence_count != null) return `${item.evidence_count} ev.`;
     if (item.elapsed_ms != null && item.elapsed_ms > 0) return `${item.elapsed_ms} ms`;
     return "";
@@ -2294,6 +2794,12 @@
     if (/^l[1-6]_agent$/.test(step || "") && item.situation_evaluation) {
       parts.push(String(item.situation_evaluation));
     }
+    if (/^anomaly_/.test(step || "") && item.situation_evaluation) {
+      parts.push(String(item.situation_evaluation));
+    }
+    if (/^anomaly_/.test(step || "") && item.skipped) {
+      parts.push("аномалий не обнаружено");
+    }
     if (/^l[1-6]_agent$/.test(step || "") && item.agent_question) {
       parts.push(String(item.agent_question));
     }
@@ -2312,7 +2818,7 @@
     return parts.length ? parts.join(" · ") : traceStepLabel(step);
   }
 
-  function renderReasoningChainHtml(trace) {
+  function renderReasoningChainHtml(trace, { open = false } = {}) {
     if (!trace?.length) return "";
     const rows = trace.map((item) => {
       const step = typeof item === "string" ? item : item.step;
@@ -2320,7 +2826,8 @@
       const detail = traceStepReasoningDetail(item);
       return `<li><strong>${esc(label)}</strong><span class="chat-reasoning-detail">${esc(detail)}</span></li>`;
     }).join("");
-    return `<details class="chat-reasoning-chain">
+    const openAttr = open ? " open" : "";
+    return `<details class="chat-reasoning-chain"${openAttr}>
       <summary>Цепочка рассуждений · ${trace.length} шагов</summary>
       <ol class="chat-reasoning-steps">${rows}</ol>
     </details>`;
@@ -2341,10 +2848,24 @@
   function paintTraceLive(model, { live = false, activeId = -1 } = {}) {
     const el = $("chatTraceLive");
     if (!el) return;
-    const fp = pipelineModelFingerprint(model, { live, activeId });
+    const scopeId = "chatTraceLive";
+    const fp = pipelineModelFingerprint(model, { live, activeId, scopeId });
     if (fp === traceLiveFingerprint) return;
     traceLiveFingerprint = fp;
-    el.innerHTML = renderAgentPipeline(model, { live, activeId });
+    el.innerHTML = renderAgentPipeline(model, { live, activeId, scopeId });
+  }
+
+  function handlePipelineExpandClick(e) {
+    const btn = e.target.closest(".agent-pipeline-expand");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const scopeId = btn.dataset.pipelineScope;
+    const round = parseInt(btn.dataset.round, 10);
+    if (!scopeId || !Number.isFinite(round)) return;
+    togglePipelineRoundExpanded(scopeId, round);
+    if (scopeId === "chatTraceLive") traceLiveFingerprint = "";
+    refreshPipelineScope(scopeId);
   }
 
   function showTraceLive(previewSteps) {
@@ -2522,11 +3043,27 @@
   }
 
   function findLastGraphMessage(items) {
-    const agents = (items || []).filter((m) => m.msg_type === "agent");
-    for (let i = agents.length - 1; i >= 0; i -= 1) {
-      if (hasContextGraph(agents[i].meta)) return agents[i];
+    const list = items || [];
+    if (!list.length) return null;
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i].msg_type === "agent" && hasContextGraph(list[i].meta)) return list[i];
     }
     return null;
+  }
+
+  function resetChatGraphForNewQuestion() {
+    cancelActiveGraphWalk();
+    removeStreamPreview();
+    lastFullscreenGraph = null;
+    lastFullscreenTrace = null;
+    liveAccumulatedGraph = null;
+    graphReplayBusy = false;
+    stopGraphPoll();
+    setLastReplayableWalk(null);
+    window.MKGMiniGraph?.destroy($("chatGraphCanvas"));
+    updateChatGraphStats(null);
+    toggleChatGraphPanel(true);
+    updateGraphReplayButton();
   }
 
   function isGraphPanelEmpty() {
@@ -2541,7 +3078,7 @@
     if (chatBusy && !force) return;
     const msg = findLastGraphMessage(items);
     if (!msg) {
-      if (!chatBusy) {
+      if (!chatBusy || force) {
         updateChatGraphStats(null);
         window.MKGMiniGraph?.destroy($("chatGraphCanvas"));
         setLastReplayableWalk(null);
@@ -2549,15 +3086,22 @@
       return;
     }
     const payload = replayPayloadFromMessage(msg);
-    if (!payload?.graph?.nodes?.length) return;
-    lastFullscreenGraph = payload.graph;
+    const graph = payload?.graph;
+    const hasGraph = graph?.nodes?.length || graph?.relationships?.length || graph?.graph_walk_steps?.length;
+    if (!hasGraph) return;
+    lastFullscreenGraph = graph;
     lastFullscreenTrace = payload.trace || [];
     setLastReplayableWalk(payload);
-    renderChatContextGraph(payload.graph, {
-      animate: false,
-      walkPath: payload.graph.walk_path || [],
-      skipHighlight: false,
-    });
+    toggleChatGraphPanel(true);
+    if (graph.nodes?.length) {
+      renderChatContextGraph(graph, {
+        animate: false,
+        walkPath: graph.walk_path || [],
+        skipHighlight: false,
+      });
+    } else {
+      updateChatGraphStats(normalizeChatGraph(graph), { building: false });
+    }
   }
 
   function restoreGraphPanelIfNeeded(items) {
@@ -2566,12 +3110,16 @@
   }
 
   function applyLiveGraphUpdate(graph, trace, layerResults) {
-    const merged = extractGraphFromTrace(trace, graph, layerResults);
-    if (!merged?.nodes?.length) return;
-    liveAccumulatedGraph = window.MKGMiniGraph?.normalizeGraph?.(
-      window.MKGMiniGraph?.mergeGraphs?.(liveAccumulatedGraph, merged) || merged
-    ) || merged;
-    mergeChatContextGraph(liveAccumulatedGraph, { building: true });
+    const current = (graph?.nodes?.length
+      ? normalizeChatGraph(graph)
+      : extractGraphFromTrace([], graph, layerResults));
+    if (!current?.nodes?.length) return;
+    liveAccumulatedGraph = current;
+    renderChatContextGraph(liveAccumulatedGraph, {
+      animate: false,
+      skipHighlight: true,
+      building: true,
+    });
   }
 
   function stopGraphPoll() {
@@ -2588,13 +3136,15 @@
       msg?.meta?.layer_results,
     ) || msg?.meta?.graph;
     if (!graph) return;
-    lastFullscreenGraph = graph;
+    cancelActiveGraphWalk();
+    liveAccumulatedGraph = normalizeChatGraph(graph);
+    lastFullscreenGraph = liveAccumulatedGraph;
     lastFullscreenTrace = msg.meta?.trace || [];
     setLastReplayableWalk(replayPayloadFromMessage(msg));
     toggleChatGraphPanel(true);
-    renderChatContextGraph(graph, {
+    renderChatContextGraph(liveAccumulatedGraph, {
       animate: true,
-      walkPath: graph.walk_path || [],
+      walkPath: liveAccumulatedGraph.walk_path || [],
     });
   }
 
@@ -2614,13 +3164,15 @@
     const traverseCount = walkSteps.filter((s) => s.action === "traverse").length;
     if (stats) {
       stats.textContent = nodes
-        ? `${nodes} узл · ${rels} св${traverseCount ? ` · ${traverseCount} шаг.` : ""}`
-        : (building ? "…" : "0 узлов");
+        ? (traverseCount
+          ? tf("chat_graph_stats_walk", { nodes, rels, steps: traverseCount })
+          : tf("chat_graph_stats", { nodes, rels }))
+        : (building ? "…" : tt("chat_graph_stats_zero", "0 узлов"));
     }
     const showEmpty = !building && nodes === 0;
     if (empty) empty.classList.toggle("hidden", !showEmpty);
     if (emptyMsg && showEmpty) {
-      emptyMsg.textContent = "Нет данных MKG для этого запроса.";
+      emptyMsg.textContent = tt("chat_graph_empty", "Нет данных MKG для этого запроса.");
     }
     if (canvas) canvas.classList.toggle("hidden", showEmpty);
   }
@@ -2789,7 +3341,9 @@
   }
 
   function toggleChatGraphMaximized(force) {
-    if (lastFullscreenGraph?.nodes?.length) {
+    const nextMaximized = force !== undefined ? force : !chatGraphMaximized;
+    // Fullscreen modal only when expanding inline panel — never when collapsing/un-maximizing.
+    if (nextMaximized && lastFullscreenGraph?.nodes?.length) {
       openGraphFullscreenModal(lastFullscreenGraph, lastFullscreenTrace);
       return;
     }
@@ -2798,9 +3352,9 @@
     const handle = $("chatGraphResizeHandle");
     if (!layout) return;
 
-    if (chatGraphCollapsed && force !== false) toggleChatGraphPanel(true);
+    if (chatGraphCollapsed && nextMaximized) toggleChatGraphPanel(true);
 
-    chatGraphMaximized = force !== undefined ? force : !chatGraphMaximized;
+    chatGraphMaximized = nextMaximized;
     layout.classList.toggle("chat-graph-maximized", chatGraphMaximized);
 
     if (btn) {
@@ -2831,6 +3385,7 @@
     if (btn) {
       btn.textContent = chatGraphCollapsed ? "‹" : "›";
       btn.title = chatGraphCollapsed ? "Развернуть панель" : "Свернуть панель";
+      btn.setAttribute("aria-label", chatGraphCollapsed ? "Развернуть панель" : "Свернуть панель");
     }
     if (persist) localStorage.setItem(CHAT_GRAPH_OPEN_KEY, open ? "true" : "false");
     requestAnimationFrame(() => refreshChatGraphViewport());
@@ -2841,7 +3396,8 @@
   }
 
   function toggleChatGraphPanel(force) {
-    const open = force !== undefined ? force : !chatGraphCollapsed;
+    // Toggle: open panel → collapse (open=false); collapsed strip → expand (open=true).
+    const open = force !== undefined ? force : chatGraphCollapsed;
     setChatGraphPanelOpen(open, force === undefined);
   }
 
@@ -2941,8 +3497,6 @@
     if (on) {
       showTraceLive(previewSteps);
       if (!userScrolledUp) scrollChatToBottom(false);
-    } else {
-      hideTraceLive();
     }
   }
 
@@ -3006,8 +3560,11 @@
       threads = data.items || [];
       renderThreadList();
       if (!activeThreadId && threads.length) {
-        activeThreadId = threads[0].id;
-        await loadMessages(activeThreadId, { scroll: "force" });
+        const savedId = loadPersistedActiveThreadId();
+        const pick = savedId && threads.some((t) => t.id === savedId) ? savedId : threads[0].id;
+        activeThreadId = pick;
+        persistActiveThreadId(activeThreadId);
+        await loadMessages(activeThreadId, { scroll: "force", forceRender: true });
       }
     } catch { /* ignore */ }
   }
@@ -3016,28 +3573,21 @@
     const el = $("chatThreadList");
     if (!el) return;
     if (!threads.length) {
-      el.innerHTML = '<p class="muted small">Нет чатов</p>';
+      el.innerHTML = `<p class="muted small">${esc(tt("chat_no_threads", "Нет чатов"))}</p>`;
       return;
     }
+    const delTitle = tt("chat_delete_thread", "Удалить чат");
     el.innerHTML = threads.map((t) => `
-      <div class="chats-thread-row">
-        <button type="button" class="chats-thread-item ${t.id === activeThreadId ? "active" : ""}" data-id="${esc(t.id)}">
+      <div class="chats-thread-row${t.id === activeThreadId ? " active" : ""}" data-id="${esc(t.id)}">
+        <button type="button" class="chats-thread-select" data-id="${esc(t.id)}">
           <span class="chats-thread-title">${esc(t.title)}</span>
           <span class="muted chats-thread-meta">${t.message_count || 0}</span>
         </button>
-        <button type="button" class="chats-thread-delete" data-id="${esc(t.id)}" title="Удалить чат" aria-label="Удалить чат">×</button>
+        <button type="button" class="chats-thread-delete" data-id="${esc(t.id)}" title="${esc(delTitle)}" aria-label="${esc(delTitle)}"><span aria-hidden="true">×</span></button>
       </div>`).join("");
-    el.querySelectorAll(".chats-thread-item").forEach((btn) => {
+    el.querySelectorAll(".chats-thread-select").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const nextId = btn.dataset.id;
-        if (nextId === activeThreadId) return;
-        activeThreadId = nextId;
-        lastMessagesFingerprint = "";
-        lastLoadedThreadId = null;
-        userScrolledUp = false;
-        resetThreadViewState();
-        renderThreadList();
-        loadMessages(activeThreadId, { scroll: "force", forceRender: true });
+        switchThread(btn.dataset.id);
       });
     });
     el.querySelectorAll(".chats-thread-delete").forEach((btn) => {
@@ -3048,9 +3598,25 @@
     });
   }
 
+  async function switchThread(nextId) {
+    if (!nextId || nextId === activeThreadId) return;
+    if (chatBusy) releaseChatComposeLock();
+    else healOrphanChatBusyUi();
+    activeThreadId = nextId;
+    persistActiveThreadId(activeThreadId);
+    lastMessagesFingerprint = "";
+    lastLoadedThreadId = null;
+    userScrolledUp = false;
+    resetThreadViewState({ clearGraph: true });
+    renderThreadList();
+    const t = threads.find((x) => x.id === nextId);
+    if ($("chatActiveTitle") && t) $("chatActiveTitle").textContent = t.title;
+    await loadMessages(nextId, { scroll: "force", forceRender: true, threadSwitch: true });
+  }
+
   async function deleteThread(threadId) {
     if (!threadId) return;
-    if (!confirm("Удалить этот чат? Сообщения будут удалены безвозвратно.")) return;
+    if (!confirm(tt("chat_delete_confirm", "Удалить этот чат? Сообщения будут удалены безвозвратно."))) return;
     try {
       const r = await fetch(`${API}/chat/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
       if (!r.ok) {
@@ -3060,14 +3626,15 @@
       }
       if (activeThreadId === threadId) {
         activeThreadId = null;
+        persistActiveThreadId(null);
         lastMessagesFingerprint = "";
         lastLoadedThreadId = null;
         userScrolledUp = false;
         threadDocIds.delete(threadId);
         resetThreadViewState();
-        if ($("chatActiveTitle")) $("chatActiveTitle").textContent = "Диалог";
+        if ($("chatActiveTitle")) $("chatActiveTitle").textContent = tt("chat_dialog", "Диалог");
         const msgEl = $("chatMessages");
-        if (msgEl) msgEl.innerHTML = '<p class="chat-empty-hint">Напишите первое сообщение…</p>';
+        if (msgEl) msgEl.innerHTML = `<p class="chat-empty-hint">${esc(tt("chat_empty_new", "Напишите первое сообщение…"))}</p>`;
       }
       await loadThreads();
       if (!activeThreadId && threads.length) {
@@ -3086,17 +3653,19 @@
       if (!r.ok) return;
       const data = await r.json();
       const items = data.items || [];
+      if (threadId !== activeThreadId) return;
       syncThreadDocsFromMessages(items);
       const fp = messagesFingerprint(items);
       const threadChanged = threadId !== lastLoadedThreadId;
       const fingerprintChanged = fp !== lastMessagesFingerprint;
-      if (!threadChanged && !fingerprintChanged && !options.forceRender) {
+      const forceRender = !!options.forceRender || !!options.threadSwitch;
+      if (!threadChanged && !fingerprintChanged && !forceRender) {
         const t = threads.find((x) => x.id === threadId);
         if ($("chatActiveTitle") && t) $("chatActiveTitle").textContent = t.title;
         restoreGraphPanelIfNeeded(items);
         return;
       }
-      if (chatBusy && !options.forceRender) {
+      if (chatBusy && !forceRender) {
         const t = threads.find((x) => x.id === threadId);
         if ($("chatActiveTitle") && t) $("chatActiveTitle").textContent = t.title;
         return;
@@ -3106,7 +3675,8 @@
       currentThreadMessages = items;
       renderMessages(items, options);
       syncLastReplayableFromMessages(items);
-      restoreGraphPanelFromMessages(items);
+      restoreThreadUiFromMessages(items);
+      restoreGraphPanelFromMessages(items, { force: forceRender });
       items.forEach((m) => {
         if (m.meta?.kind === "upload" && m.meta?.document_id) {
           const st = uploadPreviewCache.get(m.meta.document_id)?.status;
@@ -3182,83 +3752,42 @@
     return true;
   }
 
-  async function apiPatchMessage(msgId, body) {
-    if (!activeThreadId || !msgId) return null;
-    const r = await fetch(
-      `${API}/chat/threads/${encodeURIComponent(activeThreadId)}/messages/${encodeURIComponent(msgId)}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body }),
-      },
-    );
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      showNotice(parseApiError(data, "Не удалось изменить сообщение"), true);
-      return null;
-    }
-    lastMessagesFingerprint = "";
-    return data;
-  }
-
-  function beginEditUserMessage(msgId, items) {
-    const msg = (items || currentThreadMessages).find((m) => m.id === msgId);
-    const article = document.querySelector(`.chat-msg[data-msg-id="${CSS.escape(msgId)}"]`);
-    if (!msg || !article || article.dataset.editing === "1") return;
-    article.dataset.editing = "1";
-    const content = article.querySelector(".chat-msg-content");
-    const actions = content?.querySelector(".chat-msg-actions");
-    if (actions) actions.classList.add("hidden");
-    const bodyEl = content?.querySelector(".chat-msg-body");
-    if (!bodyEl) return;
-    const prevHtml = bodyEl.innerHTML;
-    bodyEl.innerHTML = `
-      <textarea class="chat-msg-edit-input" rows="3">${esc(msg.body)}</textarea>
-      <div class="chat-msg-edit-actions">
-        <button type="button" class="chat-msg-action chat-msg-edit-save">Сохранить</button>
-        <button type="button" class="chat-msg-action chat-msg-edit-cancel">Отмена</button>
-      </div>`;
-    const input = bodyEl.querySelector(".chat-msg-edit-input");
-    const cancel = () => {
-      delete article.dataset.editing;
-      bodyEl.innerHTML = prevHtml;
-      if (actions) actions.classList.remove("hidden");
-    };
-    bodyEl.querySelector(".chat-msg-edit-cancel")?.addEventListener("click", cancel);
-    bodyEl.querySelector(".chat-msg-edit-save")?.addEventListener("click", async () => {
-      const nextText = (input?.value || "").trim();
-      if (!nextText) {
-        showNotice("Текст сообщения не может быть пустым", true);
-        return;
-      }
-      delete article.dataset.editing;
-      if (nextText === msg.body && !findFollowingMessages(currentThreadMessages, msgId).length) {
-        bodyEl.textContent = msg.body;
-        if (actions) actions.classList.remove("hidden");
-        return;
-      }
-      const patched = await apiPatchMessage(msgId, nextText);
-      if (!patched) return;
-      await apiDeleteMessage(msgId, { after: true });
-      await loadMessages(activeThreadId, { scroll: "force", forceRender: true });
-      await sendChatMessage({
-        text: nextText,
-        skipUserPost: true,
-        editResend: true,
-        targetUserMsgId: msgId,
-      });
-    });
-    input?.focus();
-    if (input) {
-      input.selectionStart = input.value.length;
-      input.selectionEnd = input.value.length;
-    }
-  }
-
   function isChatBusy() {
-    return chatBusy
-      || !!activeStreamPreview?.isConnected
-      || !$("chatTyping")?.classList.contains("hidden");
+    return isChatSending();
+  }
+
+  function renderAgentMsgActionsHtml(msgId) {
+    const busy = isChatBusy();
+    const dis = busy ? ' disabled aria-disabled="true"' : "";
+    return `<div class="chat-msg-actions${busy ? " is-busy" : ""}">
+            <button type="button" class="chat-msg-action" data-action="explain" data-msg-id="${esc(msgId)}"${dis}>${esc(tt("action_explain", "Пояснить"))}</button>
+            <button type="button" class="chat-msg-action" data-action="expand" data-msg-id="${esc(msgId)}"${dis}>${esc(tt("action_expand", "Дополнить"))}</button>
+            <button type="button" class="chat-msg-action" data-action="regenerate" data-msg-id="${esc(msgId)}"${dis}>${esc(tt("action_regenerate", "Обновить"))}</button>
+            <button type="button" class="chat-msg-action" data-action="delete" data-msg-id="${esc(msgId)}"${dis}>${esc(tt("action_delete", "Удалить"))}</button>
+          </div>`;
+  }
+
+  function bindChatMsgActionsDelegation() {
+    const el = $("chatMessages");
+    if (!el || el.dataset.msgActionsBound) return;
+    el.dataset.msgActionsBound = "1";
+    el.addEventListener("click", async (e) => {
+      const btn = e.target.closest(".chat-msg-action");
+      if (!btn) return;
+      const msgId = btn.dataset.msgId;
+      const action = btn.dataset.action;
+      if (!msgId || !action || chatBusy || btn.disabled) return;
+      if (action === "explain") {
+        sendChatMessage({ explain: true, targetAgentMsgId: msgId });
+      } else if (action === "expand") {
+        sendChatMessage({ expand: true, targetAgentMsgId: msgId });
+      } else if (action === "regenerate") {
+        sendChatMessage({ regenerate: true, targetAgentMsgId: msgId });
+      } else if (action === "delete") {
+        const cascade = btn.dataset.cascade === "following";
+        await apiDeleteMessage(msgId, { cascade });
+      }
+    });
   }
 
   function renderMessages(items, options = {}) {
@@ -3270,7 +3799,7 @@
     destroyMessageCharts();
     const layerAgentsState = captureLayerAgentsUiState(el);
     if (!items.length) {
-      el.innerHTML = '<p class="chat-empty-hint">Выберите роль и напишите первое сообщение — AI ответит в режиме «Диалог».</p>';
+      el.innerHTML = `<p class="chat-empty-hint">${esc(tt("chat_empty_first", "Выберите роль и напишите первое сообщение — AI ответит в режиме «Диалог»."))}</p>`;
       updateChatGraphStats(null);
       window.MKGMiniGraph?.destroy($("chatGraphCanvas"));
       return;
@@ -3284,8 +3813,9 @@
         ? m.meta.attachments
         : [];
       const cls = isUpload ? "msg-upload" : isAgent ? "msg-agent" : m.msg_type === "system" ? "msg-system" : "msg-user";
-      const time = m.created_at ? new Date(m.created_at).toLocaleString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "";
-      const avatarText = isAgent ? "AI" : isUser ? (role.name_ru || "?").slice(0, 1) : "·";
+      const time = m.created_at ? new Date(m.created_at).toLocaleString(chatLocale(), { hour: "2-digit", minute: "2-digit" }) : "";
+      const disp = roleDisplay(role);
+      const avatarText = isAgent ? "AI" : isUser ? (disp.name || "?").slice(0, 1) : "·";
       const avatarHtml = isUpload
         ? ((window.MKG_ICONS && MKG_ICONS.paperclip(16)) || "↑")
         : esc(avatarText);
@@ -3317,29 +3847,26 @@
            <button type="button" class="btn btn-ghost btn-small chat-save-print" data-msg-id="${esc(m.id)}" title="Печать / PDF">PDF</button>`
         : "";
       const graphBtn = (isAgent && hasContextGraph(m.meta))
-        ? `<button type="button" class="btn btn-ghost btn-small chat-show-graph" data-msg-id="${esc(m.id)}" title="Показать граф обхода контекста">Показать граф обхода</button>`
+        ? `<button type="button" class="btn btn-ghost btn-small chat-show-graph" data-msg-id="${esc(m.id)}" title="${esc(tt("chat_show_graph", "Показать граф обхода"))}">${esc(tt("chat_show_graph", "Показать граф обхода"))}</button>`
         : "";
-      const modeBadge = isAgent && m.meta?.mode && m.meta.mode !== "dialog" && m.meta.mode !== "fast"
-        ? `<span class="chat-mode-badge">${esc(AGENT_MODE_TRACE[m.meta.mode] || m.meta.mode)}</span>`
+      const modeBadge = isAgent && m.meta?.mode
+        && !["dialog", "fast", "orchestrator_mode"].includes(m.meta.mode)
+        ? `<span class="chat-mode-badge">${esc(traceModeLabel(m.meta.mode))}</span>`
         : "";
       const speedBadge = isAgent && m.meta?.speed_mode
-        ? `<span class="chat-mode-badge chat-speed-${esc(m.meta.speed_mode)}">${esc(SPEED_MODE_LABELS[m.meta.speed_mode] || m.meta.speed_mode)}</span>`
+        ? `<span class="chat-mode-badge chat-speed-${esc(m.meta.speed_mode)}">${esc(speedModeLabel(m.meta.speed_mode))}</span>`
         : "";
       const bodyHtml = isAgent
-        ? `<div class="chat-msg-body md-render-view">${renderAgentAnswerHtml(m.body, m.id)}</div>`
+        ? `<div class="chat-msg-body md-render-view">${renderAgentAnswerHtml(m.body)}</div>`
         : `<div class="chat-msg-body">${esc(m.body)}</div>`;
-      const showMsgActions = (isAgent || isUser) && !isUpload && !isChatBusy();
+      const showMsgActions = (isAgent || isUser) && !isUpload;
       let actionsHtml = "";
       if (showMsgActions && isAgent) {
-        actionsHtml = `<div class="chat-msg-actions">
-            <button type="button" class="chat-msg-action" data-action="explain" data-msg-id="${esc(m.id)}">Пояснить</button>
-            <button type="button" class="chat-msg-action" data-action="regenerate" data-msg-id="${esc(m.id)}">Обновить</button>
-            <button type="button" class="chat-msg-action" data-action="delete" data-msg-id="${esc(m.id)}">Удалить</button>
-          </div>`;
+        actionsHtml = renderAgentMsgActionsHtml(m.id);
       } else if (showMsgActions && isUser) {
+        const delLabel = tt("action_delete", "Удалить");
         actionsHtml = `<div class="chat-msg-actions">
-            <button type="button" class="chat-msg-action" data-action="edit" data-msg-id="${esc(m.id)}">Изменить</button>
-            <button type="button" class="chat-msg-action" data-action="delete" data-msg-id="${esc(m.id)}" data-cascade="following">Удалить</button>
+            <button type="button" class="chat-msg-action" data-action="delete" data-msg-id="${esc(m.id)}" data-cascade="following">${esc(delLabel)}</button>
           </div>`;
       }
       return `
@@ -3348,7 +3875,7 @@
           <div class="chat-msg-content">
             <header>
               <strong>${esc(m.author_name)}</strong>
-              ${!isUser && !isUpload ? `<span class="user-role-badge role-${esc(m.author_role)}">${esc(role.name_ru || m.author_role)}</span>` : ""}
+              ${!isUser && !isUpload ? `<span class="user-role-badge role-${esc(m.author_role)}">${esc(disp.name || m.author_role)}</span>` : ""}
               ${speedBadge}
               ${modeBadge}
               ${saveMdBtn}
@@ -3365,7 +3892,6 @@
         </article>`;
     }).join("");
     restoreLayerAgentsUiState(el, layerAgentsState);
-    bindLayerRoundNavEvents(el);
     bindUploadCardEvents(el);
     el.querySelectorAll(".chat-save-md").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -3395,23 +3921,6 @@
         if (msg) showMessageContextGraph(msg);
       });
     });
-    el.querySelectorAll(".chat-msg-action").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const msgId = btn.dataset.msgId;
-        const action = btn.dataset.action;
-        if (!msgId || !action || chatBusy) return;
-        if (action === "explain") {
-          sendChatMessage({ explain: true, targetAgentMsgId: msgId });
-        } else if (action === "regenerate") {
-          sendChatMessage({ regenerate: true, targetAgentMsgId: msgId });
-        } else if (action === "edit") {
-          beginEditUserMessage(msgId, items);
-        } else if (action === "delete") {
-          const cascade = btn.dataset.cascade === "following";
-          await apiDeleteMessage(msgId, { cascade });
-        }
-      });
-    });
     el.querySelectorAll(".chat-source-link, .chat-source-chip").forEach((btn) => {
       btn.addEventListener("click", () => {
         const docId = btn.dataset.docId;
@@ -3419,7 +3928,9 @@
       });
     });
     mountMessageCharts(items);
-    bindAnswerSectionExplain(el);
+    el.querySelectorAll(".chat-answer-sections-nav").forEach((nav) => {
+      bindAnswerSectionNav(nav);
+    });
     const scrollPolicy = options.scroll || (wasNearBottom ? "bottom" : "restore");
     applyChatScrollPolicy(scrollPolicy, prevScrollTop);
   }
@@ -3441,6 +3952,7 @@
         return;
       }
       activeThreadId = data.id;
+      persistActiveThreadId(activeThreadId);
       lastMessagesFingerprint = "";
       lastLoadedThreadId = null;
       userScrolledUp = false;
@@ -3457,8 +3969,9 @@
     }
   }
 
-  async function postMessage(text, msgType = "user", authorName = null, authorId = null, meta = null) {
-    const r = await fetch(`${API}/chat/threads/${encodeURIComponent(activeThreadId)}/messages`, {
+  async function postMessage(text, msgType = "user", authorName = null, authorId = null, meta = null, threadId = activeThreadId) {
+    if (!threadId) return false;
+    const r = await fetch(`${API}/chat/threads/${encodeURIComponent(threadId)}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3477,11 +3990,16 @@
     return r.ok;
   }
 
-  function parseApiError(data, fallback = "AI недоступен") {
-    const d = data?.detail;
-    if (typeof d === "string") return d;
-    if (Array.isArray(d)) return d[0]?.msg || fallback;
-    return fallback;
+  function isWeakOrchestratorReply(text) {
+    const t = String(text || "").trim();
+    if (!t) return true;
+    if (/^Найдено \d+ узлов и \d+ связей по слоям MKG\.\s*$/.test(t)) return true;
+    if (t === "Недостаточно данных из графа для ответа.") return true;
+    return !/##\s/.test(t) && t.length < 120;
+  }
+
+  function orchestratorResultText(res) {
+    return String(res?.summary || res?.final_report || "").trim();
   }
 
   async function runChatLLMOrchestratorAsync(query, history, docIds) {
@@ -3539,7 +4057,7 @@
         return {
           text: res.summary || "",
           trace,
-          graph: res.graph || liveAccumulatedGraph,
+          graph: res.graph ? normalizeChatGraph(res.graph) : liveAccumulatedGraph,
           artifacts: [],
           sources: sourcesFromAgentResult(res),
           layer_results: res.layer_results || null,
@@ -3598,6 +4116,7 @@
         include_artifacts: speedMode !== "fast",
         document_ids: docIdsMerged,
         speed_mode: speedMode,
+        ui_lang: window.MKG?.getUiLang?.() || "ru",
       }),
     });
     const data = await r.json().catch(() => ({}));
@@ -3616,6 +4135,7 @@
 
   function detectPipelineMode(trace, speedMode) {
     if (speedMode === "fast") return "fast";
+    if (speedMode === "compare") return "compare";
     if ((trace || []).some((t) => String(t.step || "").startsWith("orchestrator"))) {
       return "orchestrator_mode";
     }
@@ -3623,23 +4143,31 @@
     return pipeline || "dialog";
   }
 
+  function onChatComposeSubmit(e) {
+    e?.preventDefault?.();
+    if (!composeHasSendableContent() || isChatSending()) return;
+    sendChatMessage();
+  }
+
   async function sendChatMessage(forcedOptions = null) {
-    if (chatBusy) return;
+    if (isChatSending()) return;
     const opts = forcedOptions || {};
     const fromInput = !forcedOptions;
     const input = $("chatMessageInput");
-    let text = opts.text ?? (input?.value || "").trim();
+    const draftText = fromInput ? (input?.value ?? "") : "";
+    let text = opts.text ?? draftText.trim();
     const hasPending = fromInput && pendingComposeAttachments?.files?.length;
-    if (!text && !hasPending && !opts.explain && !opts.regenerate && !opts.editResend) return;
+    if (!text && !hasPending && !opts.explain && !opts.regenerate && !opts.expand) return;
 
+    const isNewQuestion = !opts.explain && !opts.regenerate && !opts.expand;
     let skipUserPost = !!opts.skipUserPost;
     let prefetchedHistory = null;
 
     if (opts.explain && opts.targetAgentMsgId) {
-      const section = opts.explainSection ? String(opts.explainSection).trim() : "";
-      text = section
-        ? `Поясни подробнее раздел «${section}» предыдущего ответа простым языком`
-        : "Поясни подробнее предыдущий ответ простым языком";
+      text = "Поясни подробнее предыдущий ответ простым языком";
+      prefetchedHistory = buildHistoryThrough(currentThreadMessages, opts.targetAgentMsgId);
+    } else if (opts.expand && opts.targetAgentMsgId) {
+      text = tt("action_expand_prompt", "Дополни предыдущий ответ: раскрой детали, добавь примеры и контекст, сохрани структуру");
       prefetchedHistory = buildHistoryThrough(currentThreadMessages, opts.targetAgentMsgId);
     } else if (opts.regenerate && opts.targetAgentMsgId) {
       const userMsg = findPrecedingUserMessage(currentThreadMessages, opts.targetAgentMsgId);
@@ -3652,27 +4180,34 @@
       skipUserPost = true;
       await apiDeleteMessage(opts.targetAgentMsgId, { reload: false });
       await loadMessages(activeThreadId, { scroll: "restore", forceRender: true });
-    } else if (opts.editResend && opts.targetUserMsgId) {
-      text = (opts.text || text || "").trim();
-      if (!text) return;
-      prefetchedHistory = buildHistoryBeforeMessage(currentThreadMessages, opts.targetUserMsgId);
-      prefetchedHistory.push({ role: "user", content: text });
-      skipUserPost = true;
+    }
+
+    if (isNewQuestion || opts.regenerate) {
+      resetChatGraphForNewQuestion();
     }
 
     const btn = $("chatSendBtn");
     const attachBtn = $("chatAttachBtn");
-    if (btn) { btn.disabled = true; btn.textContent = "…"; }
+    if (btn) btn.textContent = "…";
     if (attachBtn) attachBtn.disabled = true;
     chatBusy = true;
+    syncComposeSendButton();
     let history = prefetchedHistory || [];
     let messageAttachments = [];
+    let sendThreadId = activeThreadId;
+    let userPosted = false;
+    let sendWatchdog = setTimeout(() => {
+      if (!chatBusy) return;
+      console.warn("MKG chat: send watchdog released stuck busy state");
+      releaseChatComposeLock();
+    }, CHAT_SEND_WATCHDOG_MS);
     try {
       if (!await requireIdentity()) return;
       if (!activeThreadId) {
         await createThread();
         if (!activeThreadId) return;
       }
+      sendThreadId = activeThreadId;
       showChatUploadError("");
 
       if (hasPending) {
@@ -3683,7 +4218,7 @@
           if (!uploaded.length) return;
           clearPendingComposeAttachments();
           for (const item of uploaded) {
-            addThreadDocId(activeThreadId, item.id);
+            addThreadDocId(sendThreadId, item.id);
             messageAttachments.push({
               kind: "upload",
               document_id: item.id,
@@ -3708,7 +4243,7 @@
 
       if (!prefetchedHistory) {
         try {
-          const mr = await fetch(`${API}/chat/threads/${encodeURIComponent(activeThreadId)}/messages`);
+          const mr = await fetch(`${API}/chat/threads/${encodeURIComponent(sendThreadId)}/messages`);
           if (mr.ok) {
             const md = await mr.json();
             history = buildHistory(md.items || []);
@@ -3716,24 +4251,34 @@
         } catch { /* ignore */ }
       }
 
-      if (fromInput) input.value = "";
       userScrolledUp = false;
-      const docIds = getMergedDocIds();
+      const docIds = getThreadDocIds(sendThreadId);
+      const sel = window.MKG?.selectedDoc;
+      if (sel && !docIds.includes(sel)) docIds.push(sel);
       if (!skipUserPost) {
-        await postMessage(text, "user", null, null, {
+        const posted = await postMessage(text, "user", null, null, {
           document_ids: docIds,
           attachments: messageAttachments.length ? messageAttachments : undefined,
-        });
+        }, sendThreadId);
+        if (!posted) {
+          if (fromInput && input) input.value = draftText;
+          showNotice("Не удалось отправить сообщение", true);
+          return;
+        }
+        userPosted = true;
+        if (fromInput && input) input.value = "";
         await loadThreads();
-        const activeThread = threads.find((x) => x.id === activeThreadId);
-        if ($("chatActiveTitle") && activeThread) $("chatActiveTitle").textContent = activeThread.title;
-        await loadMessages(activeThreadId, { scroll: "force" });
-      } else {
-        await loadMessages(activeThreadId, { scroll: "force", forceRender: true });
+        if (activeThreadId === sendThreadId) {
+          const activeThread = threads.find((x) => x.id === sendThreadId);
+          if ($("chatActiveTitle") && activeThread) $("chatActiveTitle").textContent = activeThread.title;
+          await loadMessages(sendThreadId, { scroll: "force" });
+        }
+      } else if (activeThreadId === sendThreadId) {
+        await loadMessages(sendThreadId, { scroll: "force", forceRender: true });
       }
 
       const role = roleMeta(currentUser.role_id);
-      const speedMode = getChatSpeedMode();
+      const speedMode = getChatSpeedMode(sendThreadId);
       const isFast = speedMode === "fast";
       const usesOrchestrator = !isFast && role.can_run_agents !== false;
       const tracePreview = isFast
@@ -3751,10 +4296,14 @@
       try {
         result = await runChatLLM(text, history, { usesOrchestrator, docIds });
         if (result?.text) result.text = sanitizeAgentAnswerBody(result.text);
-        if (result?.trace?.length) showTraceComplete(result.trace);
+        showTyping(false);
+        if (result?.trace?.length) {
+          mountCompletedTraceInPreview(result.trace);
+        }
 
-        if (!isFast && result.graph) {
-          lastFullscreenGraph = result.graph;
+        if (!isFast && result?.graph?.nodes?.length) {
+          lastFullscreenGraph = normalizeChatGraph(result.graph);
+          liveAccumulatedGraph = lastFullscreenGraph;
           lastFullscreenTrace = result.trace;
         }
 
@@ -3798,21 +4347,21 @@
           sources: result.sources || [],
           ...(opts.regenerate ? { regenerated: true } : {}),
           ...(opts.explain ? { explained: true } : {}),
-        });
+          ...(opts.expand ? { expanded: true } : {}),
+        }, sendThreadId);
       } catch (e) {
         const raw = typeof e.message === "string" ? e.message : "AI недоступен";
         const msg = /Cannot add item|already exists/i.test(raw)
           ? "Ответ получен, но мини-граф не отобразился."
           : raw;
-        await postMessage(`⚠ ${msg}`, "system", "Система", null);
+        await postMessage(`⚠ ${msg}`, "system", "Система", null, null, sendThreadId);
         updateChatGraphStats(null);
       } finally {
-        if (activeWalkCancel) {
-          activeWalkCancel();
-          activeWalkCancel = null;
-        }
+        cancelActiveGraphWalk();
+        stopAnswerSectionWalk();
         removeStreamPreview();
         clearAgentQuestions();
+        hideTraceLive();
         showTyping(false);
         setChatGraphBuilding(false);
         if (result?.graph?.nodes?.length) {
@@ -3823,12 +4372,23 @@
         }
       }
 
-      await loadMessages(activeThreadId, { scroll: "bottom" });
-      await loadThreads();
+      if (activeThreadId === sendThreadId) {
+        await loadMessages(sendThreadId, {
+          scroll: "bottom",
+          sectionWalk: !!result?.text,
+          forceRender: true,
+        });
+        await loadThreads();
+      }
+    } catch (e) {
+      if (fromInput && !userPosted && input) input.value = draftText;
+      if (!userPosted) showNotice(e?.message || "Не удалось отправить сообщение", true);
     } finally {
+      clearTimeout(sendWatchdog);
       chatBusy = false;
-      if (btn) { btn.disabled = false; btn.textContent = "Отправить"; }
+      if (btn) btn.textContent = window.MKG?.t?.("chat_send") || "Отправить";
       if (attachBtn) attachBtn.disabled = !canShowUpload(roleMeta(currentUser?.role_id));
+      syncComposeSendButton();
     }
   }
 
@@ -3846,6 +4406,9 @@
     await restoreSession();
     renderRoleCards();
     await loadThreads();
+    if (activeThreadId) {
+      await loadMessages(activeThreadId, { scroll: "restore", forceRender: true });
+    }
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => {
       if (window.MKG?.currentPage === "chats" && activeThreadId) {
@@ -3853,6 +4416,7 @@
         loadThreads();
       }
     }, 4000);
+    healOrphanChatBusyUi();
   }
 
   function bindEvents() {
@@ -3861,10 +4425,18 @@
       btn.addEventListener("click", () => setChatSpeedMode(btn.dataset.speed));
     });
     $("chatNewBtn")?.addEventListener("click", (e) => { e.preventDefault(); createThread(); });
-    $("chatSendBtn")?.addEventListener("click", (e) => { e.preventDefault(); sendChatMessage(); });
+    $("chatsCompose")?.addEventListener("submit", onChatComposeSubmit);
+    $("chatMessageInput")?.addEventListener("input", syncComposeSendButton);
     $("chatMessageInput")?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      e.preventDefault();
+      if (!composeHasSendableContent() || isChatSending()) return;
+      sendChatMessage();
     });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") healOrphanChatBusyUi();
+    });
+    syncComposeSendButton();
     $("chatAttachBtn")?.addEventListener("click", (e) => {
       e.preventDefault();
       $("chatFileInput")?.click();
@@ -3889,8 +4461,13 @@
     bindRolePromptPanel();
     $("rolePromptSave")?.addEventListener("click", (e) => { e.preventDefault(); saveRolePrompt(); });
     $("rolePromptReset")?.addEventListener("click", (e) => { e.preventDefault(); resetRolePrompt(); });
-    $("chatGraphToggle")?.addEventListener("click", () => toggleChatGraphPanel());
+    $("chatGraphToggle")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleChatGraphPanel();
+    });
     $("chatGraphReplay")?.addEventListener("click", () => replayLastGraphWalk());
+    $("chatGraphStop")?.addEventListener("click", () => stopGraphWalk());
     $("chatGraphExpand")?.addEventListener("click", () => toggleChatGraphMaximized());
     $("graphFullscreenClose")?.addEventListener("click", closeGraphFullscreenModal);
     $("graphFullscreenBackdrop")?.addEventListener("click", closeGraphFullscreenModal);
@@ -3904,10 +4481,17 @@
       e.preventDefault();
       window.MKG?.openDocGuide?.("layer-agents");
     });
+    document.addEventListener("click", handlePipelineExpandClick);
+    ensureLayerRoundNavDelegation();
   }
 
-  bindEvents();
   renderRoleCards();
+
+  try {
+    bindEvents();
+  } catch (err) {
+    console.error("MKG chat bindEvents error:", err);
+  }
 
   async function init() {
     await fetchRoles();
@@ -3915,11 +4499,9 @@
     if (saved?.role_id) selectedRoleId = saved.role_id;
     await restoreSession();
     applyPermissions();
+    updateChatGraphStats(null);
     await refreshChatsPage();
   }
-
-  init();
-  window.MKG?.setPollUploadHook?.(pollUploadDoc);
 
   window.MKGAuth = {
     init,
@@ -3927,8 +4509,33 @@
     requireIdentity,
     getCurrentUser: () => currentUser,
     getRole: () => roleMeta(currentUser?.role_id),
+    getActiveThreadId: () => activeThreadId,
     canShowUpload,
     applyPermissions,
     syncDocsUploadFallback,
   };
+
+  init();
+  window.MKG?.setPollUploadHook?.(pollUploadDoc);
+
+  if (window.MKG) {
+    window.MKG.onLangChange = () => {
+      renderRoleCards();
+      updateRoleHeader();
+      updatePromptBadge();
+      renderThreadList();
+      updateGraphReplayButton();
+      syncChatSpeedToggleUi(getChatSpeedMode());
+      syncComposeSendButton();
+      if (currentThreadMessages?.length) {
+        renderMessages(currentThreadMessages, { scroll: "restore" });
+      } else {
+        const msgEl = $("chatMessages");
+        if (msgEl) renderMessages([], {});
+      }
+      const graph = liveAccumulatedGraph || lastReplayableWalk?.graph;
+      updateChatGraphStats(graph ? normalizeChatGraph(graph) : null);
+      window.MKG?.onAppLangChange?.();
+    };
+  }
 })();

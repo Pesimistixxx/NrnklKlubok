@@ -1,14 +1,15 @@
-"""Индексация и семантический поиск по TextParagraph / Claim в Qdrant.
+"""Индексация и семантический поиск по TextParagraph / Claim / Entity в Qdrant.
 
 Клиент эмбеддингов: ``YandexLLMClient.embed()`` (text-search-doc / text-search-query).
-Коллекции Qdrant: ``mkg_chunks`` (L3 абзацы), ``mkg_claims`` (L4 утверждения).
+Коллекции Qdrant: ``mkg_chunks`` (L3 абзацы), ``mkg_claims`` (L4 утверждения),
+``mkg_entities`` (Material/Process/Equipment/TechnologySolution/Expert/Measurement).
 
-После extraction worker вызывает ``index_document_graph`` (L3 TextParagraph →
-``mkg_chunks``, все L4-метки → ``mkg_claims``). Режим ``answers_only`` индексирует
-только MD-чанки в ``mkg_chunks``.
+После extraction worker вызывает ``index_document_graph`` (L3 → mkg_chunks,
+L4 → mkg_claims, сущности → mkg_entities). Backfill: ``POST /api/v1/admin/reindex``.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -21,13 +22,72 @@ from mkg_core.config import get_settings
 from mkg_core.llm import YandexLLMClient
 from mkg_core.ontology import L4_LABELS
 from mkg_core.qdrant import QdrantClientSingleton
+from mkg_core.doc_metadata import qdrant_meta_payload
 from mkg_core.store import get_repo
 
 log = logging.getLogger(__name__)
 
 SearchMode = Literal["auto", "semantic", "keyword"]
 
+ENTITY_LABELS = frozenset({
+    "Material", "Process", "Equipment", "TechnologySolution", "Expert", "Measurement",
+})
+_LEXICAL_TOKEN_RE = re.compile(r"[\w\u0400-\u04FF]+", re.UNICODE)
+
 _TEXT_KEYS = ("raw_text_ru", "quote", "text", "name_ru", "title_ru", "value", "name")
+
+_CLASSIFICATION_LEVELS = frozenset({"открытый", "внутренний", "конфиденциальный", "строго"})
+
+
+def _normalize_doc_classification(value: str | None) -> str:
+    raw = (value or "открытый").strip().lower()
+    if raw in _CLASSIFICATION_LEVELS:
+        return raw
+    aliases = {
+        "public": "открытый",
+        "internal": "внутренний",
+        "confidential": "конфиденциальный",
+        "restricted": "строго",
+    }
+    return aliases.get(raw, "открытый")
+
+
+def _doc_classification(doc_id: str) -> str:
+    rec = get_repo().get(doc_id) or {}
+    return _normalize_doc_classification(rec.get("classification"))
+
+
+def _filter_hits_by_classifications(
+    hits: list[dict[str, Any]],
+    allowed_classifications: list[str] | None,
+) -> list[dict[str, Any]]:
+    if not allowed_classifications:
+        return hits
+    allowed = set(allowed_classifications)
+    out: list[dict[str, Any]] = []
+    for hit in hits:
+        doc_id = str(hit.get("document_id") or "")
+        if not doc_id or _doc_classification(doc_id) in allowed:
+            out.append(hit)
+    return out
+
+
+def _filter_document_ids(
+    doc_ids: list[str],
+    allowed_classifications: list[str] | None,
+) -> list[str]:
+    if not allowed_classifications:
+        return doc_ids
+    allowed = set(allowed_classifications)
+    return [doc_id for doc_id in doc_ids if _doc_classification(doc_id) in allowed]
+
+
+def _base_qdrant_payload(document_id: str, **extra: Any) -> dict[str, Any]:
+    rec = get_repo().get(document_id) or {}
+    payload = qdrant_meta_payload(rec)
+    payload["document_id"] = document_id
+    payload.update(extra)
+    return payload
 
 
 def _point_id(node_id: str) -> int:
@@ -61,12 +121,132 @@ def _indexable_labels() -> frozenset[str]:
     return frozenset({"TextParagraph"}) | L4_LABELS
 
 
+def _entity_index_text(node: dict[str, Any]) -> str:
+    """Текст для эмбеддинга сущности: имя + описание + синонимы (+ quote для Measurement)."""
+    label = str(node.get("label") or "")
+    props = node.get("props") or {}
+    parts: list[str] = []
+
+    if label == "Expert":
+        for key in ("full_name", "name_ru", "name", "affiliation", "organization", "role"):
+            val = props.get(key)
+            if isinstance(val, str) and val.strip():
+                parts.append(val.strip())
+    elif label == "Measurement":
+        for key in ("description", "quote", "text", "parameter_name"):
+            val = props.get(key)
+            if isinstance(val, str) and val.strip():
+                parts.append(val.strip())
+        num = props.get("numeric_value")
+        unit = props.get("unit")
+        if num is not None:
+            parts.append(f"{num} {unit or ''}".strip())
+    else:
+        for key in ("name_ru", "name_en", "name", "chemical_formula", "title_ru", "title"):
+            val = props.get(key)
+            if isinstance(val, str) and val.strip():
+                parts.append(val.strip())
+        desc = props.get("description")
+        if isinstance(desc, str) and desc.strip():
+            parts.append(desc.strip())
+        quote = props.get("quote")
+        if isinstance(quote, str) and quote.strip():
+            parts.append(quote.strip())
+
+    aliases = props.get("aliases")
+    if isinstance(aliases, list):
+        for item in aliases:
+            if isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+    elif isinstance(aliases, str) and aliases.strip():
+        parts.append(aliases.strip())
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in parts:
+        key = part.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(part)
+    return " · ".join(out)
+
+
+def _lexical_tokens(text: str) -> list[str]:
+    """Токены для keyword/hybrid-поиска в payload (без BM25, MatchAny по токенам)."""
+    tokens = _LEXICAL_TOKEN_RE.findall((text or "").lower())
+    return sorted(set(t for t in tokens if len(t) >= 2))
+
+
+def _short_query_score_threshold(query: str) -> float | None:
+    """Порог релевантности для коротких запросов; бытовые реплики не ослабляем."""
+    try:
+        from mkg_core.query_classify import is_conversational_query
+
+        if is_conversational_query(query):
+            return 0.99
+    except Exception:
+        pass
+    tokens = _lexical_tokens(query)
+    if len(tokens) <= 2:
+        try:
+            from mkg_core.alias_expansion import get_alias_lookup
+
+            lookup = get_alias_lookup()
+            if any(t in lookup for t in tokens):
+                return 0.35
+        except Exception:
+            pass
+        return 0.45
+    return None
+
+
+def _collection_for_layer(layer: str, label: str = "") -> str:
+    settings = get_settings()
+    if layer == "L4" and label not in ENTITY_LABELS:
+        return settings.qdrant_collection_claims
+    if label in ENTITY_LABELS or layer in ("L1", "L2"):
+        return settings.qdrant_collection_entities
+    return settings.qdrant_collection_chunks
+
+
+def _entity_search_hit(
+    payload: dict[str, Any],
+    *,
+    score: float,
+    mode: str = "semantic",
+    retrieval_factors: list[str] | None = None,
+    collection: str | None = None,
+) -> dict[str, Any]:
+    node_id = str(payload.get("neo4j_node_id") or payload.get("node_id") or "")
+    entity_type = str(payload.get("entity_type") or payload.get("label") or "")
+    layer = str(payload.get("layer") or ("L2" if entity_type == "Expert" else "L1"))
+    hit: dict[str, Any] = {
+        "node_id": node_id,
+        "neo4j_node_id": node_id,
+        "entity_type": entity_type,
+        "label": entity_type,
+        "layer": layer,
+        "score": score,
+        "text": str(payload.get("text") or "")[:500],
+        "document_id": str(payload.get("document_id") or ""),
+        "geography": payload.get("geography"),
+        "tags": payload.get("tags") or [],
+        "props": {},
+        "mode": mode,
+        "collection": collection or get_settings().qdrant_collection_entities,
+    }
+    if retrieval_factors:
+        hit["retrieval_factors"] = list(retrieval_factors)
+    return hit
+
+
 def _search_hit(
     payload: dict[str, Any],
     *,
     score: float,
     mode: str,
     retrieval_factors: list[str] | None = None,
+    collection: str | None = None,
 ) -> dict[str, Any]:
     node_id = str(payload.get("neo4j_node_id") or payload.get("node_id") or "")
     hit: dict[str, Any] = {
@@ -82,6 +262,10 @@ def _search_hit(
         "anomaly_score": payload.get("anomaly_score"),
         "props": {},
         "mode": mode,
+        "collection": collection or _collection_for_layer(
+            str(payload.get("layer") or "L?"),
+            str(payload.get("label") or ""),
+        ),
     }
     if retrieval_factors:
         hit["retrieval_factors"] = list(retrieval_factors)
@@ -174,7 +358,11 @@ async def count_indexed_points(*, document_id: str | None = None) -> dict[str, i
     filt: Filter | None = None
     if document_id:
         filt = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
-    for name in (settings.qdrant_collection_chunks, settings.qdrant_collection_claims):
+    for name in (
+        settings.qdrant_collection_chunks,
+        settings.qdrant_collection_claims,
+        settings.qdrant_collection_entities,
+    ):
         try:
             if filt:
                 result = await qdrant.count(collection_name=name, count_filter=filt)
@@ -248,16 +436,17 @@ async def index_document_markdown(document_id: str, markdown: str | None = None)
             PointStruct(
                 id=_point_id(node_id),
                 vector=vector,
-                payload={
-                    "document_id": document_id,
-                    "node_id": node_id,
-                    "neo4j_node_id": node_id,
-                    "label": "TextParagraph",
-                    "layer": "L3",
-                    "text": text[:2000],
-                    "md_file": repo.markdown_relative_path(document_id),
-                    "source": "markdown",
-                },
+                payload=_base_qdrant_payload(
+                    document_id,
+                    node_id=node_id,
+                    neo4j_node_id=node_id,
+                    label="TextParagraph",
+                    layer="L3",
+                    text=text[:2000],
+                    lexical_tokens=_lexical_tokens(text),
+                    md_file=repo.markdown_relative_path(document_id),
+                    source="markdown",
+                ),
             )
         )
         indexed += 1
@@ -277,12 +466,25 @@ async def index_document_graph(document_id: str, graph: dict[str, Any] | None) -
 
     nodes = (graph or {}).get("nodes") or []
     indexable = [n for n in nodes if str(n.get("label")) in _indexable_labels() and _node_text(n)]
-    if not indexable:
-        return {"indexed": 0, "indexed_l3": 0, "indexed_l4": 0, "skipped": 0}
 
     await ensure_qdrant_collections()
     llm = YandexLLMClient.instance()
     qdrant = QdrantClientSingleton.instance().client
+
+    if not indexable:
+        entity_stats = await index_document_entities(document_id, graph)
+        return {
+            "indexed": entity_stats.get("indexed", 0),
+            "indexed_l3": 0,
+            "indexed_l4": 0,
+            "indexed_entities": entity_stats.get("indexed", 0),
+            "skipped": entity_stats.get("skipped", 0),
+            "collections": {
+                settings.qdrant_collection_chunks: 0,
+                settings.qdrant_collection_claims: 0,
+                settings.qdrant_collection_entities: entity_stats.get("indexed", 0),
+            },
+        }
 
     by_collection: dict[str, list[PointStruct]] = {}
     indexed = 0
@@ -309,15 +511,16 @@ async def index_document_graph(document_id: str, graph: dict[str, Any] | None) -
         point = PointStruct(
             id=_point_id(node_id),
             vector=vector,
-            payload={
-                "document_id": document_id,
-                "node_id": node_id,
-                "neo4j_node_id": node_id,
-                "label": label,
-                "layer": layer,
-                "text": text[:2000],
-                "md_file": repo.markdown_relative_path(document_id),
-            },
+            payload=_base_qdrant_payload(
+                document_id,
+                node_id=node_id,
+                neo4j_node_id=node_id,
+                label=label,
+                layer=layer,
+                text=text[:2000],
+                lexical_tokens=_lexical_tokens(text),
+                md_file=repo.markdown_relative_path(document_id),
+            ),
         )
         by_collection.setdefault(collection, []).append(point)
         indexed += 1
@@ -331,16 +534,173 @@ async def index_document_graph(document_id: str, graph: dict[str, Any] | None) -
         for i in range(0, len(points), batch_size):
             await qdrant.upsert(collection_name=collection, points=points[i : i + batch_size])
 
+    entity_stats = await index_document_entities(document_id, graph)
+
     return {
-        "indexed": indexed,
+        "indexed": indexed + entity_stats.get("indexed", 0),
         "indexed_l3": indexed_l3,
         "indexed_l4": indexed_l4,
-        "skipped": skipped,
+        "indexed_entities": entity_stats.get("indexed", 0),
+        "skipped": skipped + entity_stats.get("skipped", 0),
         "collections": {
             settings.qdrant_collection_chunks: indexed_l3,
             settings.qdrant_collection_claims: indexed_l4,
+            settings.qdrant_collection_entities: entity_stats.get("indexed", 0),
         },
     }
+
+
+async def index_document_entities(document_id: str, graph: dict[str, Any] | None) -> dict[str, int]:
+    """Эмбеддит L1/L2 Expert и L4 Measurement + L1 сущности в mkg_entities — без cluster_id."""
+    settings = get_settings()
+    if not settings.yandex_api_key or not settings.yandex_folder_id:
+        return {"indexed": 0, "skipped": 0, "error": "YANDEX_API_KEY или YANDEX_FOLDER_ID не заданы"}
+
+    nodes = (graph or {}).get("nodes") or []
+    indexable = [
+        n for n in nodes
+        if str(n.get("label")) in ENTITY_LABELS and _entity_index_text(n)
+    ]
+    if not indexable:
+        return {"indexed": 0, "skipped": 0}
+
+    await ensure_qdrant_collections()
+    llm = YandexLLMClient.instance()
+    qdrant = QdrantClientSingleton.instance().client
+    collection = settings.qdrant_collection_entities
+    repo = get_repo()
+    points: list[PointStruct] = []
+    indexed = 0
+    skipped = 0
+
+    for node in indexable:
+        label = str(node.get("label"))
+        node_id = str(node.get("id") or "")
+        text = _entity_index_text(node)
+        if not node_id or not text:
+            skipped += 1
+            continue
+        try:
+            vector = await llm.embed(text[:8000], kind="doc")
+        except Exception as exc:
+            log.warning("entity embed failed node=%s: %s", node_id, exc)
+            skipped += 1
+            continue
+        layer = "L2" if label == "Expert" else ("L4" if label == "Measurement" else "L1")
+        points.append(
+            PointStruct(
+                id=_point_id(node_id),
+                vector=vector,
+                payload=_base_qdrant_payload(
+                    document_id,
+                    node_id=node_id,
+                    neo4j_node_id=node_id,
+                    entity_type=label,
+                    label=label,
+                    layer=layer,
+                    text=text[:2000],
+                    lexical_tokens=_lexical_tokens(text),
+                    md_file=repo.markdown_relative_path(document_id),
+                    source="graph_entity",
+                ),
+            )
+        )
+        indexed += 1
+
+    batch_size = 32
+    for i in range(0, len(points), batch_size):
+        await qdrant.upsert(collection_name=collection, points=points[i : i + batch_size])
+
+    return {"indexed": indexed, "skipped": skipped, "collection": collection}
+
+
+async def reindex_document_entities(document_id: str, graph: dict[str, Any] | None = None) -> dict[str, int]:
+    """Переиндексация mkg_entities для одного документа."""
+    g = graph if graph is not None else (get_repo().read_graph(document_id) or {})
+    return await index_document_entities(document_id, g if g.get("nodes") else None)
+
+
+async def reindex_corpus_entities(document_ids: list[str] | None = None) -> dict[str, Any]:
+    """Backfill mkg_entities для корпуса (все документы или указанный список)."""
+    repo = get_repo()
+    if document_ids:
+        ids = [d for d in document_ids if d]
+    else:
+        ids = [
+            item["id"]
+            for item in (repo.list(page=1, page_size=500)[0] or [])
+            if item.get("id")
+        ]
+    out: dict[str, Any] = {
+        "documents": 0,
+        "indexed": 0,
+        "skipped": 0,
+        "collection": get_settings().qdrant_collection_entities,
+        "per_document": [],
+        "errors": [],
+    }
+    for doc_id in ids:
+        graph = repo.read_graph(doc_id)
+        if not graph or not graph.get("nodes"):
+            continue
+        try:
+            stats = await index_document_entities(doc_id, graph)
+            out["documents"] += 1
+            out["indexed"] += int(stats.get("indexed") or 0)
+            out["skipped"] += int(stats.get("skipped") or 0)
+            out["per_document"].append({"document_id": doc_id, **stats})
+        except Exception as exc:
+            log.warning("reindex entities doc=%s: %s", doc_id, exc)
+            out["errors"].append({"document_id": doc_id, "error": str(exc)})
+    return out
+
+
+async def reindex_corpus(document_ids: list[str] | None = None) -> dict[str, Any]:
+    """Полная переиндексация L3+L4+entities для корпуса."""
+    repo = get_repo()
+    if document_ids:
+        ids = [d for d in document_ids if d]
+    else:
+        ids = [
+            item["id"]
+            for item in (repo.list(page=1, page_size=500)[0] or [])
+            if item.get("id")
+        ]
+    out: dict[str, Any] = {
+        "documents": 0,
+        "indexed_l3": 0,
+        "indexed_l4": 0,
+        "indexed_entities": 0,
+        "skipped": 0,
+        "per_document": [],
+        "errors": [],
+    }
+    for doc_id in ids:
+        graph = repo.read_graph(doc_id)
+        if not graph or not graph.get("nodes"):
+            md = repo.read_markdown(doc_id)
+            if md:
+                try:
+                    stats = await index_document_markdown(doc_id, md)
+                    out["documents"] += 1
+                    out["indexed_l3"] += int(stats.get("indexed") or 0)
+                    out["skipped"] += int(stats.get("skipped") or 0)
+                    out["per_document"].append({"document_id": doc_id, **stats})
+                except Exception as exc:
+                    out["errors"].append({"document_id": doc_id, "error": str(exc)})
+            continue
+        try:
+            stats = await index_document_graph(doc_id, graph)
+            out["documents"] += 1
+            out["indexed_l3"] += int(stats.get("indexed_l3") or 0)
+            out["indexed_l4"] += int(stats.get("indexed_l4") or 0)
+            out["indexed_entities"] += int(stats.get("indexed_entities") or 0)
+            out["skipped"] += int(stats.get("skipped") or 0)
+            out["per_document"].append({"document_id": doc_id, **stats})
+        except Exception as exc:
+            log.warning("reindex corpus doc=%s: %s", doc_id, exc)
+            out["errors"].append({"document_id": doc_id, "error": str(exc)})
+    return out
 
 
 async def list_indexed_points(
@@ -355,13 +715,19 @@ async def list_indexed_points(
     names = [collection] if collection else [
         settings.qdrant_collection_chunks,
         settings.qdrant_collection_claims,
+        settings.qdrant_collection_entities,
     ]
     filt: Filter | None = None
     if document_id is not None:
         filt = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
     out: list[dict[str, Any]] = []
+    allowed = {
+        settings.qdrant_collection_chunks,
+        settings.qdrant_collection_claims,
+        settings.qdrant_collection_entities,
+    }
     for name in names:
-        if name not in (settings.qdrant_collection_chunks, settings.qdrant_collection_claims):
+        if name not in allowed:
             continue
         try:
             offset = None
@@ -382,7 +748,8 @@ async def list_indexed_points(
                         "point_id": str(rec.id),
                         "node_id": payload.get("node_id"),
                         "neo4j_node_id": payload.get("neo4j_node_id") or payload.get("node_id"),
-                        "label": payload.get("label"),
+                        "label": payload.get("label") or payload.get("entity_type"),
+                        "entity_type": payload.get("entity_type"),
                         "layer": payload.get("layer"),
                         "text": (payload.get("text") or "")[:300],
                         "cluster_id": payload.get("cluster_id"),
@@ -420,6 +787,8 @@ def keyword_search(
     nodes = (graph or {}).get("nodes") or []
     hits: list[dict[str, Any]] = []
     tokens = [t for t in re.split(r"\s+", q) if t]
+    # Для коротких запросов — полное совпадение; для расширенных alias — достаточно ключевого токена.
+    primary_tokens = tokens[:3] if len(tokens) > 4 else tokens
 
     for node in nodes:
         label = str(node.get("label") or "")
@@ -434,7 +803,7 @@ def keyword_search(
         text_l = text.lower()
         if q in text_l:
             score = 1.0
-        elif all(t in text_l for t in tokens):
+        elif primary_tokens and all(t in text_l for t in primary_tokens):
             score = 0.7
         elif any(t in text_l for t in tokens):
             score = 0.4
@@ -473,6 +842,30 @@ def _doc_filter(
     return Filter(must=must) if must else None
 
 
+async def _qdrant_vector_search(
+    qdrant: Any,
+    *,
+    collection_name: str,
+    query: list[float],
+    query_filter: Filter | None = None,
+    limit: int = 10,
+    score_threshold: float | None = None,
+) -> list[Any]:
+    """Vector similarity search via query_points (qdrant-client 1.7+)."""
+    kwargs: dict[str, Any] = {
+        "collection_name": collection_name,
+        "query": query,
+        "limit": limit,
+        "with_payload": True,
+    }
+    if query_filter is not None:
+        kwargs["query_filter"] = query_filter
+    if score_threshold is not None:
+        kwargs["score_threshold"] = score_threshold
+    response = await qdrant.query_points(**kwargs)
+    return list(response.points or [])
+
+
 async def _qdrant_semantic(
     query_vector: list[float],
     collection: str,
@@ -486,17 +879,15 @@ async def _qdrant_semantic(
 ) -> list[dict[str, Any]]:
     qdrant = QdrantClientSingleton.instance().client
     filt = _doc_filter(document_id=document_id, document_ids=document_ids, layer=layer)
-    search_kwargs: dict[str, Any] = {
-        "collection_name": collection,
-        "query_vector": query_vector,
-        "query_filter": filt,
-        "limit": limit,
-        "with_payload": True,
-    }
-    if score_threshold is not None:
-        search_kwargs["score_threshold"] = score_threshold
     try:
-        results = await qdrant.search(**search_kwargs)
+        results = await _qdrant_vector_search(
+            qdrant,
+            collection_name=collection,
+            query=query_vector,
+            query_filter=filt,
+            limit=limit,
+            score_threshold=score_threshold,
+        )
     except Exception as exc:
         log.warning("qdrant search %s: %s", collection, exc)
         return []
@@ -509,6 +900,7 @@ async def _qdrant_semantic(
                 score=float(point.score or 0),
                 mode="semantic",
                 retrieval_factors=[retrieval_factor],
+                collection=collection,
             )
         )
     return hits
@@ -560,6 +952,60 @@ async def _scroll_l4_cluster_points(
     return out
 
 
+async def _chunk_keyword_hits(
+    query: str,
+    *,
+    document_id: str | None = None,
+    document_ids: list[str] | None = None,
+    layer: str | None = "L3",
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Keyword-поиск по lexical_tokens в mkg_chunks (fallback для коротких запросов)."""
+    settings = get_settings()
+    q_tokens = _lexical_tokens(query)
+    if not q_tokens:
+        return []
+    qdrant = QdrantClientSingleton.instance().client
+    filt = _doc_filter(document_id=document_id, document_ids=document_ids, layer=layer)
+    must = list(filt.must) if filt else []
+    must.append(FieldCondition(key="lexical_tokens", match=MatchAny(any=q_tokens[:16])))
+    scroll_filter = Filter(must=must)
+    out: list[dict[str, Any]] = []
+    offset = None
+    while len(out) < limit:
+        try:
+            records, offset = await qdrant.scroll(
+                collection_name=settings.qdrant_collection_chunks,
+                scroll_filter=scroll_filter,
+                limit=min(32, limit - len(out)),
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:
+            log.warning("chunk keyword scroll: %s", exc)
+            break
+        for rec in records:
+            payload = dict(rec.payload or {})
+            text_l = str(payload.get("text") or "").lower()
+            overlap = sum(1 for t in q_tokens if t in text_l or t in (payload.get("lexical_tokens") or []))
+            score = min(1.0, 0.35 + 0.15 * overlap)
+            out.append(
+                _search_hit(
+                    payload,
+                    score=score,
+                    mode="keyword",
+                    retrieval_factors=["l3_keyword"],
+                )
+            )
+            if len(out) >= limit:
+                break
+        if offset is None or not records:
+            break
+    out.sort(key=lambda h: (-float(h.get("score") or 0), str(h.get("node_id"))))
+    return out[:limit]
+
+
 async def combined_semantic_search(
     query: str,
     *,
@@ -583,6 +1029,10 @@ async def combined_semantic_search(
     llm = YandexLLMClient.instance()
     query_vector = await llm.embed(q, kind="query")
 
+    effective_threshold = score_threshold
+    if effective_threshold is None:
+        effective_threshold = _short_query_score_threshold(q)
+
     want_l3 = not layers or "L3" in layers
     want_l4 = not layers or "L4" in layers
     l3_limit = max(6, limit) if want_l3 else 0
@@ -599,8 +1049,19 @@ async def combined_semantic_search(
             layer="L3",
             limit=l3_limit,
             retrieval_factor="l3_embedding",
-            score_threshold=score_threshold,
+            score_threshold=effective_threshold,
         )
+        if len(l3_hits) < l3_limit:
+            kw_merged: dict[tuple[str, str], dict[str, Any]] = {_hit_key(h): h for h in l3_hits}
+            for hit in await _chunk_keyword_hits(
+                q,
+                document_id=document_id,
+                document_ids=document_ids,
+                layer="L3",
+                limit=l3_limit,
+            ):
+                kw_merged[_hit_key(hit)] = _merge_hit(kw_merged.get(_hit_key(hit)), hit)
+            l3_hits = sorted(kw_merged.values(), key=lambda h: (-float(h.get("score") or 0), str(h.get("node_id"))))[:l3_limit]
     if want_l4:
         l4_hits = await _qdrant_semantic(
             query_vector,
@@ -610,7 +1071,7 @@ async def combined_semantic_search(
             layer="L4",
             limit=l4_limit,
             retrieval_factor="l4_embedding",
-            score_threshold=score_threshold,
+            score_threshold=effective_threshold,
         )
 
     merged: dict[tuple[str, str], dict[str, Any]] = {}
@@ -690,19 +1151,199 @@ async def combined_semantic_search(
     return out[:limit]
 
 
+def _entity_filter(
+    *,
+    document_id: str | None = None,
+    document_ids: list[str] | None = None,
+    types: list[str] | None = None,
+) -> Filter | None:
+    must: list[FieldCondition] = []
+    if document_id:
+        must.append(FieldCondition(key="document_id", match=MatchValue(value=document_id)))
+    elif document_ids:
+        must.append(FieldCondition(key="document_id", match=MatchAny(any=document_ids)))
+    if types:
+        allowed = [t for t in types if t in ENTITY_LABELS]
+        if allowed:
+            must.append(FieldCondition(key="entity_type", match=MatchAny(any=allowed)))
+    return Filter(must=must) if must else None
+
+
+async def _entity_keyword_hits(
+    query: str,
+    *,
+    document_id: str | None = None,
+    document_ids: list[str] | None = None,
+    types: list[str] | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Keyword-поиск по lexical_tokens в mkg_entities (fallback / hybrid)."""
+    settings = get_settings()
+    q_tokens = _lexical_tokens(query)
+    if not q_tokens:
+        return []
+    qdrant = QdrantClientSingleton.instance().client
+    filt = _entity_filter(document_id=document_id, document_ids=document_ids, types=types)
+    must = list(filt.must) if filt else []
+    must.append(FieldCondition(key="lexical_tokens", match=MatchAny(any=q_tokens[:16])))
+    scroll_filter = Filter(must=must)
+    out: list[dict[str, Any]] = []
+    offset = None
+    while len(out) < limit:
+        try:
+            records, offset = await qdrant.scroll(
+                collection_name=settings.qdrant_collection_entities,
+                scroll_filter=scroll_filter,
+                limit=min(32, limit - len(out)),
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:
+            log.warning("entity keyword scroll: %s", exc)
+            break
+        for rec in records:
+            payload = dict(rec.payload or {})
+            text_l = str(payload.get("text") or "").lower()
+            overlap = sum(1 for t in q_tokens if t in text_l or t in (payload.get("lexical_tokens") or []))
+            score = min(1.0, 0.35 + 0.15 * overlap)
+            out.append(
+                _entity_search_hit(
+                    payload,
+                    score=score,
+                    mode="keyword",
+                    retrieval_factors=["entity_keyword"],
+                )
+            )
+            if len(out) >= limit:
+                break
+        if offset is None or not records:
+            break
+    out.sort(key=lambda h: (-float(h.get("score") or 0), str(h.get("node_id"))))
+    return out[:limit]
+
+
+async def search_entities(
+    query: str,
+    *,
+    types: list[str] | None = None,
+    limit: int = 20,
+    document_id: str | None = None,
+    document_ids: list[str] | None = None,
+    score_threshold: float | None = None,
+) -> list[dict[str, Any]]:
+    """Семантический (+ keyword hybrid) поиск Material/Process в mkg_entities. Без L4-кластеров."""
+    settings = get_settings()
+    if not settings.yandex_api_key or not settings.yandex_folder_id:
+        return await _entity_keyword_hits(
+            query,
+            document_id=document_id,
+            document_ids=document_ids,
+            types=types,
+            limit=limit,
+        )
+
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    entity_types = [t for t in (types or list(ENTITY_LABELS)) if t in ENTITY_LABELS]
+    if not entity_types:
+        entity_types = list(ENTITY_LABELS)
+
+    await ensure_qdrant_collections()
+    llm = YandexLLMClient.instance()
+    query_vector = await llm.embed(q, kind="query")
+    qdrant = QdrantClientSingleton.instance().client
+    filt = _entity_filter(
+        document_id=document_id,
+        document_ids=document_ids,
+        types=entity_types,
+    )
+    semantic_hits: list[dict[str, Any]] = []
+    try:
+        results = await _qdrant_vector_search(
+            qdrant,
+            collection_name=settings.qdrant_collection_entities,
+            query=query_vector,
+            query_filter=filt,
+            limit=limit,
+            score_threshold=score_threshold,
+        )
+        for point in results:
+            payload = dict(point.payload or {})
+            semantic_hits.append(
+                _entity_search_hit(
+                    payload,
+                    score=float(point.score or 0),
+                    mode="semantic",
+                    retrieval_factors=["entity_embedding"],
+                )
+            )
+    except Exception as exc:
+        log.warning("entity semantic search: %s", exc)
+
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for hit in semantic_hits:
+        merged[_hit_key(hit)] = _merge_hit(merged.get(_hit_key(hit)), hit)
+
+    if len(merged) < limit:
+        for hit in await _entity_keyword_hits(
+            q,
+            document_id=document_id,
+            document_ids=document_ids,
+            types=entity_types,
+            limit=limit,
+        ):
+            merged[_hit_key(hit)] = _merge_hit(merged.get(_hit_key(hit)), hit)
+
+    out = sorted(merged.values(), key=lambda h: (-float(h.get("score") or 0), str(h.get("node_id"))))
+    return out[:limit]
+
+
 async def search_chat_retrieval(
     query: str,
     *,
     limit: int = 9,
     document_ids: list[str] | None = None,
     history: list[dict[str, str]] | None = None,
+    fast: bool = False,
+    allowed_classifications: list[str] | None = None,
 ) -> dict[str, Any]:
     """Чат-поиск: L3 эмбеддинги + L4 эмбеддинги/кластеры, разбивка по факторам."""
     from mkg_core.graph_traversal import keyword_seeds_from_docs, neo4j_keyword_seeds
-    from mkg_core.search_query import effective_search_query
+    from mkg_core.search_query import effective_search_query, search_query_variants
 
+    raw_q = query.strip()
     search_q = effective_search_query(query, history)
-    scoped = [d for d in (document_ids or []) if d]
+    query_variants = search_query_variants(query, history)
+    scoped = _filter_document_ids([d for d in (document_ids or []) if d], allowed_classifications)
+
+    try:
+        from mkg_core.query_classify import is_conversational_query
+
+        if is_conversational_query(raw_q):
+            if scoped:
+                indexed_total = 0
+                for doc_id in scoped:
+                    counts = await count_indexed_points(document_id=doc_id)
+                    indexed_total += sum(counts.values())
+            else:
+                counts = await count_indexed_points()
+                indexed_total = sum(counts.values())
+            return {
+                "l3_hits": [],
+                "l4_hits": [],
+                "entity_hits": [],
+                "cluster_hits": [],
+                "all_hits": [],
+                "indexed_total": indexed_total,
+                "cluster_ids": [],
+                "search_query": raw_q,
+                "fallback": "conversational_skip",
+            }
+    except Exception:
+        pass
 
     if scoped:
         indexed_total = 0
@@ -713,59 +1354,131 @@ async def search_chat_retrieval(
         counts = await count_indexed_points()
         indexed_total = sum(counts.values())
 
-    fetch_limit = max(limit * 2, 12)
+    fetch_limit = max(limit + 2, 8) if fast else max(limit * 2, 12)
     all_hits: list[dict[str, Any]] = []
     fallback: str | None = None
+    repo = get_repo()
+    all_doc_ids = _filter_document_ids(
+        [
+            item["id"]
+            for item in (repo.list(page=1, page_size=200)[0] or [])
+            if item.get("id")
+        ],
+        allowed_classifications,
+    )
 
-    if search_q.strip():
-        all_hits = await combined_semantic_search(
-            search_q,
-            document_ids=scoped or None,
+    async def _unified_hits(
+        q: str,
+        *,
+        doc_scope: list[str] | None,
+        score_threshold: float | None = None,
+    ) -> list[dict[str, Any]]:
+        if not q.strip():
+            return []
+        result = await search_global(
+            q,
             limit=fetch_limit,
+            document_ids=doc_scope or None,
+            score_threshold=score_threshold,
+            allowed_classifications=allowed_classifications,
         )
+        return list(result.get("hits") or [])
+
+    variants = query_variants[:1] if fast else query_variants
+
+    if fast and variants:
+        variant = variants[0]
+        all_hits = await _unified_hits(variant, doc_scope=scoped)
+        if not all_hits and scoped and indexed_total == 0:
+            global_counts = await count_indexed_points()
+            if sum(global_counts.values()) > 0:
+                all_hits = await _unified_hits(variant, doc_scope=None)
+                if all_hits:
+                    fallback = "qdrant_global_retry"
+        if not all_hits and scoped:
+            fb_hits = keyword_seeds_from_docs(variant, scoped, limit=fetch_limit)
+            if not fb_hits and all_doc_ids:
+                fb_hits = keyword_seeds_from_docs(variant, all_doc_ids, limit=fetch_limit)
+            if not fb_hits:
+                fb_hits = await neo4j_keyword_seeds(raw_q or search_q, limit=fetch_limit)
+            if fb_hits:
+                all_hits = fb_hits
+                fallback = "graph_keyword"
+    elif variants:
+        for variant in variants:
+            all_hits = await _unified_hits(variant, doc_scope=scoped)
+            if all_hits:
+                break
 
         if not all_hits and scoped and indexed_total == 0:
             global_counts = await count_indexed_points()
             if sum(global_counts.values()) > 0:
-                all_hits = await combined_semantic_search(
-                    search_q,
-                    document_ids=None,
-                    limit=fetch_limit,
-                )
+                for variant in variants:
+                    all_hits = await _unified_hits(variant, doc_scope=None)
+                    if all_hits:
+                        fallback = "qdrant_global_retry"
+                        break
+
+        if not all_hits and scoped:
+            for variant in variants:
+                all_hits = await _unified_hits(variant, doc_scope=None, score_threshold=0.05)
                 if all_hits:
                     fallback = "qdrant_global_retry"
+                    break
 
         if not all_hits:
-            fb_hits = keyword_seeds_from_docs(search_q, scoped, limit=fetch_limit) if scoped else []
-            if not fb_hits and scoped:
-                repo = get_repo()
-                all_doc_ids = [
-                    item["id"]
-                    for item in (repo.list(page=1, page_size=200)[0] or [])
-                    if item.get("id")
-                ]
-                if all_doc_ids:
-                    fb_hits = keyword_seeds_from_docs(search_q, all_doc_ids[:12], limit=fetch_limit)
+            fb_hits: list[dict[str, Any]] = []
+            fb_global = False
+            for variant in variants:
+                if scoped:
+                    fb_hits = keyword_seeds_from_docs(variant, scoped, limit=fetch_limit)
+                if not fb_hits and all_doc_ids:
+                    fb_hits = keyword_seeds_from_docs(variant, all_doc_ids, limit=fetch_limit)
+                    fb_global = bool(fb_hits and scoped)
+                if fb_hits:
+                    break
             if not fb_hits:
-                fb_hits = await neo4j_keyword_seeds(search_q, limit=fetch_limit)
+                fb_hits = await neo4j_keyword_seeds(raw_q or search_q, limit=fetch_limit)
             if fb_hits:
                 all_hits = fb_hits
-                fallback = "graph_keyword" if scoped else "neo4j_keyword"
+                if fb_global:
+                    fallback = "graph_keyword_global"
+                elif scoped:
+                    fallback = "graph_keyword"
+                else:
+                    fallback = "graph_keyword" if any(
+                        h.get("retrieval_source") == "graph_keyword" for h in fb_hits
+                    ) else "neo4j_keyword"
             elif scoped and indexed_total > 0:
-                all_hits = await combined_semantic_search(
-                    search_q,
-                    document_ids=None,
-                    limit=fetch_limit,
-                    score_threshold=0.05,
-                )
-                if all_hits:
-                    fallback = "qdrant_global_retry"
+                for variant in variants:
+                    all_hits = await _unified_hits(
+                        variant,
+                        doc_scope=None,
+                        score_threshold=0.05,
+                    )
+                    if all_hits:
+                        fallback = "qdrant_global_retry"
+                        break
+
+    entity_hits: list[dict[str, Any]] = [
+        h for h in all_hits
+        if str(h.get("layer")) in ("L1", "L2")
+        or h.get("collection") == get_settings().qdrant_collection_entities
+    ]
 
     def _has_factor(hit: dict[str, Any], factor: str) -> bool:
         return factor in (hit.get("retrieval_factors") or [])
 
     l3_hits = [h for h in all_hits if str(h.get("layer")) == "L3" or _has_factor(h, "l3_embedding")]
     l4_hits = [h for h in all_hits if str(h.get("layer")) == "L4" and _has_factor(h, "l4_embedding")]
+    entity_only_hits = [
+        h for h in all_hits
+        if str(h.get("layer")) == "L1"
+        and (
+            _has_factor(h, "entity_embedding")
+            or _has_factor(h, "entity_keyword")
+        )
+    ]
     cluster_hits = [
         h for h in all_hits
         if _has_factor(h, "l4_cluster") or _has_factor(h, "l4_graph_bridge")
@@ -782,9 +1495,17 @@ async def search_chat_retrieval(
         if cluster_int >= 0 and cluster_int not in cluster_ids:
             cluster_ids.append(cluster_int)
 
+    l3_hits = _filter_hits_by_classifications(l3_hits, allowed_classifications)
+    l4_hits = _filter_hits_by_classifications(l4_hits, allowed_classifications)
+    entity_hits = _filter_hits_by_classifications(entity_hits, allowed_classifications)
+    entity_only_hits = _filter_hits_by_classifications(entity_only_hits, allowed_classifications)
+    cluster_hits = _filter_hits_by_classifications(cluster_hits, allowed_classifications)
+    all_hits = _filter_hits_by_classifications(all_hits, allowed_classifications)
+
     return {
         "l3_hits": l3_hits[:limit],
         "l4_hits": l4_hits[:limit],
+        "entity_hits": (entity_hits or entity_only_hits)[:limit],
         "cluster_hits": cluster_hits[:limit],
         "all_hits": all_hits[: max(limit, 10)],
         "indexed_total": indexed_total,
@@ -821,13 +1542,18 @@ async def semantic_search_global(
     limit: int = 10,
     layers: list[str] | None = None,
     document_ids: list[str] | None = None,
+    score_threshold: float | None = None,
 ) -> list[dict[str, Any]]:
     """Глобальный двухфакторный поиск по Qdrant."""
+    threshold = score_threshold
+    if threshold is None:
+        threshold = _short_query_score_threshold(query)
     return await combined_semantic_search(
         query,
         document_ids=document_ids,
         limit=limit,
         layers=layers,
+        score_threshold=threshold,
     )
 
 
@@ -838,22 +1564,66 @@ async def search_global(
     mode: SearchMode = "auto",
     layers: list[str] | None = None,
     document_ids: list[str] | None = None,
+    include_entities: bool = True,
+    score_threshold: float | None = None,
+    allowed_classifications: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Поиск по всей базе Qdrant (semantic). Keyword по всем графам не поддерживается."""
+    """Поиск по всей базе Qdrant: mkg_chunks + mkg_claims + mkg_entities."""
     settings = get_settings()
+    scoped_doc_ids = _filter_document_ids(list(document_ids or []), allowed_classifications)
     can_semantic = bool(settings.yandex_api_key and settings.yandex_folder_id)
-    used_mode: SearchMode = mode
+    threshold = score_threshold
+    if threshold is None:
+        threshold = _short_query_score_threshold(query)
 
     if mode in ("auto", "semantic") and can_semantic:
         semantic_hits = await semantic_search_global(
-            query, limit=limit, layers=layers, document_ids=document_ids,
+            query,
+            limit=limit,
+            layers=layers,
+            document_ids=scoped_doc_ids or None,
+            score_threshold=threshold,
         )
-        if semantic_hits or mode == "semantic":
-            used_mode = "semantic"
-            return {"mode": used_mode, "hits": semantic_hits}
+        entity_hits: list[dict[str, Any]] = []
+        want_entities = include_entities and (
+            not layers or any(l in layers for l in ("L1", "L2", "L4"))
+        )
+        if want_entities:
+            entity_hits = await search_entities(
+                query,
+                types=list(ENTITY_LABELS),
+                limit=limit,
+                document_ids=scoped_doc_ids or None,
+                score_threshold=threshold,
+            )
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        for hit in semantic_hits + entity_hits:
+            merged[_hit_key(hit)] = _merge_hit(merged.get(_hit_key(hit)), hit)
+        out_hits = sorted(
+            merged.values(),
+            key=lambda h: (-float(h.get("score") or 0), str(h.get("node_id"))),
+        )[:limit]
+        out_hits = _filter_hits_by_classifications(out_hits, allowed_classifications)
+        counts = await count_indexed_points()
+        return {
+            "mode": "semantic",
+            "hits": out_hits,
+            "total": len(out_hits),
+            "entity_hits": entity_hits,
+            "chunk_hits": [h for h in semantic_hits if str(h.get("layer")) == "L3"],
+            "collections": {
+                settings.qdrant_collection_chunks: counts.get(settings.qdrant_collection_chunks, 0),
+                settings.qdrant_collection_claims: counts.get(settings.qdrant_collection_claims, 0),
+                settings.qdrant_collection_entities: counts.get(settings.qdrant_collection_entities, 0),
+            },
+        }
 
     if mode == "semantic":
-        return {"mode": "semantic", "hits": []}
+        return {
+            "mode": "semantic",
+            "hits": [],
+            "note": "Yandex embeddings не настроены (YANDEX_API_KEY / YANDEX_FOLDER_ID).",
+        }
 
     return {
         "mode": "unavailable",
@@ -939,6 +1709,7 @@ async def embedding_status(document_id: str | None = None) -> dict[str, Any]:
         "total_points": total_points,
         "l3_points": counts.get(settings.qdrant_collection_chunks, 0),
         "l4_points": counts.get(settings.qdrant_collection_claims, 0),
+        "entity_points": counts.get(settings.qdrant_collection_entities, 0),
         "document_id": document_id,
         "collections": {
             settings.qdrant_collection_chunks: {
@@ -949,15 +1720,25 @@ async def embedding_status(document_id: str | None = None) -> dict[str, Any]:
                 "purpose": "L4 nodes — эмбеддинги + HDBSCAN cluster_id / is_anomaly",
                 "points": counts.get(settings.qdrant_collection_claims, 0),
             },
+            settings.qdrant_collection_entities: {
+                "purpose": "L1 Material/Process — отдельный индекс, без кластеров",
+                "points": counts.get(settings.qdrant_collection_entities, 0),
+            },
         },
         "vector_size": settings.qdrant_vector_size,
         "yandex_configured": bool(settings.yandex_api_key and settings.yandex_folder_id),
         "auto_index_on_search": True,
         "pipeline_auto_index": True,
-        "search_factors": ["l3_embedding", "l4_embedding", "l4_graph_bridge", "l4_cluster"],
+        "search_factors": [
+            "l3_embedding", "l3_keyword", "l4_embedding", "l4_graph_bridge", "l4_cluster",
+            "entity_embedding", "entity_keyword",
+        ],
+        "entity_labels": sorted(ENTITY_LABELS),
         "note": (
-            "L3: семантический поиск по mkg_chunks. "
-            "L4: HDBSCAN-кластеризация по mkg_claims; поиск объединяет оба фактора."
+            "L3: семантический + keyword по mkg_chunks. "
+            "L4: HDBSCAN-кластеризация по mkg_claims; поиск объединяет оба фактора. "
+            "L1/L2/L4 Measurement: коллекция mkg_entities (Material, Process, Equipment, "
+            "TechnologySolution, Expert, Measurement) — без cluster_id."
         ),
     }
 

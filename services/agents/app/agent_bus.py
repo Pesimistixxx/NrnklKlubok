@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-REQUEST_TYPES = frozenset({"request_evidence", "graph_expand", "question", "gap_found"})
+REQUEST_TYPES = frozenset({"request_evidence", "graph_expand", "question", "gap_found", "anomaly_found"})
 RESPONSE_TYPES = frozenset({"response", "evidence", "graph_patch"})
 
 ALL_LAYERS = ("L1", "L2", "L3", "L4", "L5", "L6")

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import time
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from mkg_core import (
     update_document_status,
     upsert_document,
 )
+from mkg_core.meta_db import count_restricted_documents as db_count_restricted_documents
 from mkg_core.config import get_settings
 from mkg_core.queue import enqueue, abort_job
 from mkg_core.layer_pipeline import build_layer_pipeline
@@ -41,9 +43,14 @@ from mkg_core.ontology import LABEL_LAYER, NODE_PROP_HINTS, NODE_PROP_UI_REQUIRE
 from app.agent_api import router as agent_router
 from app.agents_proxy import router as agents_proxy_router
 from app.collab_api import router as collab_router
+from app.compare_api import router as compare_router
 from app.dashboard_api import router as dashboard_router
+from app.data_access import allowed_classifications, assert_document_access
+from app.data_access_api import router as data_access_router
 from app.docs_api import router as docs_router
 from app.graph_anomalies import router as graph_anomalies_router
+from app.request_context import role_from_request
+from app.search_api import router as search_router
 from app.schemas import (
     BatchUploadItem,
     BatchUploadOut,
@@ -61,6 +68,8 @@ from app.schemas import (
     LayerPipelineOut,
     PipelineLogOut,
     ClearDatabaseOut,
+    ReindexCorpusOut,
+    ReindexEntitiesOut,
     RuntimeConfigOut,
     RuntimeConfigUpdate,
 )
@@ -90,6 +99,9 @@ app.include_router(collab_router, prefix=API)
 app.include_router(agents_proxy_router, prefix=API)
 app.include_router(graph_anomalies_router, prefix=API)
 app.include_router(dashboard_router, prefix=API)
+app.include_router(compare_router, prefix=API)
+app.include_router(search_router, prefix=API)
+app.include_router(data_access_router, prefix=API)
 
 app.add_middleware(
     CORSMiddleware,
@@ -132,6 +144,11 @@ def _merge_repo(rec: dict) -> dict:
         "l4_clustered",
         "l4_points",
         "l4_error",
+        "source_location",
+        "geography",
+        "material_date",
+        "tags",
+        "ingested_at",
     ):
         if repo_rec.get(key) is not None:
             merged[key] = repo_rec[key]
@@ -154,11 +171,51 @@ def _graph_stats(doc_id: str, rec: dict) -> tuple[int, int, bool | None]:
     return int(nodes or 0), int(rels or 0), rec.get("neo4j_synced")
 
 
+async def _document_access(role_id: str) -> list[str]:
+    return await allowed_classifications(role_id)
+
+
+async def _restricted_document_count(
+    allowed: list[str],
+    *,
+    geography: str | None = None,
+    material_year: int | None = None,
+) -> int:
+    try:
+        return await db_count_restricted_documents(
+            geography=geography,
+            material_year=material_year,
+            allowed_classifications=allowed,
+        )
+    except Exception:
+        return get_repo().count_restricted(
+            geography=geography,
+            material_year=material_year,
+            allowed_classifications=allowed,
+        )
+
+
+async def _load_document_record(doc_id: str) -> dict | None:
+    rec = None
+    try:
+        rec = await db_get_document(doc_id)
+    except Exception:
+        rec = None
+    if not rec:
+        rec = get_repo().get(doc_id)
+    return rec
+
+
 def _to_out(rec: dict) -> DocumentOut:
     rec = _merge_repo(rec)
     upload_date = rec.get("upload_date")
     if upload_date is None:
         upload_date = "1970-01-01T00:00:00+00:00"
+    status_raw = rec.get("status", "uploaded")
+    try:
+        status = DocStatus(status_raw)
+    except ValueError:
+        status = DocStatus.uploaded
     return DocumentOut(
         id=rec["id"],
         file_name=rec["file_name"],
@@ -167,7 +224,7 @@ def _to_out(rec: dict) -> DocumentOut:
         classification=rec.get("classification", "открытый"),
         organization=rec.get("organization"),
         hash_sum=rec["hash_sum"],
-        status=DocStatus(rec.get("status", "uploaded")),
+        status=status,
         upload_date=upload_date,
         size_bytes=rec["size_bytes"],
         step=rec.get("step"),
@@ -179,7 +236,44 @@ def _to_out(rec: dict) -> DocumentOut:
         l4_clusters=rec.get("l4_clusters"),
         l4_anomalies=rec.get("l4_anomalies"),
         l4_clustered=rec.get("l4_clustered"),
+        source_location=rec.get("source_location"),
+        geography=rec.get("geography"),
+        material_date=_parse_material_date(rec.get("material_date")),
+        tags=_parse_tags(rec.get("tags")),
+        ingested_at=_parse_datetime(rec.get("ingested_at")),
     )
+
+
+def _parse_material_date(value: Any):
+    if not value:
+        return None
+    if hasattr(value, "isoformat") and not isinstance(value, str):
+        return value
+    try:
+        from datetime import date as date_cls
+
+        return date_cls.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _parse_tags(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(x) for x in value if x]
+    return [str(value)]
+
+
+def _parse_datetime(value: Any):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 async def _run_ingestion_inline(doc_id: str) -> None:
@@ -329,6 +423,9 @@ async def upload_document(
     file: UploadFile = File(...),
     classification: str = Form("открытый"),
     processing_mode: str = Form("full"),
+    source_location: str | None = Form(None),
+    geography: str | None = Form(None),
+    material_date: str | None = Form(None),
 ) -> DocumentOut:
     content = await file.read()
     try:
@@ -337,6 +434,9 @@ async def upload_document(
             content,
             classification=classification,
             processing_mode=processing_mode,
+            source_location=source_location,
+            geography=geography,
+            material_date=material_date,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -351,6 +451,9 @@ async def upload_documents_batch(
     files: list[UploadFile] = File(...),
     classification: str = Form("открытый"),
     processing_mode: str = Form("full"),
+    source_location: str | None = Form(None),
+    geography: str | None = Form(None),
+    material_date: str | None = Form(None),
 ) -> BatchUploadOut:
     if not files:
         raise HTTPException(status_code=400, detail="Не переданы файлы")
@@ -365,6 +468,9 @@ async def upload_documents_batch(
                 content,
                 classification=classification,
                 processing_mode=processing_mode,
+                source_location=source_location,
+                geography=geography,
+                material_date=material_date,
             )
             if rec.get("job_id") is None and rec["status"] == DocStatus.uploaded.value:
                 background.add_task(_run_ingestion_inline, rec["id"])
@@ -496,36 +602,79 @@ async def cluster_document_l4(doc_id: str) -> dict[str, Any]:
 
 
 @app.get(f"{API}/documents", response_model=DocumentList)
-async def list_documents(page: int = 1, page_size: int = 20) -> DocumentList:
+async def list_documents(
+    request: Request,
+    page: int = 1,
+    page_size: int = 20,
+    geography: str | None = None,
+    material_year: int | None = None,
+) -> DocumentList:
+    role_id = role_from_request(request)
+    allowed = await _document_access(role_id)
+    restricted_count = 0
     try:
-        items, total = await db_list_documents(page, page_size)
+        items, total = await db_list_documents(
+            page,
+            page_size,
+            geography=geography,
+            material_year=material_year,
+            classifications=allowed,
+        )
+        restricted_count = await _restricted_document_count(
+            allowed, geography=geography, material_year=material_year
+        )
     except Exception:
-        items, total = get_repo().list(page, page_size)
+        items, total = get_repo().list(
+            page,
+            page_size,
+            geography=geography,
+            material_year=material_year,
+            classifications=allowed,
+        )
+        restricted_count = get_repo().count_restricted(
+            geography=geography,
+            material_year=material_year,
+            allowed_classifications=allowed,
+        )
+    try:
+        out_items = [_to_out(r) for r in items]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка сериализации документов: {exc}") from exc
     return DocumentList(
-        items=[_to_out(r) for r in items], total=total, page=page, page_size=page_size
+        items=out_items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        restricted_count=restricted_count,
     )
 
 
 @app.get(f"{API}/documents/{{doc_id}}", response_model=DocumentOut)
-async def get_document(doc_id: str) -> DocumentOut:
-    rec = None
-    try:
-        rec = await db_get_document(doc_id)
-    except Exception:
-        rec = None
-    if not rec:
-        rec = get_repo().get(doc_id)
+async def get_document(request: Request, doc_id: str) -> DocumentOut:
+    rec = await _load_document_record(doc_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     return _to_out(rec)
 
 
 @app.get(f"{API}/documents/{{doc_id}}/markdown")
 async def get_markdown(
+    request: Request,
     doc_id: str,
     variant: str = Query(default="clean", pattern="^(clean|raw|marked)$"),
     download: bool = Query(default=False),
 ) -> Response:
+    rec = await _load_document_record(doc_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     repo = get_repo()
     if variant == "marked":
         md = repo.read_marked_markdown(doc_id)
@@ -559,11 +708,17 @@ async def get_markdown(
 
 
 @app.get(f"{API}/documents/{{doc_id}}/source")
-async def get_source(doc_id: str) -> Response:
+async def get_source(request: Request, doc_id: str) -> Response:
+    rec = await _load_document_record(doc_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     raw = get_repo().read_source(doc_id)
     if raw is None:
         raise HTTPException(status_code=404, detail="Исходник не найден")
-    rec = get_repo().get(doc_id) or {}
     return Response(content=raw, media_type=rec.get("mime_type") or "application/octet-stream")
 
 
@@ -637,6 +792,11 @@ async def get_preview(doc_id: str) -> dict:
         "hash_sum": rec.get("hash_sum"),
         "size_bytes": rec.get("size_bytes"),
         "upload_date": rec.get("upload_date"),
+        "source_location": rec.get("source_location"),
+        "geography": rec.get("geography"),
+        "material_date": _parse_material_date(rec.get("material_date")),
+        "tags": _parse_tags(rec.get("tags")),
+        "ingested_at": _parse_datetime(rec.get("ingested_at")),
         "lang": rec.get("lang"),
         "step": rec.get("step"),
         "source_kind": source_kind,
@@ -682,6 +842,61 @@ async def clear_database(confirm: bool = False) -> ClearDatabaseOut:
     return ClearDatabaseOut(ok=True, storage=storage, postgres_documents=pg_count, neo4j_cleared=neo4j_cleared)
 
 
+@app.post(f"{API}/admin/reindex-entities", response_model=ReindexEntitiesOut)
+async def admin_reindex_entities(
+    document_id: str | None = Query(None, description="Один документ или весь корпус"),
+) -> ReindexEntitiesOut:
+    """Backfill mkg_entities (Material, Process, Equipment, …) для корпуса."""
+    from mkg_core.embeddings import reindex_corpus_entities, reindex_document_entities
+
+    if document_id:
+        doc_id = document_id if document_id.startswith("doc:") else f"doc:{document_id}"
+        if not get_repo().get(doc_id):
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        stats = await reindex_document_entities(doc_id)
+        return ReindexEntitiesOut(
+            documents=1,
+            indexed=int(stats.get("indexed") or 0),
+            skipped=int(stats.get("skipped") or 0),
+            collection=str(stats.get("collection") or get_settings().qdrant_collection_entities),
+            per_document=[{"document_id": doc_id, **stats}],
+        )
+    result = await reindex_corpus_entities()
+    return ReindexEntitiesOut(**result)
+
+
+@app.post(f"{API}/admin/reindex", response_model=ReindexCorpusOut)
+async def admin_reindex_corpus(
+    document_id: str | None = Query(None, description="Один документ или весь корпус"),
+) -> ReindexCorpusOut:
+    """Полная переиндексация L3+L4+entities в Qdrant."""
+    from mkg_core.embeddings import index_document_graph, reindex_corpus
+
+    if document_id:
+        doc_id = document_id if document_id.startswith("doc:") else f"doc:{document_id}"
+        if not get_repo().get(doc_id):
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        graph = get_repo().read_graph(doc_id)
+        if graph and graph.get("nodes"):
+            stats = await index_document_graph(doc_id, graph)
+        else:
+            from mkg_core.embeddings import index_document_markdown
+            md = get_repo().read_markdown(doc_id)
+            if not md:
+                raise HTTPException(status_code=409, detail="Нет графа и markdown для индексации")
+            stats = await index_document_markdown(doc_id, md)
+        return ReindexCorpusOut(
+            documents=1,
+            indexed_l3=int(stats.get("indexed_l3") or stats.get("indexed") or 0),
+            indexed_l4=int(stats.get("indexed_l4") or 0),
+            indexed_entities=int(stats.get("indexed_entities") or 0),
+            skipped=int(stats.get("skipped") or 0),
+            per_document=[{"document_id": doc_id, **stats}],
+        )
+    result = await reindex_corpus()
+    return ReindexCorpusOut(**result)
+
+
 @app.get(f"{API}/documents/{{doc_id}}/logs", response_model=PipelineLogOut)
 async def get_document_logs(doc_id: str, limit: int = 100) -> PipelineLogOut:
     if not get_repo().get(doc_id):
@@ -690,9 +905,14 @@ async def get_document_logs(doc_id: str, limit: int = 100) -> PipelineLogOut:
 
 
 @app.get(f"{API}/graph/documents/{{doc_id}}", response_model=GraphOut)
-async def get_document_graph(doc_id: str) -> GraphOut:
-    if not get_repo().get(doc_id):
+async def get_document_graph(request: Request, doc_id: str) -> GraphOut:
+    rec = await _load_document_record(doc_id)
+    if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     payload = get_repo().read_graph(doc_id)
     if not payload:
         raise HTTPException(status_code=404, detail="Граф ещё не сформирован")
@@ -727,13 +947,19 @@ def _node_layer_label(node: dict[str, Any] | None) -> str:
     response_model=GraphRelationshipDetailOut,
 )
 async def get_document_relationship(
+    request: Request,
     doc_id: str,
     from_: str = Query(alias="from"),
     to: str = Query(),
     type: str = Query(),
 ) -> GraphRelationshipDetailOut:
-    if not get_repo().get(doc_id):
+    rec = await _load_document_record(doc_id)
+    if not rec:
         raise HTTPException(status_code=404, detail="Документ не найден")
+    await assert_document_access(
+        role_from_request(request),
+        rec.get("classification"),
+    )
     if not from_ or not to or not type:
         raise HTTPException(status_code=400, detail="Параметры from, to и type обязательны")
     payload = get_repo().read_graph(doc_id)
@@ -937,9 +1163,13 @@ def _annotate_multi_doc_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 @app.get(f"{API}/graph/all", response_model=GraphOut)
-async def get_merged_graph() -> GraphOut:
+async def get_merged_graph(request: Request) -> GraphOut:
     """Объединённый граф всех документов с узлами."""
-    items, _ = await db_list_documents(1, 500)
+    allowed = await _document_access(role_from_request(request))
+    try:
+        items, _ = await db_list_documents(1, 500, classifications=allowed)
+    except Exception:
+        items, _ = get_repo().list(1, 500, classifications=allowed)
     merged_nodes: list[dict] = []
     merged_rels: list[dict] = []
     seen_ids: set[str] = set()

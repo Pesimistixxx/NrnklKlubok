@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 from mkg_core import Neo4jClient, YandexLLMClient, get_settings
 from mkg_core.api_errors import format_api_error, is_fatal_api_error
+from mkg_core.doc_metadata import apply_metadata_to_graph
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
 from mkg_core.ontology import (
     L4_LABELS,
@@ -743,7 +744,8 @@ def _ensure_document_and_sources(document_id: str, payload: GraphPayload) -> Gra
     nodes = list(payload.nodes)
     if not has_doc:
         nodes.insert(0, {"id": document_id, "label": "Document", "props": {"id": document_id}})
-    return GraphPayload(nodes=nodes, relationships=payload.relationships)
+    payload = GraphPayload(nodes=nodes, relationships=payload.relationships)
+    return apply_metadata_to_graph(payload, document_id)
 
 
 _L1_LABELS = frozenset(
