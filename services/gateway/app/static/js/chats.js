@@ -38,6 +38,7 @@
     const d = data?.detail;
     if (typeof d === "string") return d;
     if (Array.isArray(d)) return d[0]?.msg || fallback;
+    if (data?.message && typeof data.message === "string") return data.message;
     return fallback;
   }
 

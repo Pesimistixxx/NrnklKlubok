@@ -44,6 +44,29 @@ _ORCHESTRATOR_PLACEHOLDER_RE = re.compile(
     r"^Найдено \d+ узлов и \d+ связей по слоям MKG\.\s*$"
 )
 
+
+def _format_llm_error(exc: Exception) -> str:
+    """Понятное сообщение для UI вместо сырого SDK-исключения."""
+    msg = str(exc)
+    upper = msg.upper()
+    if "401" in msg or "UNAUTHENTICATED" in upper or "UNKNOWN API KEY" in upper:
+        return (
+            "Неверный или просроченный YANDEX_API_KEY. "
+            "Создайте API-ключ сервисного аккаунта с scope yc.ai.languageModels.execute "
+            "и обновите .env, затем пересоздайте контейнеры."
+        )
+    if "403" in msg or "PERMISSION_DENIED" in upper:
+        return (
+            "Нет доступа к Yandex LLM для этого каталога. "
+            "Проверьте YANDEX_FOLDER_ID и роль ai.languageModels.user на сервисном аккаунте."
+        )
+    if "404" in msg and ("model" in msg.lower() or "NOT_FOUND" in upper):
+        return (
+            "Модель LLM не найдена. Проверьте YANDEX_MODEL_PRO, YANDEX_MODEL_LITE "
+            f"и YANDEX_FOLDER_ID. ({msg})"
+        )
+    return msg
+
 _LAYER_AGENT_QUESTIONS: dict[str, str] = {
     "L1": "Какие материалы, процессы и оборудование связаны с запросом?",
     "L2": "Кто и где упоминается в контексте документов?",
@@ -941,7 +964,7 @@ async def run_direct_conversational_reply(
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Прямой ответ: превышен лимит времени LLM") from None
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Ошибка LLM: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Ошибка LLM: {_format_llm_error(exc)}") from exc
 
     text = sanitize_user_facing_text((reply or "").strip())
     if not text:
@@ -1165,7 +1188,7 @@ async def run_dialog_fast(
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Быстрый ответ: превышен лимит времени LLM (~4 с)") from None
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Ошибка LLM: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Ошибка LLM: {_format_llm_error(exc)}") from exc
 
     text = sanitize_user_facing_text((reply or "").strip())
     if not text:
@@ -1522,7 +1545,7 @@ async def run_chat_query(
         llm = YandexLLMClient.instance()
         reply = await llm.chat(system, user_prompt, temperature=0.35, max_tokens=1024)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Ошибка LLM: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Ошибка LLM: {_format_llm_error(exc)}") from exc
 
     text = sanitize_user_facing_text((reply or "").strip())
     if not text:

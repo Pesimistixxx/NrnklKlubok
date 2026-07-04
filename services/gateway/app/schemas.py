@@ -723,7 +723,7 @@ class ChatCompleteOut(BaseModel):
     sources: list[ChatSourceOut] = Field(default_factory=list)
     layer_results: list[dict[str, Any]] | None = None
     timing_ms: int = 0
-    speed_mode: Literal["fast", "full", "compare"] = "full"
+    speed_mode: Literal["fast", "full", "compare", "direct"] = "full"
 
 
 class QueryTestIn(BaseModel):
