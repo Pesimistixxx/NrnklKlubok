@@ -20,6 +20,7 @@ from mkg_core.embeddings import (
 )
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
 from mkg_core.layer_pipeline import LAYER_ORDER, L5_LABELS, build_layer_pipeline
+from mkg_core.ontology import ALL_REL_TYPES
 
 from app.schemas import (
     AgentCapabilitiesOut,
@@ -49,39 +50,8 @@ from app.storage import get_repo
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
-# Типы связей из онтологии MKG (extraction + schema)
-_ONTOLOGY_REL_TYPES = sorted(
-    {
-        "AUTHORED",
-        "BELONGS_TO",
-        "COMPARABLE_TO",
-        "CONSUMES_REAGENT",
-        "CONTEXT_FOR",
-        "DATA_SOURCE_FOR",
-        "ABOUT",
-        "DERIVED_FROM",
-        "ASSERTED_BY",
-        "DESCRIBES_SOLUTION",
-        "EVALUATED_AGAINST",
-        "GOVERNED_BY",
-        "HAS_ECONOMIC_INDICATOR",
-        "HAS_ENVIRONMENTAL_INDICATOR",
-        "HAS_EVENT",
-        "HAS_LANG",
-        "HAS_PARAGRAPH",
-        "IN_EQUIPMENT",
-        "ISSUED_AT",
-        "NEXT_PARAGRAPH",
-        "ON_TIMELINE",
-        "OPERATES_PROC",
-        "SOURCE",
-        "STRUCTURING",
-        "TAGGED_WITH",
-        "USES_MAT",
-        "USES_MATERIAL_TS",
-        "WRITES_LOG",
-    }
-)
+# Типы связей из канонической онтологии MKG (единый источник правды).
+_ONTOLOGY_REL_TYPES = sorted(ALL_REL_TYPES)
 
 
 def _node_layer(node: dict[str, Any]) -> str:

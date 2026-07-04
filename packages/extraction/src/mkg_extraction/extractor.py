@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 from mkg_core import Neo4jClient, YandexLLMClient, get_settings
 from mkg_core.api_errors import format_api_error, is_fatal_api_error
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
+from mkg_core.ontology import sanitize_graph_payload
 from mkg_core.runtime_config import get_llm_model
 
 try:
@@ -194,15 +195,6 @@ async def _extract_rule_based(document_id: str, markdown: str) -> GraphPayload:
                 "props": {"index": idx, "is_part_of_summary": False},
             }
         )
-        rels.append(
-            {
-                "type": "CONTEXT_FOR",
-                "from": para_id,
-                "to": exp_id,
-                "props": {"confidence": 0.4, "model_extractor": "rule-based-v1"},
-            }
-        )
-
         if block.startswith("#"):
             title = block.lstrip("#").strip()
             heading_id = f"{document_id}:h:{_slug(title) or idx}"
@@ -242,33 +234,8 @@ async def _extract_rule_based(document_id: str, markdown: str) -> GraphPayload:
             if _contains_token(block_l, token):
                 rel_key = (exp_id, "OPERATES_PROC", proc_id)
                 if rel_key not in seen_rels:
-                    rels.append({"type": "OPERATES_PROC", "from": exp_id, "to": proc_id, "props": {"mode": "unknown"}})
+                    rels.append({"type": "OPERATES_PROC", "from": exp_id, "to": proc_id, "props": {}})
                     seen_rels.add(rel_key)
-
-                sol_id = f"solution:{_slug(token)}"
-                if (sol_id, "TechnologySolution") not in seen_nodes:
-                    nodes.append(
-                        {
-                            "id": sol_id,
-                            "label": "TechnologySolution",
-                            "props": {
-                                "id": sol_id,
-                                "name_ru": f"Решение: {token}",
-                                "name_en": f"solution {name_en}",
-                                "trl_level": 4,
-                                "confidence": 0.4,
-                            },
-                        }
-                    )
-                    seen_nodes.add((sol_id, "TechnologySolution"))
-                rel_s = (sol_id, "DESCRIBES_SOLUTION", proc_id)
-                if rel_s not in seen_rels:
-                    rels.append({"type": "DESCRIBES_SOLUTION", "from": sol_id, "to": proc_id, "props": {}})
-                    seen_rels.add(rel_s)
-                rel_src = (sol_id, "SOURCE", document_id)
-                if rel_src not in seen_rels:
-                    rels.append({"type": "SOURCE", "from": sol_id, "to": document_id, "props": {}})
-                    seen_rels.add(rel_src)
 
         for token, (mat_id, name_en) in material_terms.items():
             if _contains_token(block_l, token) and (mat_id, "Material") not in seen_nodes:
@@ -826,19 +793,21 @@ def _bridge_text_to_layers(document_id: str, markdown: str, payload: GraphPayloa
         elif label in _L6_LABELS:
             add_rel("ABOUT", para_id, node_id, bridge="topic_match", track_entity_link=True)
 
-    for sec in (n for n in payload.nodes if n.get("label") == "SecurityRole"):
-        sec_id = str(sec.get("id") or "")
-        if not sec_id:
-            continue
-        for para_id in para_ids:
-            add_rel("CONTEXT_FOR", para_id, sec_id, bridge="classification", confidence=0.6)
-
-    for ver in (n for n in payload.nodes if n.get("label") == "VerificationStatus"):
-        ver_id = str(ver.get("id") or "")
-        if not ver_id:
-            continue
-        for para_id in entity_linked_paras:
-            add_rel("CONTEXT_FOR", para_id, ver_id, bridge="verification_scope", confidence=0.5)
+    # SecurityRole уже привязан к документу через GOVERNED_BY (_build_l5) —
+    # не дублируем шумными CONTEXT_FOR от каждого абзаца.
+    # VerificationStatus логично относить к опытам (HAS_VALIDATION по модели ТЗ),
+    # а не к тексту: связываем со всеми ExperimentRun документа.
+    run_ids = [
+        str(n.get("id")) for n in payload.nodes
+        if n.get("label") == "ExperimentRun" and n.get("id")
+    ]
+    ver_ids = [
+        str(n.get("id")) for n in payload.nodes
+        if n.get("label") == "VerificationStatus" and n.get("id")
+    ]
+    for run_id in run_ids:
+        for ver_id in ver_ids:
+            add_rel("HAS_VALIDATION", run_id, ver_id, bridge="verification_scope", confidence=0.5)
 
     cross_total = sum(cross_counts.values())
     log.info(
@@ -872,7 +841,7 @@ async def _persist_partial_graph(document_id: str, payload: GraphPayload, step: 
         from mkg_core.meta_db import update_document_status
         from mkg_core.store import get_repo
 
-        cleaned = dedupe_graph_payload(payload).as_dict()
+        cleaned = sanitize_graph_payload(payload).as_dict()
         nodes = len(cleaned.get("nodes") or [])
         rels = len(cleaned.get("relationships") or [])
         get_repo().save_graph(document_id, cleaned)
@@ -916,7 +885,7 @@ async def extract_from_markdown(
         rb = await _extract_rule_based(document_id, markdown)
         merged = _merge_payloads(rb, l3, l5)
         merged = _ensure_document_and_sources(document_id, merged)
-        return dedupe_graph_payload(_bridge_text_to_layers(document_id, markdown, merged))
+        return sanitize_graph_payload(_bridge_text_to_layers(document_id, markdown, merged))
 
     try:
         model = await get_llm_model()
@@ -1031,7 +1000,7 @@ async def extract_from_markdown(
         merged = _merge_payloads(meta_payload, ef_payload, l6_payload, l3, l5)
         merged = _ensure_document_and_sources(document_id, merged)
         merged = _bridge_text_to_layers(document_id, markdown, merged)
-        return dedupe_graph_payload(merged)
+        return sanitize_graph_payload(merged)
     except ExtractionCancelled:
         raise
     except Exception as exc:
@@ -1048,4 +1017,4 @@ async def extract_from_markdown(
         rb = await _extract_rule_based(document_id, markdown)
         merged = _merge_payloads(rb, l3, l5)
         merged = _ensure_document_and_sources(document_id, merged)
-        return dedupe_graph_payload(_bridge_text_to_layers(document_id, markdown, merged))
+        return sanitize_graph_payload(_bridge_text_to_layers(document_id, markdown, merged))

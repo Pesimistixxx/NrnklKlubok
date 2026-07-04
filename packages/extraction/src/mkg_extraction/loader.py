@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from mkg_core import Neo4jClient
-from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
+from mkg_core.graph_payload import GraphPayload
+from mkg_core.ontology import sanitize_graph_payload
 
 
 _SAFE_LABEL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -46,7 +47,7 @@ async def ensure_schema_applied() -> bool:
 
 async def load_graph(payload: dict[str, Any]) -> dict[str, int]:
     """Сохраняет payload в Neo4j. Возвращает счетчики загруженных узлов/связей."""
-    cleaned = dedupe_graph_payload(
+    cleaned = sanitize_graph_payload(
         GraphPayload(
             nodes=list(payload.get("nodes") or []),
             relationships=list(payload.get("relationships") or []),
