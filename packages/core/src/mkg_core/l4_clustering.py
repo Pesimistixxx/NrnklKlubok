@@ -10,7 +10,9 @@ import numpy as np
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from mkg_core.config import get_settings
+from mkg_core.layer_pipeline import _node_layer, _short_node
 from mkg_core.neo4j_client import Neo4jClient
+from mkg_core.ontology import describe_relationship_type
 from mkg_core.qdrant import QdrantClientSingleton
 from mkg_core.store import get_repo
 
@@ -671,6 +673,68 @@ def _l4_cluster_map_from_graphs(graphs: list[tuple[str, dict[str, Any]]]) -> dic
     return out
 
 
+def _node_map_from_graphs(graphs: list[tuple[str, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    """node_id → graph node (all layers)."""
+    out: dict[str, dict[str, Any]] = {}
+    for _doc_id, graph in graphs:
+        for node in graph.get("nodes") or []:
+            nid = str(node.get("id") or "")
+            if nid:
+                out[nid] = node
+    return out
+
+
+def _node_text_preview(
+    node_id: str,
+    node: dict[str, Any] | None,
+    l4_map: dict[str, dict[str, Any]],
+    *,
+    limit: int = 160,
+) -> str:
+    info = l4_map.get(node_id) or {}
+    if info.get("text"):
+        text = str(info["text"])
+        return text[: limit - 1] + "…" if len(text) > limit else text
+    if node:
+        props = dict(node.get("props") or {})
+        for key in ("text_ru", "title_ru", "quote", "name_ru", "name_en", "name", "title", "text", "value"):
+            val = props.get(key)
+            if val:
+                text = str(val).strip().replace("\n", " ")
+                return text[: limit - 1] + "…" if len(text) > limit else text
+    return ""
+
+
+def _enrich_edge(
+    doc_id: str,
+    fr: str,
+    to: str,
+    rtype: str,
+    *,
+    node_map: dict[str, dict[str, Any]],
+    l4_map: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    from_node = node_map.get(fr)
+    to_node = node_map.get(to)
+    from_l4 = l4_map.get(fr, {})
+    to_l4 = l4_map.get(to, {})
+    layer = _node_layer(from_node) if from_node else "L?"
+    return {
+        "document_id": doc_id,
+        "from_node": fr,
+        "to_node": to,
+        "type": rtype,
+        "from_label": str(from_l4.get("label") or (from_node or {}).get("label") or ""),
+        "to_label": str(to_l4.get("label") or (to_node or {}).get("label") or ""),
+        "from_short": _short_node(from_node, fr),
+        "to_short": _short_node(to_node, to),
+        "from_text": _node_text_preview(fr, from_node, l4_map),
+        "to_text": _node_text_preview(to, to_node, l4_map),
+        "layer": layer,
+        "description": describe_relationship_type(rtype),
+    }
+
+
 def _edges_for_cluster(
     cluster_id: int,
     member_ids: set[str],
@@ -682,9 +746,10 @@ def _edges_for_cluster(
     internal: list[dict[str, Any]] = []
     cross: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str]] = set()
+    node_map = _node_map_from_graphs(graphs)
     for doc_id, graph in graphs:
         for rel in graph.get("relationships") or []:
-            fr = str(rel.get("from") or "")
+            fr = str(rel.get("from") or rel.get("from_") or "")
             to = str(rel.get("to") or "")
             rtype = str(rel.get("type") or "")
             if fr not in member_ids and to not in member_ids:
@@ -693,14 +758,7 @@ def _edges_for_cluster(
             if key in seen:
                 continue
             seen.add(key)
-            edge = {
-                "document_id": doc_id,
-                "from_node": fr,
-                "to_node": to,
-                "type": rtype,
-                "from_label": l4_map.get(fr, {}).get("label"),
-                "to_label": l4_map.get(to, {}).get("label"),
-            }
+            edge = _enrich_edge(doc_id, fr, to, rtype, node_map=node_map, l4_map=l4_map)
             if fr in member_ids and to in member_ids:
                 if len(internal) < limit:
                     internal.append(edge)
@@ -711,6 +769,9 @@ def _edges_for_cluster(
                 if other_cid is not None and int(other_cid) >= 0 and int(other_cid) != cluster_id:
                     edge["other_cluster_id"] = int(other_cid)
                     edge["other_cluster_name"] = other_info.get("cluster_name")
+                    if len(cross) < limit:
+                        cross.append(edge)
+                elif other_cid is None or int(other_cid) < 0:
                     if len(cross) < limit:
                         cross.append(edge)
     return internal, cross

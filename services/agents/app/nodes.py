@@ -3,13 +3,26 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from mkg_core.answer_structure import CHAT_STRUCTURE_RULES, SYNTH_STRUCTURE_RULES
+from mkg_core.query_facets import QueryFacets, enrich_search_with_facets, filter_hits_by_facets, parse_facets_from_plan
 from mkg_core.text_sanitize import sanitize_user_facing_text
 
 from app.client import GatewayClient
 from app.config import AgentSettings
 from app.llm import AgentLLM
 from app.state import MKGAgentState
-from app.utils import add_trace, add_warning, compact_text, format_history_context, normalize_dict, normalize_list, remaining_seconds, text_from_props
+from app.utils import (
+    add_trace,
+    add_warning,
+    compact_text,
+    effective_search_query,
+    format_history_context,
+    history_memory_meta,
+    normalize_dict,
+    normalize_list,
+    remaining_seconds,
+    text_from_props,
+)
 
 _VALID_MODES = {
     "audit_mode",
@@ -30,16 +43,27 @@ _PLANNER_PROMPT = """
   "geography": ["domestic|foreign|..."],
   "years": ["..."],
   "requested_output": "...",
-  "search_query": "короткий поисковый запрос"
+  "search_query": "короткий поисковый запрос",
+  "query_facets": {
+    "materials": ["..."],
+    "processes": ["..."],
+    "geography": ["domestic|foreign"],
+    "year_min": 2015,
+    "year_max": 2024,
+    "numeric_min": null,
+    "numeric_max": null,
+    "numeric_param": "concentration|temperature"
+  }
 }
 Если mode уже задан во входе, сохрани его. Не выдумывай факты.
+Учитывай conversation_history: для коротких реплик («Подумай еще раз», «уточни») search_query и keywords бери из предыдущего вопроса.
 """.strip()
 
 _ANSWER_STYLE = (
-    "Текст summary для пользователя — связный русский язык без document_id, neo4j_node_id, node_id, "
+    "Текст summary для пользователя — Markdown с разделами ## на русском без document_id, neo4j_node_id, node_id, "
     "кодов L1–L6 и внутреннего жаргона (Qdrant, Neo4j, LangGraph). "
-    "Опирайся на evidence естественно. "
-    "Если ответ неполный — в конце summary задай один уместный уточняющий вопрос или предложи следующий шаг."
+    + CHAT_STRUCTURE_RULES
+    + " Опирайся на evidence, knowledge_gaps, experts и anomalies естественно."
 )
 
 _ANALYZER_PROMPT = """
@@ -85,6 +109,9 @@ _BUILDER_PROMPT = (
 }
 """
     + _ANSWER_STYLE
+    + """
+"""
+    + SYNTH_STRUCTURE_RULES
     + """
 Для audit_mode заполни issues.
 Для hypothesis_mode заполни hypotheses: hypothesis, basis, supporting_evidence, contradictions, novelty, feasibility, confidence, next_experiments, rank.
@@ -158,12 +185,16 @@ async def llm_scope_planner(
         mode = "hypothesis_mode"
     new_state["mode"] = mode
     new_state["scope"] = scope if isinstance(scope, dict) else {}
+    facets = parse_facets_from_plan(new_state["scope"])
+    new_state["query_facets"] = facets.to_dict()
     add_trace(
         new_state,
         "llm_scope_planner",
         mode=mode,
         search_query=new_state["scope"].get("search_query"),
         keywords=new_state["scope"].get("keywords"),
+        query_facets=new_state.get("query_facets"),
+        history_turn_count=history_memory_meta(new_state.get("history") or []).get("turn_count", 0),
     )
     return new_state
 
@@ -213,11 +244,14 @@ async def retrieval_search(
     doc_ids = new_state.get("candidate_doc_ids") or []
     scope = normalize_dict(new_state.get("scope"))
     keywords = scope.get("keywords") if isinstance(scope.get("keywords"), list) else []
+    facets = QueryFacets.from_dict(new_state.get("query_facets"))
+    base_query = effective_search_query(str(new_state.get("query") or ""), new_state.get("history") or [])
     search_query = (
         new_state.get("current_search_query")
         or scope.get("search_query")
-        or " ".join([new_state.get("query", ""), *map(str, keywords[:4])]).strip()
+        or " ".join([base_query, *map(str, keywords[:4])]).strip()
     )
+    search_query = enrich_search_with_facets(str(search_query), facets)
     new_state["current_search_query"] = str(search_query)
     if not doc_ids:
         new_state["search_hits"] = []
@@ -288,6 +322,7 @@ async def retrieval_search(
 
     hits = list(merged.values())
     hits.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+    hits = filter_hits_by_facets(hits, facets)
     new_state["search_hits"] = hits[: settings.max_docs * settings.search_limit]
     if not hits:
         add_warning(new_state, "поиск не вернул релевантные фрагменты")
@@ -638,7 +673,7 @@ async def anomaly_qdrant_refine(
     scope = normalize_dict(new_state.get("scope"))
     search_query = (
         scope.get("search_query")
-        or new_state.get("query", "")
+        or effective_search_query(str(new_state.get("query") or ""), new_state.get("history") or [])
         or "аномалии выбросы L4"
     )
     seed_ids = {str(s.get("node_id")) for s in seeds if s.get("node_id")}

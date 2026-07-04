@@ -1,6 +1,7 @@
 """Общая логика чата: поиск, subgraph, артефакты, LLM."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -9,8 +10,10 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from mkg_core.answer_structure import FAST_STRUCTURE_NOTE
 from mkg_core.config import get_settings
 from mkg_core.embeddings import search_chat_retrieval
+from mkg_core.query_facets import reliability_from_props, source_date_from_props
 from mkg_core.graph_traversal import discover_new_connections, has_graph_data, walk_for_chat
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
 from mkg_core.llm import YandexLLMClient
@@ -46,6 +49,10 @@ _LAYER_SITUATION: dict[str, str] = {
     "L5": "Classification: верификация и грифы",
     "L6": "TEP: технологические и экономические показатели",
 }
+
+FAST_SEARCH_LIMIT = 9
+FAST_MAX_TOKENS = 512
+FAST_LLM_TIMEOUT_S = 4.5
 
 
 def _format_user_prompt_with_history(
@@ -344,6 +351,7 @@ def enrich_search_hits(hits: list[dict[str, Any]]) -> list[ChatSourceOut]:
         seen.add(key)
         rec = repo.get(doc_id) or {}
         md_file = str(h.get("md_file") or "") or repo.markdown_relative_path(doc_id)
+        props = h.get("props") if isinstance(h.get("props"), dict) else {}
         out.append(
             ChatSourceOut(
                 document_id=doc_id,
@@ -355,6 +363,8 @@ def enrich_search_hits(hits: list[dict[str, Any]]) -> list[ChatSourceOut]:
                 text=str(h.get("text") or h.get("snippet") or "")[:500],
                 md_file=md_file,
                 md_url=f"/api/v1/documents/{doc_id}/markdown",
+                extraction_confidence=reliability_from_props(props),
+                source_date=source_date_from_props(props),
             )
         )
     return out
@@ -378,6 +388,7 @@ def _evidence_to_sources(
         layer: str = "",
         score: float = 0,
         text: str = "",
+        props: dict[str, Any] | None = None,
     ) -> None:
         doc_id = doc_id.strip()
         if not doc_id:
@@ -388,6 +399,7 @@ def _evidence_to_sources(
         seen.add(key)
         rec = repo.get(doc_id) or {}
         md_file = repo.markdown_relative_path(doc_id)
+        node_props = props or {}
         out.append(
             ChatSourceOut(
                 document_id=doc_id,
@@ -399,10 +411,13 @@ def _evidence_to_sources(
                 text=text[:500],
                 md_file=md_file,
                 md_url=f"/api/v1/documents/{doc_id}/markdown",
+                extraction_confidence=reliability_from_props(node_props),
+                source_date=source_date_from_props(node_props),
             )
         )
 
     for ev in evidence or []:
+        ev_props = ev.get("props") if isinstance(ev.get("props"), dict) else {}
         _push(
             doc_id=str(ev.get("doc_id") or ev.get("document_id") or ""),
             node_id=str(ev.get("node_id") or ""),
@@ -411,6 +426,7 @@ def _evidence_to_sources(
             layer=str(ev.get("layer") or ""),
             score=float(ev.get("score") or 0),
             text=str(ev.get("text") or ev.get("quote") or ""),
+            props=ev_props,
         )
     for lr in layer_results or []:
         for node in lr.get("nodes_found") or []:
@@ -421,6 +437,7 @@ def _evidence_to_sources(
                 label=str(node.get("label") or ""),
                 layer=str(lr.get("layer") or props.get("layer") or ""),
                 text=str(props.get("quote") or props.get("raw_text_ru") or props.get("name_ru") or props.get("text") or ""),
+                props=props,
             )
     return out[:8]
 
@@ -461,9 +478,22 @@ def _agent_result_to_chat_out(
     *,
     include_graph: bool,
     t0: float,
+    history: list[dict[str, str]] | None = None,
 ) -> ChatCompleteOut:
     trace = list(result.get("trace") or [])
     trace.insert(0, {"step": "chat_role", "pipeline": "orchestrator_mode", "elapsed_ms": 0})
+    memory_meta = _format_user_prompt_with_history("", history)[1]
+    if not any(t.get("step") == "chat_memory" for t in trace):
+        if memory_meta.get("turn_count"):
+            trace.insert(
+                1,
+                {
+                    "step": "chat_memory",
+                    "turn_count": memory_meta["turn_count"],
+                    "truncated": memory_meta.get("truncated", False),
+                    "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                },
+            )
     graph_raw = result.get("graph")
     graph = ContextGraphOut(**graph_raw) if include_graph and graph_raw else None
     layer_results = result.get("layer_results") or None
@@ -479,6 +509,7 @@ def _agent_result_to_chat_out(
         sources=_evidence_to_sources(result.get("evidence"), layer_results),
         layer_results=layer_results,
         timing_ms=timing_ms,
+        speed_mode="full",
     )
 
 
@@ -508,9 +539,180 @@ async def _try_orchestrator_chat(
             limit=search_limit,
             history=history,
         )
-        return _agent_result_to_chat_out(result, include_graph=include_graph, t0=t0)
+        return _agent_result_to_chat_out(
+            result, include_graph=include_graph, t0=t0, history=history
+        )
     except Exception:
         return None
+
+
+async def run_dialog_fast(
+    message: str,
+    role_id: str,
+    *,
+    history: list[dict[str, str]] | None = None,
+    system_prompt: str | None = None,
+    search_limit: int = FAST_SEARCH_LIMIT,
+    document_ids: list[str] | None = None,
+    llm_timeout: float = FAST_LLM_TIMEOUT_S,
+    max_tokens: int = FAST_MAX_TOKENS,
+) -> ChatCompleteOut:
+    """Облегчённый RAG-диалог: Qdrant L3+L4 → короткий ответ LLM (~5 с)."""
+    role = get_role(role_id)
+    if not role:
+        raise HTTPException(status_code=400, detail="Неизвестная роль")
+    settings = get_settings()
+    if not settings.yandex_api_key or not settings.yandex_folder_id:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM не настроен: задайте YANDEX_API_KEY и YANDEX_FOLDER_ID",
+        )
+
+    t0 = time.perf_counter()
+    custom = await get_role_prompt(role_id)
+    system = (system_prompt or custom or default_prompt(role_id)).strip()
+    if CHAT_OUTPUT_RULES not in system:
+        system += f"\n\n{CHAT_OUTPUT_RULES}"
+    system += (
+        "\n\nРежим «Быстрый ответ»: дай краткий точный ответ по найденным фрагментам, "
+        "без длинных рассуждений и без блоков mkg-artifacts.\n\n"
+        + FAST_STRUCTURE_NOTE
+    )
+
+    trace: list[dict[str, Any]] = [
+        {
+            "step": "chat_role",
+            "role_id": role_id,
+            "name_ru": role["name_ru"],
+            "pipeline": "fast",
+            "speed_mode": "fast",
+            "elapsed_ms": 0,
+        },
+    ]
+    user_prompt_base, memory_meta = _format_user_prompt_with_history(message, history)
+    if memory_meta.get("turn_count"):
+        trace.append(
+            {
+                "step": "chat_memory",
+                "turn_count": memory_meta["turn_count"],
+                "truncated": memory_meta.get("truncated", False),
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+            }
+        )
+
+    scoped_docs = [d for d in (document_ids or []) if d]
+    graph_available = has_graph_data(scoped_docs or None)
+    hits: list[dict[str, Any]] = []
+    indexed_total = 0
+    retrieval: dict[str, Any] = {
+        "l3_hits": [],
+        "l4_hits": [],
+        "cluster_hits": [],
+        "all_hits": [],
+        "indexed_total": 0,
+        "cluster_ids": [],
+    }
+
+    try:
+        retrieval = await search_chat_retrieval(
+            message.strip(),
+            limit=search_limit,
+            document_ids=scoped_docs or None,
+            history=history,
+        )
+        l3_count = len(retrieval.get("l3_hits") or [])
+        l4_count = len(retrieval.get("l4_hits") or [])
+        cluster_count = len(retrieval.get("cluster_hits") or [])
+        hits = list(retrieval.get("all_hits") or [])
+        indexed_total = int(retrieval.get("indexed_total") or 0)
+        fallback = retrieval.get("fallback")
+        fast_retrieval: dict[str, Any] = {
+            "step": "fast_retrieval",
+            "l3_hit_count": l3_count,
+            "l4_hit_count": l4_count,
+            "cluster_hit_count": cluster_count,
+            "hit_count": len(hits),
+            "indexed_total": indexed_total,
+            "search_query": retrieval.get("search_query"),
+            "fallback": fallback,
+            "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+        }
+        if not hits and indexed_total > 0:
+            fast_retrieval["warning"] = "поиск пуст — проверьте индекс Qdrant"
+        elif not hits and graph_available:
+            fast_retrieval["warning"] = "Qdrant пуст — используется поиск по графу"
+        trace.append(fast_retrieval)
+        if fallback and hits:
+            trace.append(
+                {
+                    "step": "graph_keyword_fallback",
+                    "hit_count": len(hits),
+                    "source": fallback,
+                    "fallback": True,
+                    "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                }
+            )
+    except Exception as exc:
+        trace.append(
+            {
+                "step": "fast_retrieval",
+                "hit_count": 0,
+                "skipped": True,
+                "error": str(exc)[:160],
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+            }
+        )
+        indexed_total = 0
+        hits = []
+
+    if indexed_total == 0 and not graph_available and not hits:
+        trace.append({"step": "llm_compose", "skipped": True, "elapsed_ms": int((time.perf_counter() - t0) * 1000)})
+        timing_ms = int((time.perf_counter() - t0) * 1000)
+        return ChatCompleteOut(
+            reply=(
+                "В карте знаний пока нет проиндексированных документов. "
+                "Загрузите PDF в чат и дождитесь индексации."
+            ),
+            trace=trace,
+            graph=None,
+            artifacts=[],
+            sources=[],
+            timing_ms=timing_ms,
+            speed_mode="fast",
+        )
+
+    qdrant_block = _hits_context_block(hits, limit=search_limit)
+    user_prompt = user_prompt_base
+    if qdrant_block:
+        user_prompt = f"{qdrant_block}\n\n---\n\n{user_prompt}"
+
+    try:
+        llm = YandexLLMClient.instance()
+        reply = await asyncio.wait_for(
+            llm.chat(system, user_prompt, temperature=0.3, max_tokens=max_tokens),
+            timeout=llm_timeout,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Быстрый ответ: превышен лимит времени LLM (~5 с)") from None
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ошибка LLM: {exc}") from exc
+
+    text = sanitize_user_facing_text((reply or "").strip())
+    if not text:
+        raise HTTPException(status_code=502, detail="LLM вернул пустой ответ")
+
+    trace.append({"step": "llm_compose", "max_tokens": max_tokens, "elapsed_ms": int((time.perf_counter() - t0) * 1000)})
+    timing_ms = int((time.perf_counter() - t0) * 1000)
+
+    return ChatCompleteOut(
+        reply=text,
+        trace=trace,
+        graph=None,
+        artifacts=[],
+        sources=enrich_search_hits(hits) if hits else [],
+        timing_ms=timing_ms,
+        speed_mode="fast",
+    )
 
 
 async def run_chat_query(
@@ -523,8 +725,19 @@ async def run_chat_query(
     include_artifacts: bool = True,
     search_limit: int = 5,
     document_ids: list[str] | None = None,
+    speed_mode: str = "full",
 ) -> ChatCompleteOut:
-    """Единая точка чата: оркестратор L1–L6 (внутренне) или RAG-диалог."""
+    """Единая точка чата: быстрый RAG, оркестратор L1–L6 (full) или RAG-диалог."""
+    if speed_mode == "fast":
+        return await run_dialog_fast(
+            message,
+            role_id,
+            history=history,
+            system_prompt=system_prompt,
+            search_limit=min(search_limit, FAST_SEARCH_LIMIT),
+            document_ids=document_ids,
+        )
+
     role = get_role(role_id)
     if not role:
         raise HTTPException(status_code=400, detail="Неизвестная роль")
@@ -592,6 +805,7 @@ async def run_chat_query(
             message.strip(),
             limit=search_limit,
             document_ids=scoped_docs or None,
+            history=history,
         )
         trace.append(
             {
@@ -661,6 +875,7 @@ async def run_chat_query(
             artifacts=[],
             sources=[],
             timing_ms=timing_ms,
+            speed_mode="full",
         )
 
     walked: dict[str, Any] = {
@@ -802,4 +1017,5 @@ async def run_chat_query(
         artifacts=artifacts if include_artifacts else [],
         sources=enrich_search_hits(hits) if hits else [],
         timing_ms=timing_ms,
+        speed_mode="full",
     )

@@ -41,6 +41,7 @@ from mkg_core.ontology import LABEL_LAYER, NODE_PROP_HINTS, NODE_PROP_UI_REQUIRE
 from app.agent_api import router as agent_router
 from app.agents_proxy import router as agents_proxy_router
 from app.collab_api import router as collab_router
+from app.dashboard_api import router as dashboard_router
 from app.docs_api import router as docs_router
 from app.graph_anomalies import router as graph_anomalies_router
 from app.schemas import (
@@ -55,6 +56,8 @@ from app.schemas import (
     GraphOut,
     GraphRelationship,
     GraphRelationshipDetailOut,
+    GraphRelationshipPatchIn,
+    GraphRelationshipPatchOut,
     LayerPipelineOut,
     PipelineLogOut,
     ClearDatabaseOut,
@@ -63,6 +66,9 @@ from app.schemas import (
 )
 from app.storage import get_repo
 from app.upload import accept_upload
+from app.roles import get_role
+
+_GRAPH_EDIT_ROLES = frozenset({"admin", "engineer"})
 
 log = setup_logging("gateway")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -83,6 +89,7 @@ app.include_router(agent_router, prefix=API)
 app.include_router(collab_router, prefix=API)
 app.include_router(agents_proxy_router, prefix=API)
 app.include_router(graph_anomalies_router, prefix=API)
+app.include_router(dashboard_router, prefix=API)
 
 app.add_middleware(
     CORSMiddleware,
@@ -787,6 +794,98 @@ async def get_document_relationship(
         source_node=source_node,
         target_node=target_node,
         related_edges=related,
+    )
+
+
+@app.patch(
+    f"{API}/graph/documents/{{doc_id}}/relationship",
+    response_model=GraphRelationshipPatchOut,
+)
+async def patch_document_relationship(
+    doc_id: str,
+    body: GraphRelationshipPatchIn,
+    from_: str = Query(alias="from"),
+    to: str = Query(),
+    type: str = Query(),
+) -> GraphRelationshipPatchOut:
+    """Expert comment on graph edge (admin/engineer). Persists in JSON graph + Neo4j props."""
+    role = get_role(body.role_id)
+    if not role or body.role_id not in _GRAPH_EDIT_ROLES:
+        raise HTTPException(status_code=403, detail="Редактирование связей доступно ролям admin и engineer")
+    if not get_repo().get(doc_id):
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    if not from_ or not to or not type:
+        raise HTTPException(status_code=400, detail="Параметры from, to и type обязательны")
+
+    repo = get_repo()
+    payload = repo.read_graph(doc_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Граф ещё не сформирован")
+
+    from datetime import datetime, timezone
+
+    edited_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    editor = (body.edited_by or role.get("name_ru") or body.role_id).strip()
+    match_idx = None
+    rels = list(payload.get("relationships") or [])
+    for idx, rel in enumerate(rels):
+        start = str(rel.get("from") or rel.get("from_") or "")
+        end = str(rel.get("to") or "")
+        rtype = str(rel.get("type") or "")
+        if start == from_ and end == to and rtype == type:
+            match_idx = idx
+            break
+    if match_idx is None:
+        raise HTTPException(status_code=404, detail="Связь не найдена в графе документа")
+
+    rel = dict(rels[match_idx])
+    props = dict(rel.get("props") or {})
+    props["expert_comment"] = body.expert_comment.strip()
+    props["edited_by"] = editor
+    props["edited_at"] = edited_at
+    rel["props"] = props
+    rels[match_idx] = rel
+
+    expert_edits = list(payload.get("expert_edits") or [])
+    expert_edits.append(
+        {
+            "from": from_,
+            "to": to,
+            "type": type,
+            "expert_comment": props["expert_comment"],
+            "edited_by": editor,
+            "edited_at": edited_at,
+        }
+    )
+    payload["relationships"] = rels
+    payload["expert_edits"] = expert_edits[-200:]
+    repo.save_graph(doc_id, payload)
+
+    try:
+        rel_type = type
+        if re.match(r"^[A-Z_][A-Z0-9_]*$", rel_type):
+            client = Neo4jClient.instance()
+            cypher = f"""
+            MATCH (a {{id: $from_id}})
+            MATCH (b {{id: $to_id}})
+            MERGE (a)-[r:{rel_type}]->(b)
+            SET r += $props
+            RETURN type(r) AS type
+            """
+            await client.run_write(
+                cypher,
+                {"from_id": from_, "to_id": to, "props": props},
+            )
+    except Exception as exc:
+        log.warning("neo4j rel patch skipped doc_id=%s: %s", doc_id, exc)
+
+    return GraphRelationshipPatchOut(
+        document_id=doc_id,
+        type=type,
+        from_=from_,
+        to=to,
+        props=props,
+        expert_edits_count=len(expert_edits),
     )
 
 

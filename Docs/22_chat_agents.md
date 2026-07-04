@@ -5,13 +5,27 @@
 Вкладка **Чат** объединяет:
 
 - **Роль пользователя** — права и системный промпт (8 ролей). Это *стиль ответа*, не слой графа.
-- **Автоматический пайплайн агентов** — оркестратор L1–L6 + RAG + обход графа (без выбора «режима» в UI).
+- **Режим скорости** — переключатель **Быстрый** (~5 с, RAG) / **Подробный** (оркестратор + trace).
+- **Автоматический пайплайн агентов** — в режиме «Подробный»: оркестратор L1–L6 + RAG + обход графа.
 - **Межслойные агенты L1–L6** — оценка вопроса по слоям графа; см. [`24_layer_agents.md`](24_layer_agents.md).
 - **Загрузку файлов** (кнопка прикрепления) с выбором полного пайплайна или «только для ответов».
 - **Trace** — цепочка reasoning: поиск → граф → LLM / шаги агента.
 - **Источники** и **Сохранить как MD** — экспорт ответа с ссылками на документы.
 
-UI cache: `?v=78` (при странном поведении — **Ctrl+F5**).
+UI cache: `?v=95` (при странном поведении — **Ctrl+F5**).
+
+> **Безопасность MVP:** UI на `localhost:8000` без серверной аутентификации. Роль — клиентский выбор; не деплойте публично без auth.
+
+## Режимы скорости ответа
+
+Переключатель над полем ввода: **Быстрый** | **Подробный · с рассуждениями**. Предпочтение хранится в `localStorage` (`mkg_chat_speed_mode`).
+
+| Режим | `speed_mode` | Поведение | Целевое время |
+|-------|--------------|-----------|---------------|
+| **Быстрый** | `fast` | Qdrant L3+L4 → короткий ответ LLM; без оркестратора, обхода графа и L1–L6 | ~5 с |
+| **Подробный** | `full` | Оркестратор + agent loop + graph walk + trace (по умолчанию) | без жёсткого лимита |
+
+На ответе показывается badge режима. Trace в быстром режиме — свёрнутый минимальный блок.
 
 ## Межслойные агенты в чате
 
@@ -71,15 +85,24 @@ UI cache: `?v=78` (при странном поведении — **Ctrl+F5**).
 {
   "message": "Какие материалы упоминаются?",
   "role_id": "analyst",
+  "history": [
+    {"role": "user", "content": "…"},
+    {"role": "assistant", "content": "…"}
+  ],
   "include_graph": true,
   "include_artifacts": true,
+  "speed_mode": "full",
   "document_ids": ["doc:..."]
 }
 ```
 
-**Роли с `can_run_agents`:** gateway вызывает `orchestrator_mode` (гибкий цикл, JSON-шина, discover, synthesize). При недоступности agents — fallback на RAG-диалог.
+**`speed_mode: "fast"`** — `run_dialog_fast()`: Qdrant L3+L4 (≤5 хитов), LLM 512 токенов, timeout ~4.5 с; оркестратор и graph walk пропускаются.
 
-**Роли без агентов:** Qdrant L3+L4 → Neo4j walk → layer trace → LLM.
+**`speed_mode: "full"` (по умолчанию)** — роли с `can_run_agents`: async оркестратор (`POST /agents-service/run/async` + poll `GET .../run/{run_id}`) с **live-обновлением графа** в панели чата. Fallback при 404/503 agents — синхронный `/chat/complete` с RAG + graph walk.
+
+История (до 16–20 реплик) передаётся в оркестратор: planner, layer agents L1–L6, synthesizer и trace `chat_memory` (число реплик). Короткие продолжения («Подумай еще раз») используют prior question для поиска.
+
+**Роли без агентов (full):** Qdrant L3+L4 → Neo4j walk → layer trace → LLM.
 
 Trace steps (оркестратор):
 
@@ -95,7 +118,7 @@ Trace steps (fallback-диалог):
 4. `l1_agent` … `l6_agent` — layer trace
 5. `llm_compose` — ответ YandexGPT
 
-Ответ: `reply`, `trace`, `graph`, `artifacts`, `sources`, `layer_results`, `timing_ms`.
+Ответ: `reply`, `trace`, `graph`, `artifacts`, `sources`, `layer_results`, `timing_ms`, `speed_mode`.
 
 ### Программный API без UI
 
@@ -114,12 +137,28 @@ Trace steps (fallback-диалог):
 
 - **Оркестратор** — `orchestrator_init` → `agent_loop_start` → router ↔ agents → discover → gap → synthesize.
 - **Диалог (fallback)** — `qdrant_l3`, `graph_traversal`, layer trace, `llm_compose`.
+- **Быстрый (`fast`)** — `qdrant_l3`, `qdrant_l4_cluster`, `llm_compose` (свёрнутый trace).
 - **anomaly_mode** (только API) — список `anomalies` с `node_id`, `severity`, `related_neighbors`.
 
-## Источники и экспорт MD
+## История чатов и заголовки
 
-- **Источники** — кликабельные ссылки на `GET /api/v1/documents/{id}/markdown`.
-- **Сохранить как MD** — клиентский экспорт ответа + список источников.
+- Threads: `POST /api/v1/chat/threads`, список в sidebar.
+- Placeholder «Новый чат» → **заголовок из первого user-сообщения** (`derive_thread_title`, до ~55 символов) в `collab_db.py`.
+
+## Источники, секции, Пояснить / Обновить
+
+- **Источники** — блок `<details class="chat-sources">` **свёрнут по умолчанию**; chip → `GET /api/v1/documents/{id}/markdown`; badge `extraction_confidence`.
+- **Структура ответа** — разделы `##` в collapsible blocks; «Сводка» открыта; см. [`25_analytics_synthesis.md`](25_analytics_synthesis.md).
+- **Пояснить** — кнопка у каждого `##`-раздела и под ответом; отправляет «Поясни подробнее раздел «…»…».
+- **Обновить** — повтор ответа на тот же вопрос (`regenerate` без нового user-post).
+- **Экспорт** — MD, JSON-LD, Печать/PDF (см. [`27_additional_wishes.md`](27_additional_wishes.md)).
+
+## Async graph в «Подробном»
+
+1. UI → `POST /api/v1/agents-service/run/async` (`mode=orchestrator_mode`).
+2. Poll `GET /api/v1/agents-service/run/{run_id}` (~420 ms) до `status=complete`.
+3. На каждом poll: `trace` → live trace UI; `graph` → incremental mini-graph (`graph-mini.js`).
+4. Индикатор «Сбор графа… L4 · N узл.» по последнему шагу trace.
 
 ## Права по ролям (кратко)
 
@@ -134,7 +173,9 @@ Trace steps (fallback-диалог):
 
 | Метод | Путь | Назначение |
 |-------|------|------------|
-| POST | `/api/v1/chat/complete` | Чат: оркестратор или RAG-fallback |
+| POST | `/api/v1/chat/complete` | Чат: fast / RAG-fallback |
+| POST | `/api/v1/agents-service/run/async` | Async оркестратор (Подробный) |
+| GET | `/api/v1/agents-service/run/{run_id}` | Poll trace + graph |
 | POST | `/api/v1/query` | Программный query / явный agent mode |
 | GET | `/api/v1/roles` | Список ролей |
 | GET | `/api/v1/agents-service/modes` | AI-режимы (API) |
@@ -142,4 +183,4 @@ Trace steps (fallback-диалог):
 | GET | `/api/v1/graph/anomalies` | L4-аномалии |
 | POST | `/api/v1/graph/l4/cluster` | HDBSCAN L4 |
 
-См. также: [`24_layer_agents.md`](24_layer_agents.md), [`23_agent_hierarchy.md`](23_agent_hierarchy.md), [`21_pipeline_and_layers.md`](21_pipeline_and_layers.md).
+См. также: [`24_layer_agents.md`](24_layer_agents.md), [`23_agent_hierarchy.md`](23_agent_hierarchy.md), [`21_pipeline_and_layers.md`](21_pipeline_and_layers.md), [`25_analytics_synthesis.md`](25_analytics_synthesis.md).

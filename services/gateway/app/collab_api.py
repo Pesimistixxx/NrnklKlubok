@@ -12,14 +12,19 @@ from app.chat_engine import run_chat_query
 from app.collab_db import (
     add_message,
     create_thread,
+    delete_message,
+    delete_messages_from,
     delete_role_prompt,
     delete_thread,
+    get_message,
     get_role_prompt,
     init_collab_schema,
     list_messages,
     list_threads,
     list_users,
     set_role_prompt,
+    update_message_body,
+    update_thread_title,
     upsert_user,
 )
 from app.role_prompts import default_prompt
@@ -31,8 +36,10 @@ from app.schemas import (
     ChatMessagesOut,
     ChatThreadCreate,
     ChatThreadOut,
+    ChatThreadUpdate,
     ChatThreadsOut,
     MessageCreate,
+    MessageUpdate,
     QueryTestIn,
     QueryTestOut,
     RoleOut,
@@ -142,7 +149,8 @@ async def get_threads() -> ChatThreadsOut:
 
 @router.post("/chat/threads", response_model=ChatThreadOut)
 async def post_thread(body: ChatThreadCreate) -> ChatThreadOut:
-    rec = await create_thread(body.title, kind=body.kind, created_by=body.created_by)
+    title = (body.title or "").strip() or "Новый чат"
+    rec = await create_thread(title, kind=body.kind, created_by=body.created_by)
     return ChatThreadOut(
         id=rec["id"],
         title=rec["title"],
@@ -151,6 +159,26 @@ async def post_thread(body: ChatThreadCreate) -> ChatThreadOut:
         created_at=rec.get("created_at"),
         message_count=0,
     )
+
+
+def _thread_out(rec: dict[str, Any]) -> ChatThreadOut:
+    return ChatThreadOut(
+        id=rec["id"],
+        title=rec["title"],
+        kind=rec.get("kind") or "team",
+        created_by=rec.get("created_by"),
+        created_at=rec.get("created_at"),
+        message_count=int(rec.get("message_count") or 0),
+        last_message_at=rec.get("last_message_at"),
+    )
+
+
+@router.patch("/chat/threads/{thread_id}", response_model=ChatThreadOut)
+async def patch_thread(thread_id: str, body: ChatThreadUpdate) -> ChatThreadOut:
+    rec = await update_thread_title(thread_id, body.title)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Чат не найден")
+    return _thread_out(rec)
 
 
 @router.delete("/chat/threads/{thread_id}")
@@ -179,6 +207,61 @@ async def get_thread_messages(thread_id: str, limit: int = 200) -> ChatMessagesO
         for r in rows
     ]
     return ChatMessagesOut(thread_id=thread_id, items=items, total=len(items))
+
+
+def _message_out(rec: dict[str, Any]) -> ChatMessageOut:
+    return ChatMessageOut(
+        id=rec["id"],
+        thread_id=rec["thread_id"],
+        author_id=rec.get("author_id"),
+        author_name=rec["author_name"],
+        author_role=rec["author_role"],
+        body=rec["body"],
+        msg_type=rec.get("msg_type") or "user",
+        meta=rec.get("meta") or {},
+        created_at=rec.get("created_at"),
+    )
+
+
+@router.delete("/chat/threads/{thread_id}/messages/{message_id}")
+async def remove_thread_message(
+    thread_id: str,
+    message_id: str,
+    cascade: str | None = None,
+) -> dict[str, Any]:
+    msg = await get_message(message_id, thread_id)
+    if not msg:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    if cascade == "following":
+        deleted = await delete_messages_from(message_id, thread_id, inclusive=True)
+        return {"ok": True, "deleted": deleted}
+    if cascade == "after":
+        deleted = await delete_messages_from(message_id, thread_id, inclusive=False)
+        return {"ok": True, "deleted": deleted}
+    ok = await delete_message(message_id, thread_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    return {"ok": True, "deleted": 1}
+
+
+@router.patch("/chat/threads/{thread_id}/messages/{message_id}", response_model=ChatMessageOut)
+async def patch_thread_message(
+    thread_id: str,
+    message_id: str,
+    body: MessageUpdate,
+) -> ChatMessageOut:
+    msg = await get_message(message_id, thread_id)
+    if not msg:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    try:
+        rec = await update_message_body(message_id, thread_id, body.body)
+    except ValueError as exc:
+        if str(exc) == "empty_body":
+            raise HTTPException(status_code=400, detail="Текст сообщения не может быть пустым") from exc
+        raise
+    if not rec:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    return _message_out(rec)
 
 
 @router.post("/chat/threads/{thread_id}/messages", response_model=ChatMessageOut)
@@ -223,6 +306,7 @@ async def chat_complete(body: ChatCompleteIn) -> ChatCompleteOut:
         include_graph=body.include_graph,
         include_artifacts=body.include_artifacts,
         document_ids=body.document_ids or None,
+        speed_mode=body.speed_mode,
     )
 
 

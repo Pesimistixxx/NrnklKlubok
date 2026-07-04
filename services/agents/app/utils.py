@@ -35,11 +35,17 @@ def text_from_props(props: dict[str, Any]) -> str:
     return ""
 
 
-def compact_text(text: str, limit: int = 420) -> str:
-    clean = re.sub(r"\s+", " ", text or "").strip()
-    if len(clean) <= limit:
-        return clean
-    return clean[: limit - 1].rstrip() + "…"
+from mkg_core.search_query import (
+    compact_text,
+    effective_search_query,
+    is_continuation_query,
+    prior_turns,
+)
+
+
+def history_memory_meta(history: list[dict[str, str]] | None) -> dict[str, Any]:
+    turns = list(history or [])
+    return {"turn_count": len(turns), "truncated": len(turns) > 10}
 
 
 def format_history_context(history: list[dict[str, str]] | None, *, limit: int = 12) -> str:

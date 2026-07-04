@@ -101,6 +101,31 @@ const els = {
   graphClusterLegend: $("graphClusterLegend"),
   graphCompactBtn: $("graphCompactBtn"),
   graphFullBtn: $("graphFullBtn"),
+  graphFilterSearch: $("graphFilterSearch"),
+  graphEntityTypeChecks: $("graphEntityTypeChecks"),
+  graphFilterGeography: $("graphFilterGeography"),
+  graphFilterPracticeRegion: $("graphFilterPracticeRegion"),
+  graphFilterNumericMin: $("graphFilterNumericMin"),
+  graphFilterNumericMax: $("graphFilterNumericMax"),
+  graphFilterNumericParam: $("graphFilterNumericParam"),
+  graphFilterYearMin: $("graphFilterYearMin"),
+  graphFilterYearMax: $("graphFilterYearMax"),
+  graphFilterYearLabel: $("graphFilterYearLabel"),
+  graphFilterConfidence: $("graphFilterConfidence"),
+  graphFilterMaterial: $("graphFilterMaterial"),
+  graphFilterProcess: $("graphFilterProcess"),
+  graphDocTypeChecks: $("graphDocTypeChecks"),
+  graphRelationTypeChecks: $("graphRelationTypeChecks"),
+  graphFilterLanguage: $("graphFilterLanguage"),
+  graphFilterParamMin: $("graphFilterParamMin"),
+  graphFilterParamMax: $("graphFilterParamMax"),
+  graphFilterContradictions: $("graphFilterContradictions"),
+  graphFilterGaps: $("graphFilterGaps"),
+  graphFilterApplyBtn: $("graphFilterApplyBtn"),
+  graphFilterResetBtn: $("graphFilterResetBtn"),
+  graphFilterStatus: $("graphFilterStatus"),
+  qdrantSearchKeyword: $("qdrantSearchKeyword"),
+  qdrantFilterChips: $("qdrantFilterChips"),
   llmModel: $("llmModel"),
   ocrModel: $("ocrModel"),
   embDocModel: $("embDocModel"),
@@ -136,6 +161,19 @@ const els = {
   detailTitle: $("detailTitle"),
   detailBody: $("detailBody"),
   closeDetailBtn: $("closeDetailBtn"),
+  graphCompareBtn: $("graphCompareBtn"),
+  graphComparePanel: $("graphComparePanel"),
+  graphCompareSelected: $("graphCompareSelected"),
+  graphCompareClearBtn: $("graphCompareClearBtn"),
+  graphCompareRefreshBtn: $("graphCompareRefreshBtn"),
+  graphCompareTableWrap: $("graphCompareTableWrap"),
+  dashboardCards: $("dashboardCards"),
+  dashboardDomains: $("dashboardDomains"),
+  dashboardRiskList: $("dashboardRiskList"),
+  dashboardRefreshBtn: $("dashboardRefreshBtn"),
+  topicWatchlistInput: $("topicWatchlistInput"),
+  topicWatchlistSaveBtn: $("topicWatchlistSaveBtn"),
+  topicWatchlistStatus: $("topicWatchlistStatus"),
 };
 
 /** @type {HTMLElement|null} */
@@ -342,6 +380,82 @@ const MAX_COMPACT_EDGES = 150;
 const GRAPH_LABEL_MAX = 20;
 const GRAPH_ALL_ID = "__all__";
 const NEO4J_BROWSER_URL = "http://localhost:7474/browser/";
+const GRAPH_ADV_FILTERS_SESSION_KEY = "mkg_graph_adv_filters";
+
+const ENTITY_TYPE_FILTERS = [
+  { id: "material", label: "Материал", labels: ["Material"] },
+  { id: "process", label: "Процесс", labels: ["Process"] },
+  { id: "equipment", label: "Оборудование", labels: ["Equipment"] },
+  { id: "property", label: "Свойство", labels: ["Property"] },
+  { id: "experiment", label: "Эксперимент", labels: ["ExperimentRun"] },
+  { id: "publication", label: "Публикация", labels: ["Document"] },
+  { id: "expert", label: "Эксперт", labels: ["Expert"] },
+  { id: "object", label: "Объект", labels: ["Organization", "Location", "Facility"] },
+];
+const ALL_ENTITY_FILTER_IDS = ENTITY_TYPE_FILTERS.map((e) => e.id);
+const ENTITY_LABELS_BY_FILTER_ID = Object.fromEntries(
+  ENTITY_TYPE_FILTERS.map((e) => [e.id, new Set(e.labels)]),
+);
+const CONTRADICTION_REL_TYPES = new Set([
+  "FOUND_ANOMALY", "BASE_FOR_CONFLICT", "RESOLVED_BY", "FIXED_IN", "LINKED_GAP",
+]);
+const CONTRADICTION_NODE_LABELS = new Set(["Contradiction"]);
+const GAP_NODE_LABELS = new Set(["KnowledgeGap"]);
+const GAP_REL_TYPES = new Set(["DETECTED_MISSING", "LINKED_GAP"]);
+
+const DOC_CATEGORY_FILTERS = [
+  { id: "patent", label: "Патент" },
+  { id: "article", label: "Статья" },
+  { id: "report", label: "Отчёт" },
+  { id: "handbook", label: "Справочник" },
+];
+const ALL_DOC_CATEGORY_IDS = DOC_CATEGORY_FILTERS.map((d) => d.id);
+
+const RELATION_TYPE_FILTERS = [
+  { id: "USES_MAT", label: "Материал (USED_FOR)" },
+  { id: "OPERATES_PROC", label: "Процесс" },
+  { id: "SHOWED_EFFECT", label: "Эффект (SHOWED_EFFECT)" },
+  { id: "AUTHORED", label: "Автор (EXPERT_IN)" },
+  { id: "PRODUCED_MEASURE", label: "Измерение" },
+  { id: "ASSERTED_BY", label: "Утверждение" },
+  { id: "DERIVED_FROM", label: "Выведено из" },
+  { id: "CONTEXT_FOR", label: "Контекст" },
+  { id: "DATA_SOURCE_FOR", label: "Источник данных" },
+];
+const ALL_RELATION_FILTER_IDS = RELATION_TYPE_FILTERS.map((r) => r.id);
+
+const SYNONYM_PAIRS = [
+  ["электроэкстракция", "electrowinning"],
+  ["пвп", "fluidized bed furnace"],
+  ["fluidized bed", "пвп"],
+];
+
+function defaultGraphAdvancedFilters() {
+  return {
+    active: false,
+    searchText: "",
+    entityTypes: [...ALL_ENTITY_FILTER_IDS],
+    docCategories: [...ALL_DOC_CATEGORY_IDS],
+    relationTypes: [...ALL_RELATION_FILTER_IDS],
+    geography: "",
+    practiceRegion: "",
+    yearMin: 1990,
+    yearMax: 2026,
+    minConfidence: 0,
+    materialKeyword: "",
+    processKeyword: "",
+    language: "both",
+    numericMin: "",
+    numericMax: "",
+    numericParam: "",
+    showContradictions: false,
+    showGaps: false,
+  };
+}
+
+function defaultQdrantPostFilters() {
+  return { docTypes: [], layers: [], minConfidence: 0 };
+}
 
 const DOC_PIPELINE = [
   { id: "upload", label: "Загрузка", short: "Файл" },
@@ -417,6 +531,106 @@ function renderAnswersOnlyBanner(doc) {
     <p><strong>Документ загружен только для чата</strong> — слои L1–L6, граф и Neo4j не строились. Для карты знаний запустите полный пайплайн.</p>
     <button type="button" class="btn btn-primary btn-small" data-full-pipeline-doc="${esc(docId)}" ${busy ? "disabled" : ""}>↺ Построить полный граф</button>
   </div>`;
+}
+
+function isDocQdrantIndexed(doc) {
+  if (!doc) return false;
+  const docId = doc.id || doc.document_id;
+  if (docId && indexedDocsSet.has(docId)) return true;
+  const step = doc.step || "";
+  if (step === "l4_done" || step === "answers_indexed") return true;
+  return false;
+}
+
+function isQdrantIndexingInProgress(doc) {
+  if (!doc) return false;
+  const step = doc.step || "";
+  return step === "qdrant_index" || step === "l4_cluster";
+}
+
+function docNeedsQdrantIndex(doc) {
+  if (!doc || isDocQdrantIndexed(doc) || isQdrantIndexingInProgress(doc)) return false;
+  if (isAnswersOnlyMode(doc)) {
+    return ["md_ready", "loaded"].includes(doc.status);
+  }
+  return doc.status === "loaded" && (doc.graph_nodes || 0) > 0;
+}
+
+function renderQdrantPendingBanner(doc) {
+  if (!docNeedsQdrantIndex(doc)) return "";
+  const docId = doc.id || doc.document_id;
+  const answersOnly = isAnswersOnlyMode(doc);
+  const msg = answersOnly
+    ? "Markdown готов — проиндексируйте фрагменты в Qdrant для семантического поиска в чате."
+    : "Граф построен — индекс L3+L4 в Qdrant ещё не создан (или индексация прервалась).";
+  return `<div class="pipeline-qdrant-banner">
+    <p><strong>Индексировать в Qdrant?</strong> ${esc(msg)}</p>
+    <button type="button" class="btn btn-primary btn-small" data-qdrant-index-doc="${esc(docId)}">⚡ Индексировать в Qdrant</button>
+    <button type="button" class="btn btn-ghost btn-small" data-open-qdrant-tab>Открыть Qdrant</button>
+  </div>`;
+}
+
+function bindQdrantPendingBanner(root = document) {
+  root?.querySelectorAll("[data-qdrant-index-doc]").forEach((btn) => {
+    if (btn.dataset.qdrantBannerBound) return;
+    btn.dataset.qdrantBannerBound = "1";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const docId = btn.dataset.qdrantIndexDoc;
+      btn.disabled = true;
+      indexEmbeddings(docId, { silent: false }).finally(() => {
+        btn.disabled = false;
+      });
+    });
+  });
+  root?.querySelectorAll("[data-open-qdrant-tab]").forEach((btn) => {
+    if (btn.dataset.qdrantTabBound) return;
+    btn.dataset.qdrantTabBound = "1";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      switchPage("qdrant");
+    });
+  });
+}
+
+const qdrantNotifyShown = new Set();
+
+function notifyQdrantIndexed(docId, doc) {
+  if (!docId || qdrantNotifyShown.has(docId)) return;
+  qdrantNotifyShown.add(docId);
+  const name = doc?.file_name || docId;
+  const msg = isAnswersOnlyMode(doc)
+    ? `«${name}» — фрагменты в Qdrant (режим чата)`
+    : `«${name}» — документ в Qdrant (L3+L4)`;
+  showQdrantToast(`${msg}. Откройте вкладку Qdrant для карты.`, { ms: 6500 });
+  if (docId === selectedDoc) {
+    refreshDocJourney(docId).catch(() => {});
+    updateSearchBadge(docId);
+  }
+}
+
+async function handleDocQdrantState(data, prevData) {
+  const docId = data.document_id || data.id;
+  if (!docId) return;
+
+  if (isDocQdrantIndexed(data)) {
+    if (!indexedDocsSet.has(docId)) {
+      indexedDocsSet.add(docId);
+      saveIndexedDocs();
+    }
+    if (prevData && !isDocQdrantIndexed(prevData)) {
+      notifyQdrantIndexed(docId, data);
+    }
+    return;
+  }
+
+  if (isQdrantIndexingInProgress(data)) return;
+
+  if (docNeedsQdrantIndex(data)) {
+    await autoIndexAfterExtraction(docId, data);
+  }
 }
 
 function updateGraphEmptyState(doc) {
@@ -568,7 +782,7 @@ function getDocPipelineStates(doc) {
   const nodes = doc.graph_nodes || 0;
   const neo = doc.neo4j_synced === true;
   const docId = doc.id || doc.document_id;
-  const qdrant = docId ? indexedDocsSet.has(docId) : false;
+  const qdrant = isDocQdrantIndexed(doc);
   const states = Object.fromEntries(DOC_PIPELINE.map((s) => [s.id, "pending"]));
   states.upload = "done";
 
@@ -648,7 +862,11 @@ function getDocPipelineStates(doc) {
       states.ocr = states.md = "done";
       states.graph = nodes > 0 ? "done" : "failed";
       states.neo4j = neo ? "done" : (nodes > 0 ? "active" : "pending");
-      states.qdrant = qdrant ? "done" : (neo && nodes > 0 ? "active" : "pending");
+      if (isQdrantIndexingInProgress(doc)) {
+        states.qdrant = "active";
+      } else {
+        states.qdrant = qdrant ? "done" : (neo && nodes > 0 ? "active" : "pending");
+      }
       break;
     default:
       break;
@@ -796,7 +1014,7 @@ function renderDocJourneyHtml(doc, layerPayload) {
       </div>`;
   });
 
-  return `<div class="doc-journey-timeline">${renderAnswersOnlyBanner(doc)}${steps.join("")}</div>`;
+  return `<div class="doc-journey-timeline">${renderAnswersOnlyBanner(doc)}${renderQdrantPendingBanner(doc)}${steps.join("")}</div>`;
 }
 
 let docWorkTab = "journey";
@@ -923,6 +1141,7 @@ async function updateDocWorkArea(doc, previewData) {
     els.docJourneyContent.innerHTML = renderDocJourneyHtml(data, layerPayload);
     bindRetryButtons(els.docJourneyContent);
     bindFullPipelineButtons(els.docJourneyContent);
+    bindQdrantPendingBanner(els.docJourneyContent);
     bindRelChipClicks(els.docJourneyContent, docId);
   }
   syncDocWorkTabUI(docWorkTab);
@@ -981,6 +1200,9 @@ const ACTIVE_DOC_STATUSES = new Set(["uploaded", "processing", "extracting"]);
 const pipelineQueue = new Set();
 let graphLayerFilter = "all";
 let highlightCrossLayer = false;
+let graphAdvancedFilters = defaultGraphAdvancedFilters();
+let lastQdrantSearchHits = [];
+let qdrantPostFilters = defaultQdrantPostFilters();
 let connectionFormationMode = false;
 let connectionFormationStep = 0;
 let connectionFormationTimer = null;
@@ -1003,6 +1225,13 @@ let embeddingStatusCache = null;
 let graphViewDocId = null;
 let graphVisible = false;
 let docsListCache = [];
+const WATCHLIST_STORAGE_KEY = "mkg_topic_watchlist";
+const KNOWN_DOCS_STORAGE_KEY = "mkg_known_doc_ids";
+const COMPARE_ENTITY_LABELS = new Set(["Process", "Material"]);
+/** @type {Set<string>} */
+let compareSelectedNodeIds = new Set();
+let graphComparePanelOpen = false;
+let docsTotalCount = 0;
 let docsListFetchSeq = 0;
 let docsListLoaded = false;
 let selectedFiles = [];
@@ -1457,11 +1686,10 @@ async function applyPreviewUpdate(data, opts = {}) {
     refreshLiveExtract(docId);
   }
 
-  const finishedExtract =
-    prevStatus === "extracting"
-    && (data.status === "loaded" || data.status === "md_ready")
-    && graphCount > 0;
-  if (finishedExtract) autoIndexAfterExtraction(docId);
+  const prevEntry = docsListCache.find((d) => d.id === docId);
+  const prevSnapshot = prevEntry ? { ...prevEntry } : (prevStatus ? { id: docId, status: prevStatus } : null);
+
+  await handleDocQdrantState(data, prevSnapshot);
 
   if (
     (prevStatus === "processing" || prevStatus === "uploaded")
@@ -1756,12 +1984,21 @@ function updatePreviewMeta(docId) {
   const nodes = graphData?.nodes?.length || 0;
   const rels = graphData?.relationships?.length || 0;
   const cross = countCrossLayerRels();
-  const ready = indexedDocsSet.has(docId);
+  const ready = isDocQdrantIndexed(docsListCache.find((x) => x.id === docId) || { id: docId });
   els.docPageMeta.textContent = `${nodes} узл · ${rels} св · ${cross} межсл. · Qdrant: ${ready ? "да" : "нет"}`;
 }
 
 function updateSearchBadge(docId) {
   updatePreviewMeta(docId);
+}
+
+function countCorpusQdrantIndexed() {
+  return docsListCache.filter((d) => isDocQdrantIndexed(d)).length;
+}
+
+function getCorpusDocTotal() {
+  if (docsTotalCount > 0) return docsTotalCount;
+  return docsListCache.length;
 }
 
 function formatEmbeddingStatus(data) {
@@ -1771,7 +2008,10 @@ function formatEmbeddingStatus(data) {
   const total = data.total_points ?? chunks + claims;
   const qdrant = data.qdrant_ok !== false ? "OK" : "недоступен";
   const yandex = data.yandex_configured ? "настроен" : "не настроен";
-  return `Qdrant ${qdrant} · ${total} точек (L3 chunks ${chunks}, L4 claims ${claims}) · Yandex ${yandex}`;
+  const docTotal = getCorpusDocTotal();
+  const indexedDocs = countCorpusQdrantIndexed();
+  const docPart = docTotal > 0 ? `${indexedDocs}/${docTotal} док. · ` : "";
+  return `Qdrant ${qdrant} · ${docPart}${total} точек (L3 chunks ${chunks}, L4 claims ${claims}) · Yandex ${yandex}`;
 }
 
 function formatQdrantInfo(data) {
@@ -1831,11 +2071,12 @@ function renderL3Stats() {
   }
   const chunks = data.l3_points ?? data.collections?.mkg_chunks?.points ?? 0;
   const claims = data.l4_points ?? data.collections?.mkg_claims?.points ?? 0;
-  const indexedCount = docsListCache.filter((d) => indexedDocsSet.has(d.id)).length;
+  const indexedCount = countCorpusQdrantIndexed();
+  const totalCount = getCorpusDocTotal();
   els.l3Stats.innerHTML = `
     <div class="l3-stat"><span class="l3-stat-val">${chunks}</span><span class="l3-stat-label">L3</span></div>
     <div class="l3-stat"><span class="l3-stat-val">${claims}</span><span class="l3-stat-label">L4</span></div>
-    <div class="l3-stat"><span class="l3-stat-val">${indexedCount}</span><span class="l3-stat-label">док. в Qdrant</span></div>`;
+    <div class="l3-stat"><span class="l3-stat-val">${indexedCount} / ${totalCount}</span><span class="l3-stat-label">документов в Qdrant</span></div>`;
 }
 
 async function refreshEmbeddingStatus() {
@@ -1890,6 +2131,9 @@ async function indexEmbeddings(docId = selectedDoc, opts = {}) {
     if ((data.indexed ?? 0) > 0 || !data.error) {
       indexedDocsSet.add(docId);
       saveIndexedDocs();
+      if (!silent && docId === selectedDoc) {
+        showQdrantToast(`Документ в Qdrant: +${data.indexed ?? 0} точек (L3 ${data.indexed_l3 ?? "?"}, L4 ${data.indexed_l4 ?? "?"}).`);
+      }
     }
     if (docId === selectedDoc) updateSearchBadge(docId);
     if (!silent) {
@@ -1913,9 +2157,15 @@ async function indexEmbeddings(docId = selectedDoc, opts = {}) {
   }
 }
 
-async function autoIndexAfterExtraction(docId) {
-  if (!docId || indexedDocsSet.has(docId)) return;
-  await indexEmbeddings(docId, { silent: true });
+async function autoIndexAfterExtraction(docId, doc = null) {
+  if (!docId || isDocQdrantIndexed(doc || { id: docId })) return;
+  if (isQdrantIndexingInProgress(doc || {})) return;
+  const result = await indexEmbeddings(docId, { silent: true });
+  if (result && ((result.indexed ?? 0) > 0 || !result.error)) {
+    notifyQdrantIndexed(docId, doc || docsListCache.find((d) => d.id === docId));
+  } else if (docNeedsQdrantIndex(doc || docsListCache.find((d) => d.id === docId) || {})) {
+    showQdrantToast("Индексация Qdrant не завершена — нажмите «Индексировать в Qdrant» в карточке документа.", { error: true, ms: 7000 });
+  }
 }
 
 async function indexAllEmbeddings() {
@@ -1950,13 +2200,100 @@ async function runSearch(query, targetEl = els.qdrantSearchResults) {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "Ошибка поиска");
-    if (els.qdrantSearchMeta) {
-      els.qdrantSearchMeta.textContent = `весь корпус · режим: ${data.mode} · ${data.hits?.length ?? 0} результатов`;
-    }
-    renderSearchHits(data.hits || [], targetEl, { showDoc: true });
+    lastQdrantSearchHits = data.hits || [];
+    renderQdrantSearchResults(targetEl, { showDoc: true, mode: data.mode });
   } catch (e) {
+    lastQdrantSearchHits = [];
     targetEl.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
   }
+}
+
+function filterQdrantHitsByKeyword(hits, keyword) {
+  const q = (keyword || "").trim().toLowerCase();
+  if (!q) return hits;
+  return (hits || []).filter((hit) => {
+    const text = [hit.text, hit.label, hit.node_id, hit.document_id]
+      .filter(Boolean).join(" ").toLowerCase();
+    return text.includes(q);
+  });
+}
+
+function applyQdrantPostFilters(hits) {
+  const f = qdrantPostFilters;
+  return (hits || []).filter((hit) => {
+    if (f.layers?.length && !f.layers.includes(hit.layer)) return false;
+    if (f.minConfidence > 0) {
+      const score = hit.score != null ? (hit.score <= 1 ? hit.score : hit.score / 100) : 0;
+      if (score < f.minConfidence) return false;
+    }
+    if (f.docTypes?.length) {
+      const d = docsListCache.find((x) => x.id === hit.document_id);
+      const cat = inferDocCategory(d || { file_name: hit.document_id || "" });
+      if (!f.docTypes.includes(cat)) return false;
+    }
+    return true;
+  });
+}
+
+const QDRANT_FILTER_CHIP_DEFS = [
+  { group: "docTypes", id: "patent", label: "Патент" },
+  { group: "docTypes", id: "article", label: "Статья" },
+  { group: "docTypes", id: "report", label: "Отчёт" },
+  { group: "docTypes", id: "handbook", label: "Справочник" },
+  { group: "layers", id: "L3", label: "L3" },
+  { group: "layers", id: "L4", label: "L4" },
+  { group: "minConfidence", id: "0.5", label: "≥50%" },
+  { group: "minConfidence", id: "0.7", label: "≥70%" },
+  { group: "minConfidence", id: "0.85", label: "≥85%" },
+];
+
+function renderQdrantFilterChips() {
+  const root = els.qdrantFilterChips;
+  if (!root) return;
+  root.innerHTML = QDRANT_FILTER_CHIP_DEFS.map((chip) => {
+    const active = chip.group === "minConfidence"
+      ? qdrantPostFilters.minConfidence === Number(chip.id)
+      : (qdrantPostFilters[chip.group] || []).includes(chip.id);
+    return `<button type="button" class="layer-chip qdrant-filter-chip${active ? " active" : ""}"
+      data-qf-group="${esc(chip.group)}" data-qf-id="${esc(chip.id)}">${esc(chip.label)}</button>`;
+  }).join("");
+  root.querySelectorAll(".qdrant-filter-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const group = btn.dataset.qfGroup;
+      const id = btn.dataset.qfId;
+      if (group === "minConfidence") {
+        const val = Number(id);
+        qdrantPostFilters.minConfidence = qdrantPostFilters.minConfidence === val ? 0 : val;
+      } else {
+        const arr = qdrantPostFilters[group] || [];
+        const idx = arr.indexOf(id);
+        if (idx >= 0) arr.splice(idx, 1);
+        else arr.push(id);
+        qdrantPostFilters[group] = arr;
+      }
+      renderQdrantFilterChips();
+      renderQdrantSearchResults(els.qdrantSearchResults, { showDoc: true });
+    });
+  });
+}
+
+function initQdrantPostFilters() {
+  qdrantPostFilters = defaultQdrantPostFilters();
+  renderQdrantFilterChips();
+}
+
+function renderQdrantSearchResults(targetEl, opts = {}) {
+  const keyword = els.qdrantSearchKeyword?.value || "";
+  let hits = applyQdrantPostFilters(lastQdrantSearchHits);
+  hits = filterQdrantHitsByKeyword(hits, keyword);
+  if (els.qdrantSearchMeta) {
+    const total = lastQdrantSearchHits.length;
+    const mode = opts.mode ? ` · режим: ${opts.mode}` : "";
+    const filtered = hits.length !== total;
+    const suffix = filtered ? ` · после фильтра: ${hits.length}` : "";
+    els.qdrantSearchMeta.textContent = `весь корпус${mode} · ${total} результатов${suffix}`;
+  }
+  renderSearchHits(hits, targetEl, opts);
 }
 
 function renderSearchHits(hits, targetEl, opts = {}) {
@@ -2474,6 +2811,244 @@ const REL_TYPE_HINTS = {
   SHOWED_EFFECT: "Эксперимент или стадия показала эффект.",
 };
 
+function canEditGraphRelations() {
+  const role = window.MKGAuth?.getRole?.();
+  const id = role?.id || "";
+  return id === "admin" || id === "engineer";
+}
+
+function renderExpertEditBlock(data, docId) {
+  if (!canEditGraphRelations() || !docId || docId === GRAPH_ALL_ID) return "";
+  const existing = (data.props || {}).expert_comment || "";
+  const editor = (data.props || {}).edited_by || "";
+  const editedAt = (data.props || {}).edited_at || "";
+  const meta = editor ? `<p class="muted small">Последнее: ${esc(editor)}${editedAt ? ` · ${esc(editedAt)}` : ""}</p>` : "";
+  return `
+    <div class="rel-expert-edit" data-rel-from="${esc(data.from)}" data-rel-to="${esc(data.to)}" data-rel-type="${esc(data.type)}" data-doc-id="${esc(docId)}">
+      <h4 class="detail-section-title">Комментарий эксперта</h4>
+      ${meta}
+      <textarea class="rel-expert-textarea" rows="3" placeholder="Уточнение связи, аудит…">${esc(existing)}</textarea>
+      <div class="rel-expert-actions">
+        <button type="button" class="btn btn-primary btn-small rel-expert-save-btn">Сохранить</button>
+        <span class="rel-expert-status muted small"></span>
+      </div>
+    </div>`;
+}
+
+function bindExpertEditActions(root, docId) {
+  root?.querySelectorAll(".rel-expert-edit").forEach((block) => {
+    block.querySelector(".rel-expert-save-btn")?.addEventListener("click", async () => {
+      const from = block.dataset.relFrom;
+      const to = block.dataset.relTo;
+      const type = block.dataset.relType;
+      const resolvedDoc = block.dataset.docId || docId;
+      const textarea = block.querySelector(".rel-expert-textarea");
+      const statusEl = block.querySelector(".rel-expert-status");
+      const comment = (textarea?.value || "").trim();
+      if (!comment) {
+        if (statusEl) statusEl.textContent = "Введите комментарий";
+        return;
+      }
+      const role = window.MKGAuth?.getRole?.() || {};
+      const user = window.MKGAuth?.getCurrentUser?.() || {};
+      if (statusEl) statusEl.textContent = "Сохранение…";
+      try {
+        const qs = new URLSearchParams({ from, to, type });
+        const r = await fetch(`${API}/graph/documents/${encodeURIComponent(resolvedDoc)}/relationship?${qs}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expert_comment: comment,
+            edited_by: user.display_name || role.name_ru || role.id || "expert",
+            role_id: role.id || "engineer",
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        const rel = findRelationshipInGraph(from, to, type);
+        if (rel) rel.props = { ...(rel.props || {}), ...(data.props || {}) };
+        if (statusEl) statusEl.textContent = "Сохранено";
+        showQdrantToast("Комментарий эксперта сохранён");
+      } catch (e) {
+        if (statusEl) statusEl.textContent = e.message || "Ошибка";
+      }
+    });
+  });
+}
+
+function toggleGraphComparePanel() {
+  graphComparePanelOpen = !graphComparePanelOpen;
+  els.graphComparePanel?.classList.toggle("hidden", !graphComparePanelOpen);
+  els.graphCompareBtn?.classList.toggle("active", graphComparePanelOpen);
+  if (graphComparePanelOpen) renderCompareSelectedChips();
+}
+
+function renderCompareSelectedChips() {
+  if (!els.graphCompareSelected) return;
+  if (!compareSelectedNodeIds.size) {
+    els.graphCompareSelected.innerHTML = '<p class="muted small">Ctrl+клик по Process/Material на графе (до 3).</p>';
+    return;
+  }
+  els.graphCompareSelected.innerHTML = [...compareSelectedNodeIds].map((id) => {
+    const node = findNodeInGraph(id);
+    const name = node?.props?.name_ru || node?.props?.name_en || node?.props?.name || id;
+    return `<span class="graph-compare-chip">${esc(node?.label || "?")}: ${esc(name)}</span>`;
+  }).join("");
+}
+
+function toggleCompareNodeSelection(node, { multi = false } = {}) {
+  if (!node || !COMPARE_ENTITY_LABELS.has(node.label)) return;
+  if (!multi) compareSelectedNodeIds.clear();
+  if (compareSelectedNodeIds.has(node.id)) compareSelectedNodeIds.delete(node.id);
+  else if (compareSelectedNodeIds.size < 3) compareSelectedNodeIds.add(node.id);
+  renderCompareSelectedChips();
+  if (graphComparePanelOpen) renderCompareTable();
+}
+
+function measurementsNearEntity(nodeId, maxDepth = 3) {
+  const out = [];
+  const visited = new Set([nodeId]);
+  let frontier = [nodeId];
+  for (let depth = 0; depth < maxDepth && frontier.length; depth++) {
+    const next = [];
+    for (const nid of frontier) {
+      for (const rel of graphData.relationships) {
+        const from = rel.from || rel.from_;
+        const to = rel.to;
+        let other = null;
+        if (from === nid) other = to;
+        else if (to === nid) other = from;
+        else continue;
+        if (visited.has(other)) continue;
+        visited.add(other);
+        const n = findNodeInGraph(other);
+        if (n?.label === "Measurement") {
+          out.push(n);
+        }
+        next.push(other);
+      }
+    }
+    frontier = next;
+  }
+  return out;
+}
+
+function renderCompareTable() {
+  if (!els.graphCompareTableWrap) return;
+  const ids = [...compareSelectedNodeIds];
+  if (ids.length < 2) {
+    els.graphCompareTableWrap.innerHTML = '<p class="muted small">Выберите минимум 2 узла Process или Material.</p>';
+    return;
+  }
+  const paramSet = new Set();
+  const columns = ids.map((id) => {
+    const node = findNodeInGraph(id);
+    const name = node?.props?.name_ru || node?.props?.name_en || node?.props?.name || id;
+    const measurements = measurementsNearEntity(id);
+    const byParam = {};
+    measurements.forEach((m) => {
+      const props = m.props || {};
+      const param = String(props.parameter || props.name || "value").trim() || "value";
+      paramSet.add(param);
+      const val = props.numeric_value ?? props.value ?? props.concentration ?? props.temperature ?? "—";
+      const unit = props.unit || "";
+      byParam[param] = `${val}${unit ? ` ${unit}` : ""}`;
+    });
+    return { id, name, label: node?.label || "?", byParam };
+  });
+  const params = [...paramSet].sort((a, b) => a.localeCompare(b, "ru"));
+  if (!params.length) {
+    els.graphCompareTableWrap.innerHTML = '<p class="muted small">У выбранных сущностей нет связанных Measurement в графе.</p>';
+    return;
+  }
+  const head = `<tr><th>Параметр</th>${columns.map((c) => `<th>${esc(c.label)}<br><span class="muted small">${esc(c.name)}</span></th>`).join("")}</tr>`;
+  const body = params.map((p) =>
+    `<tr><td>${esc(p)}</td>${columns.map((c) => `<td>${esc(c.byParam[p] || "—")}</td>`).join("")}</tr>`,
+  ).join("");
+  els.graphCompareTableWrap.innerHTML = `<table class="graph-compare-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+function loadTopicWatchlistFromStorage() {
+  try {
+    const raw = localStorage.getItem(WATCHLIST_STORAGE_KEY);
+    if (!raw) return [];
+    return raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function saveTopicWatchlistToStorage(words) {
+  try {
+    localStorage.setItem(WATCHLIST_STORAGE_KEY, words.join(", "));
+  } catch { /* ignore */ }
+}
+
+function initTopicWatchlistUi() {
+  const words = loadTopicWatchlistFromStorage();
+  if (els.topicWatchlistInput) els.topicWatchlistInput.value = words.join(", ");
+}
+
+function bindTopicWatchlistEvents() {
+  els.topicWatchlistSaveBtn?.addEventListener("click", () => {
+    const raw = (els.topicWatchlistInput?.value || "").trim();
+    const words = raw.split(/[,;]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+    saveTopicWatchlistToStorage(words);
+    if (els.topicWatchlistStatus) els.topicWatchlistStatus.textContent = words.length ? `Сохранено: ${words.length} тем` : "Подписки очищены";
+  });
+}
+
+function notifyWatchlistMatches(items) {
+  const watchlist = loadTopicWatchlistFromStorage();
+  if (!watchlist.length || !items?.length) return;
+  let known = [];
+  try {
+    known = JSON.parse(localStorage.getItem(KNOWN_DOCS_STORAGE_KEY) || "[]");
+  } catch { known = []; }
+  const knownSet = new Set(known);
+  const isInitial = knownSet.size === 0;
+  const newIds = [];
+  for (const doc of items) {
+    if (!doc?.id || knownSet.has(doc.id)) continue;
+    newIds.push(doc.id);
+    if (isInitial) continue;
+    const title = String(doc.file_name || doc.id || "").toLowerCase();
+    const hit = watchlist.find((w) => title.includes(w));
+    if (hit) showQdrantToast(`Новый документ по теме «${doc.file_name || doc.id}» (watchlist: ${hit})`, { ms: 7000 });
+  }
+  try {
+    localStorage.setItem(KNOWN_DOCS_STORAGE_KEY, JSON.stringify(items.map((d) => d.id).filter(Boolean)));
+  } catch { /* ignore */ }
+}
+
+async function loadDashboardStats() {
+  if (!els.dashboardCards) return;
+  els.dashboardCards.innerHTML = '<div class="dashboard-card skeleton"><span class="dashboard-card-value">…</span><span class="dashboard-card-label">Загрузка</span></div>';
+  try {
+    const r = await fetch(`${API}/dashboard/stats`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    els.dashboardCards.innerHTML = `
+      <div class="dashboard-card"><span class="dashboard-card-value">${data.doc_count ?? 0}</span><span class="dashboard-card-label">Документов</span></div>
+      <div class="dashboard-card dashboard-card-warn"><span class="dashboard-card-value">${data.l4_anomalies_count ?? 0}</span><span class="dashboard-card-label">L4-аномалии</span></div>
+      <div class="dashboard-card dashboard-card-danger"><span class="dashboard-card-value">${data.contradiction_nodes_count ?? 0}</span><span class="dashboard-card-label">Contradiction</span></div>`;
+    const domains = data.domains || [];
+    els.dashboardDomains.innerHTML = domains.length
+      ? `<div class="dashboard-domain-chips">${domains.map((d) =>
+        `<span class="dashboard-domain-chip">${esc(d.label)} · ${d.doc_count}</span>`,
+      ).join("")}</div>`
+      : '<p class="muted small">Домены по заголовкам файлов пока не определены.</p>';
+    const risks = data.risk_zones || [];
+    els.dashboardRiskList.innerHTML = risks.length
+      ? risks.map((rz) =>
+        `<li class="dashboard-risk-item severity-${esc(rz.severity || "low")}"><strong>${esc(rz.title || rz.type)}</strong><span class="muted small">${esc(rz.detail || "")}</span></li>`,
+      ).join("")
+      : '<li class="muted small">Зоны риска не обнаружены.</li>';
+  } catch (e) {
+    els.dashboardCards.innerHTML = `<p class="muted small">Ошибка обзора: ${esc(e.message)}</p>`;
+  }
+}
+
 function openRelationshipDetailPanel(data, docId) {
   const layer = data.layer || "L?";
   const title = `${data.type} · ${layer}`;
@@ -2485,12 +3060,14 @@ function openRelationshipDetailPanel(data, docId) {
     ${renderRelPropsBlock(data.props || {})}
     <h4 class="detail-section-title">Узлы</h4>
     ${renderRelNodeCard(data.source_node, "Источник")}
-    ${renderRelNodeCard(data.target_node, "Цель")}`;
+    ${renderRelNodeCard(data.target_node, "Цель")}
+    ${renderExpertEditBlock(data, docId)}`;
   const sideHtml = `
     <h4 class="detail-section-title">Смежные связи</h4>
     ${renderRelatedEdgesList(data.related_edges, "Других связей у этих узлов пока нет.")}`;
   openSideDetailPanel(title, mainHtml, sideHtml);
   bindRelDetailActions(els.detailBody, docId);
+  bindExpertEditActions(els.detailBody, docId);
   highlightGraphEdge(data.from, data.to, data.type);
 }
 
@@ -2535,16 +3112,39 @@ function bindQdrantDetailActions(root) {
   });
 }
 
+function qdrantEdgeToRelChip(edge) {
+  return {
+    from: edge.from_node,
+    to: edge.to_node,
+    type: edge.type,
+    from_short: edge.from_short || edge.from_label || (edge.from_node || "").split(":").pop()?.replace(/_/g, " ") || "?",
+    to_short: edge.to_short || edge.to_label || (edge.to_node || "").split(":").pop()?.replace(/_/g, " ") || "?",
+    layer: edge.layer || "L?",
+  };
+}
+
+function renderQdrantEdgeRow(edge) {
+  const rel = qdrantEdgeToRelChip(edge);
+  const docId = edge.document_id || selectedDoc;
+  const cross = edge.other_cluster_name
+    ? `<span class="qdrant-edge-cluster muted small">→ кластер «${esc(edge.other_cluster_name)}»</span>`
+    : (edge.other_cluster_id != null ? `<span class="qdrant-edge-cluster muted small">→ кластер #${esc(String(edge.other_cluster_id))}</span>` : "");
+  const desc = edge.description ? `<p class="qdrant-edge-desc muted small">${esc(edge.description)}</p>` : "";
+  const preview = (edge.from_text || edge.to_text)
+    ? `<p class="qdrant-edge-preview muted small">${esc((edge.from_text || rel.from_short).slice(0, 80))} → ${esc((edge.to_text || rel.to_short).slice(0, 80))}</p>`
+    : "";
+  return `<li class="qdrant-edge-row">${renderRelChip(rel, { docId })}${cross}${desc}${preview}</li>`;
+}
+
 function renderQdrantEdgesList(edges, emptyLabel) {
   if (!edges?.length) {
     return `<p class="muted small">${esc(emptyLabel)}</p>`;
   }
-    return `<ul class="qdrant-detail-edges">${edges.map((e) => {
-    const cross = e.other_cluster_name
-      ? ` → кластер «${esc(e.other_cluster_name)}»`
-      : (e.other_cluster_id != null ? ` → кластер #${esc(String(e.other_cluster_id))}` : "");
-    return `<li><code>${esc(e.type || "?")}</code> · ${esc(e.from_node || "?")} → ${esc(e.to_node || "?")}${cross}</li>`;
-  }).join("")}</ul>`;
+  return `<ul class="qdrant-detail-edges">${edges.map((e) => renderQdrantEdgeRow(e)).join("")}</ul>`;
+}
+
+function bindQdrantEdgeClicks(root, docId = null) {
+  bindRelChipClicks(root, docId);
 }
 
 function formatClusteringStatsBlock(ctx) {
@@ -2638,6 +3238,8 @@ async function openQdrantClusterDetail(clusterId) {
       <h4 class="detail-section-title">Межкластерные связи</h4>
       ${renderQdrantEdgesList(data.cross_cluster_edges, "Нет связей с другими кластерами.")}`;
     openSideDetailPanel(title, mainHtml, sideHtml);
+    bindQdrantDetailActions(els.detailBody);
+    bindQdrantEdgeClicks(els.detailBody);
   } catch (e) {
     openSideDetailPanel("Ошибка", `<p class="muted">${esc(e.message)}</p>`, "");
   }
@@ -2670,6 +3272,7 @@ async function openQdrantPointDetail(point) {
       ${renderQdrantEdgesList(data.edges, "Связей не найдено.")}`;
     openSideDetailPanel(title, mainHtml, sideHtml);
     bindQdrantDetailActions(els.detailBody);
+    bindQdrantEdgeClicks(els.detailBody);
   } catch (e) {
     const mainHtml = `
       <p class="qdrant-detail-desc">${esc(point.text || "—")}</p>
@@ -3056,6 +3659,7 @@ function resetGraphFilters() {
   clearGraphNodeSelection();
   graphLayerFilter = "all";
   highlightCrossLayer = false;
+  resetGraphAdvancedFilters({ rerender: false });
   connectionFormationMode = false;
   connectionFormationStep = 0;
   stopConnectionFormationTimer();
@@ -3361,6 +3965,563 @@ function limitSuperNodeFan(rels, layerMap, max = 18) {
   return [...rest, ...limitEdges(fromSuper, layerMap, max)];
 }
 
+function nodeSearchText(node) {
+  const props = node?.props || {};
+  const parts = [
+    props.name_ru, props.name_en, props.name, props.title, props.quote,
+    props.source_quote, props.full_name, props.legal_name, props.description,
+    props.chemical_formula, props.city, props.country, props.region,
+    node?.label, node?.id,
+  ];
+  const aliases = nodeAliasesText(node);
+  if (aliases) parts.push(aliases);
+  return parts.filter((p) => typeof p === "string" && p.trim()).join(" ").toLowerCase();
+}
+
+function nodeAliasesText(node) {
+  const props = node?.props || {};
+  const aliases = props.aliases;
+  if (Array.isArray(aliases)) {
+    return aliases.filter((x) => typeof x === "string" && x.trim()).join(" ");
+  }
+  if (typeof aliases === "string" && aliases.trim()) return aliases.trim();
+  return "";
+}
+
+function nodeMatchesKeyword(node, q) {
+  const needle = (q || "").trim().toLowerCase();
+  if (!needle) return true;
+  const hay = nodeSearchText(node);
+  if (hay.includes(needle)) return true;
+  for (const [a, b] of SYNONYM_PAIRS) {
+    if (needle.includes(a) && hay.includes(b)) return true;
+    if (needle.includes(b) && hay.includes(a)) return true;
+  }
+  return false;
+}
+
+function inferDocCategory(meta) {
+  const text = [
+    meta?.file_name, meta?.doc_type, meta?.classification, meta?.source_file,
+  ].filter(Boolean).join(" ").toLowerCase();
+  if (/патент|patent|\.ru\d{6,}/.test(text)) return "patent";
+  if (/справочник|handbook|manual|guide|reference/.test(text)) return "handbook";
+  if (/отч[её]т|report|доклад|отчет|internal/.test(text)) return "report";
+  if (/статья|article|paper|journal|conf|proceedings/.test(text)) return "article";
+  return "other";
+}
+
+function nodeDocCategory(node) {
+  const props = node?.props || {};
+  const fromProps = props.doc_category || props.document_category;
+  if (fromProps) return String(fromProps).toLowerCase();
+  const docId = props.source_doc_id || props.document_id;
+  if (docId) {
+    const d = docsListCache.find((x) => x.id === docId);
+    if (d) return inferDocCategory(d);
+  }
+  return inferDocCategory({ file_name: props.file_name || props.source_file, doc_type: props.doc_type });
+}
+
+function nodeSourceDocId(node) {
+  const props = node?.props || {};
+  return props.source_doc_id || props.document_id || null;
+}
+
+function nodeLanguage(node) {
+  const props = node?.props || {};
+  const lang = String(props.lang || props.language || props.lang_code || "").toLowerCase();
+  if (lang.startsWith("ru")) return "ru";
+  if (lang.startsWith("en")) return "en";
+  if (node?.label === "LangContext") {
+    const code = String(props.code || props.name || "").toLowerCase();
+    if (code.includes("ru")) return "ru";
+    if (code.includes("en")) return "en";
+  }
+  const text = nodeSearchText(node);
+  const hasCyr = /[а-яё]/i.test(text);
+  const hasLat = /[a-z]/i.test(text);
+  if (hasCyr && !hasLat) return "ru";
+  if (hasLat && !hasCyr) return "en";
+  return null;
+}
+
+function nodeYear(node) {
+  const props = node?.props || {};
+  const raw = props.publication_year ?? props.pub_year ?? props.year
+    ?? props.run_date ?? props.event_date ?? props.date;
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw >= 1000 && raw <= 9999 ? raw : null;
+  const s = String(raw);
+  const m = s.match(/\b(19|20)\d{2}\b/);
+  return m ? Number(m[0]) : null;
+}
+
+function nodeConfidence(node) {
+  const props = node?.props || {};
+  const v = props.extraction_confidence ?? props.confidence ?? props.confidence_score;
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function nodeNumericValue(node) {
+  if (node?.label !== "Measurement") return null;
+  const props = node.props || {};
+  const raw = props.numeric_value ?? props.value ?? props.concentration ?? props.temperature ?? props.flow_rate;
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isDomesticGeoNode(node) {
+  const text = nodeGeographyText(node);
+  return /\b(росси|russia|\bru\b|рф|российск)\b/i.test(text);
+}
+
+function nodeGeographyText(node) {
+  const props = node?.props || {};
+  return [props.city, props.country, props.region, props.name, props.name_ru]
+    .filter((p) => typeof p === "string" && p.trim())
+    .join(" ")
+    .toLowerCase();
+}
+
+function advancedFiltersSignature(f) {
+  if (!f?.active) return "";
+  return JSON.stringify({
+    searchText: f.searchText,
+    entityTypes: [...(f.entityTypes || [])].sort(),
+    docCategories: [...(f.docCategories || [])].sort(),
+    relationTypes: [...(f.relationTypes || [])].sort(),
+    geography: f.geography,
+    practiceRegion: f.practiceRegion,
+    yearMin: f.yearMin,
+    yearMax: f.yearMax,
+    minConfidence: f.minConfidence,
+    materialKeyword: f.materialKeyword,
+    processKeyword: f.processKeyword,
+    language: f.language,
+    numericMin: f.numericMin,
+    numericMax: f.numericMax,
+    numericParam: f.numericParam,
+    showContradictions: f.showContradictions,
+    showGaps: f.showGaps,
+  });
+}
+
+function isContradictionRel(rel, nodeById) {
+  if (CONTRADICTION_REL_TYPES.has(rel.type)) return true;
+  const { from, to } = relEndpoints(rel);
+  const a = nodeById.get(from);
+  const b = nodeById.get(to);
+  return (a && CONTRADICTION_NODE_LABELS.has(a.label)) || (b && CONTRADICTION_NODE_LABELS.has(b.label));
+}
+
+function isGapNode(node) {
+  return GAP_NODE_LABELS.has(node?.label);
+}
+
+function applyAdvancedGraphFilters(nodes, rels) {
+  const f = graphAdvancedFilters;
+  if (!f.active) return { nodes, rels };
+
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  let keepIds = new Set(nodes.map((n) => n.id));
+
+  const entitySet = new Set(f.entityTypes || []);
+  const allEntitiesSelected = entitySet.size >= ALL_ENTITY_FILTER_IDS.length;
+  if (!allEntitiesSelected && entitySet.size > 0) {
+    const allowedLabels = new Set();
+    entitySet.forEach((id) => {
+      (ENTITY_LABELS_BY_FILTER_ID[id] || new Set()).forEach((l) => allowedLabels.add(l));
+    });
+    keepIds = new Set([...keepIds].filter((id) => allowedLabels.has(nodeById.get(id)?.label)));
+  }
+
+  const searchQ = (f.searchText || "").trim().toLowerCase();
+  if (searchQ) {
+    keepIds = new Set([...keepIds].filter((id) => nodeSearchText(nodeById.get(id)).includes(searchQ)));
+  }
+
+  const docCatSet = new Set(f.docCategories || []);
+  if (docCatSet.size > 0 && docCatSet.size < ALL_DOC_CATEGORY_IDS.length) {
+    const allowedDocIds = new Set(
+      docsListCache
+        .filter((d) => docCatSet.has(inferDocCategory(d)))
+        .map((d) => d.id),
+    );
+    const docMatchIds = new Set();
+    nodes.forEach((n) => {
+      if (n.label === "Document" && docCatSet.has(nodeDocCategory(n))) docMatchIds.add(n.id);
+      const srcDoc = nodeSourceDocId(n);
+      if (srcDoc && allowedDocIds.has(srcDoc)) docMatchIds.add(n.id);
+    });
+    rels.forEach((r) => {
+      const { from, to } = relEndpoints(r);
+      if (docMatchIds.has(from) || docMatchIds.has(to)) {
+        docMatchIds.add(from);
+        docMatchIds.add(to);
+      }
+    });
+    keepIds = new Set([...keepIds].filter((id) => docMatchIds.has(id)));
+  }
+
+  const langFilter = (f.language || "both").toLowerCase();
+  if (langFilter === "ru" || langFilter === "en") {
+    const langMatchIds = new Set();
+    nodes.forEach((n) => {
+      const lang = nodeLanguage(n);
+      if (lang === langFilter || lang == null) langMatchIds.add(n.id);
+      if (n.label === "LangContext") {
+        const ctxLang = nodeLanguage(n);
+        if (ctxLang === langFilter) langMatchIds.add(n.id);
+      }
+    });
+    rels.forEach((r) => {
+      if (r.type === "TAGGED_WITH" || r.type === "HAS_LANG") {
+        const { from, to } = relEndpoints(r);
+        const a = nodeById.get(from);
+        const b = nodeById.get(to);
+        if ((a?.label === "LangContext" && nodeLanguage(a) === langFilter)
+          || (b?.label === "LangContext" && nodeLanguage(b) === langFilter)) {
+          langMatchIds.add(from);
+          langMatchIds.add(to);
+        }
+      }
+    });
+    keepIds = new Set([...keepIds].filter((id) => langMatchIds.has(id)));
+  }
+
+  const geo = (f.geography || "").trim().toLowerCase();
+  if (geo) {
+    const geoMatchIds = new Set();
+    nodes.forEach((n) => {
+      if (n.label === "Location" && nodeGeographyText(n).includes(geo)) geoMatchIds.add(n.id);
+      if (nodeGeographyText(n).includes(geo)) geoMatchIds.add(n.id);
+    });
+    rels.forEach((r) => {
+      const { from, to } = relEndpoints(r);
+      if (geoMatchIds.has(from) || geoMatchIds.has(to)) {
+        geoMatchIds.add(from);
+        geoMatchIds.add(to);
+      }
+    });
+    keepIds = new Set([...keepIds].filter((id) => geoMatchIds.has(id)));
+  }
+
+  const practice = (f.practiceRegion || "").trim().toLowerCase();
+  if (practice === "domestic" || practice === "foreign") {
+    const practiceMatchIds = new Set();
+    nodes.forEach((n) => {
+      const domestic = isDomesticGeoNode(n);
+      if (n.label === "Location") {
+        if (practice === "domestic" && domestic) practiceMatchIds.add(n.id);
+        if (practice === "foreign" && !domestic) practiceMatchIds.add(n.id);
+      } else if (domestic && practice === "domestic") {
+        practiceMatchIds.add(n.id);
+      } else if (!domestic && practice === "foreign" && nodeGeographyText(n)) {
+        practiceMatchIds.add(n.id);
+      }
+    });
+    rels.forEach((r) => {
+      const { from, to } = relEndpoints(r);
+      if (practiceMatchIds.has(from) || practiceMatchIds.has(to)) {
+        practiceMatchIds.add(from);
+        practiceMatchIds.add(to);
+      }
+    });
+    keepIds = new Set([...keepIds].filter((id) => practiceMatchIds.has(id)));
+  }
+
+  const numMin = f.numericMin !== "" && f.numericMin != null ? Number(f.numericMin) : null;
+  const numMax = f.numericMax !== "" && f.numericMax != null ? Number(f.numericMax) : null;
+  const numParam = (f.numericParam || "").trim().toLowerCase();
+  if ((numMin != null && Number.isFinite(numMin)) || (numMax != null && Number.isFinite(numMax))) {
+    const measureMatch = new Set();
+    nodes.forEach((n) => {
+      if (n.label !== "Measurement") return;
+      const props = n.props || {};
+      if (numParam) {
+        const param = String(props.parameter || props.name || "").toLowerCase();
+        if (!param.includes(numParam)) return;
+      }
+      const val = nodeNumericValue(n);
+      if (val == null) return;
+      if (numMin != null && Number.isFinite(numMin) && val < numMin) return;
+      if (numMax != null && Number.isFinite(numMax) && val > numMax) return;
+      measureMatch.add(n.id);
+    });
+    rels.forEach((r) => {
+      const { from, to } = relEndpoints(r);
+      if (measureMatch.has(from) || measureMatch.has(to)) {
+        measureMatch.add(from);
+        measureMatch.add(to);
+      }
+    });
+    keepIds = new Set([...keepIds].filter((id) => measureMatch.has(id)));
+  }
+
+  const yMin = Number(f.yearMin) || 1990;
+  const yMax = Number(f.yearMax) || 2026;
+  if (yMin > 1990 || yMax < 2026) {
+    keepIds = new Set([...keepIds].filter((id) => {
+      const y = nodeYear(nodeById.get(id));
+      return y == null || (y >= yMin && y <= yMax);
+    }));
+  }
+
+  const minConf = Number(f.minConfidence) || 0;
+  if (minConf > 0) {
+    keepIds = new Set([...keepIds].filter((id) => {
+      const c = nodeConfidence(nodeById.get(id));
+      return c == null || c >= minConf;
+    }));
+  }
+
+  if ((f.materialKeyword || "").trim()) {
+    const q = f.materialKeyword.trim();
+    const matMatch = new Set(
+      [...keepIds].filter((id) => {
+        const n = nodeById.get(id);
+        return n?.label === "Material" && nodeMatchesKeyword(n, q);
+      }),
+    );
+    keepIds = matMatch.size ? matMatch : new Set();
+  }
+  if ((f.processKeyword || "").trim()) {
+    const q = f.processKeyword.trim();
+    const procMatch = new Set(
+      [...keepIds].filter((id) => {
+        const n = nodeById.get(id);
+        return n?.label === "Process" && nodeMatchesKeyword(n, q);
+      }),
+    );
+    keepIds = procMatch.size ? procMatch : new Set();
+  }
+
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    rels.forEach((r) => {
+      const { from, to } = relEndpoints(r);
+      if (keepIds.has(from) && !keepIds.has(to)) {
+        keepIds.add(to);
+        expanded = true;
+      }
+      if (keepIds.has(to) && !keepIds.has(from)) {
+        keepIds.add(from);
+        expanded = true;
+      }
+    });
+  }
+
+  let filteredRels = rels.filter((r) => {
+    const { from, to } = relEndpoints(r);
+    return keepIds.has(from) && keepIds.has(to);
+  });
+
+  const relSet = new Set(f.relationTypes || []);
+  if (relSet.size > 0 && relSet.size < ALL_RELATION_FILTER_IDS.length) {
+    filteredRels = filteredRels.filter((r) => relSet.has(r.type));
+    const relNodeIds = new Set();
+    filteredRels.forEach((r) => {
+      const { from, to } = relEndpoints(r);
+      relNodeIds.add(from);
+      relNodeIds.add(to);
+    });
+    keepIds = new Set([...keepIds].filter((id) => relNodeIds.has(id)));
+  }
+
+  const filteredNodes = nodes.filter((n) => keepIds.has(n.id));
+  return { nodes: filteredNodes, rels: filteredRels };
+}
+
+function populateGraphGeographyOptions() {
+  const sel = els.graphFilterGeography;
+  if (!sel) return;
+  const current = sel.value;
+  const values = new Set();
+  graphData.nodes.forEach((n) => {
+    if (n.label !== "Location") return;
+    const props = n.props || {};
+    [props.city, props.country, props.region, props.name_ru, props.name].forEach((v) => {
+      if (typeof v === "string" && v.trim()) values.add(v.trim());
+    });
+  });
+  const sorted = [...values].sort((a, b) => a.localeCompare(b, "ru"));
+  sel.innerHTML = `<option value="">Все регионы</option>${sorted.map((v) =>
+    `<option value="${esc(v)}">${esc(v)}</option>`).join("")}`;
+  if (current && (current === "" || sorted.includes(current))) sel.value = current;
+}
+
+function readGraphFilterForm() {
+  const entityTypes = [];
+  els.graphEntityTypeChecks?.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    if (cb.checked) entityTypes.push(cb.dataset.entityId);
+  });
+  const docCategories = [];
+  els.graphDocTypeChecks?.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    if (cb.checked) docCategories.push(cb.dataset.docCatId);
+  });
+  const relationTypes = [];
+  els.graphRelationTypeChecks?.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    if (cb.checked) relationTypes.push(cb.dataset.relTypeId);
+  });
+  return {
+    searchText: els.graphFilterSearch?.value?.trim() || "",
+    entityTypes,
+    docCategories,
+    relationTypes,
+    geography: els.graphFilterGeography?.value || "",
+    practiceRegion: els.graphFilterPracticeRegion?.value || "",
+    yearMin: Number(els.graphFilterYearMin?.value) || 1990,
+    yearMax: Number(els.graphFilterYearMax?.value) || 2026,
+    minConfidence: Number(els.graphFilterConfidence?.value) || 0,
+    materialKeyword: els.graphFilterMaterial?.value?.trim() || "",
+    processKeyword: els.graphFilterProcess?.value?.trim() || "",
+    language: els.graphFilterLanguage?.value || "both",
+    numericMin: els.graphFilterParamMin?.value ?? els.graphFilterNumericMin?.value ?? "",
+    numericMax: els.graphFilterParamMax?.value ?? els.graphFilterNumericMax?.value ?? "",
+    numericParam: els.graphFilterNumericParam?.value?.trim() || "",
+    showContradictions: !!els.graphFilterContradictions?.checked,
+    showGaps: !!els.graphFilterGaps?.checked,
+  };
+}
+
+function syncGraphFilterFormFromState(f) {
+  if (els.graphFilterSearch) els.graphFilterSearch.value = f.searchText || "";
+  els.graphEntityTypeChecks?.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.checked = (f.entityTypes || ALL_ENTITY_FILTER_IDS).includes(cb.dataset.entityId);
+  });
+  els.graphDocTypeChecks?.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.checked = (f.docCategories || ALL_DOC_CATEGORY_IDS).includes(cb.dataset.docCatId);
+  });
+  els.graphRelationTypeChecks?.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.checked = (f.relationTypes || ALL_RELATION_FILTER_IDS).includes(cb.dataset.relTypeId);
+  });
+  if (els.graphFilterGeography) els.graphFilterGeography.value = f.geography || "";
+  if (els.graphFilterPracticeRegion) els.graphFilterPracticeRegion.value = f.practiceRegion || "";
+  if (els.graphFilterLanguage) els.graphFilterLanguage.value = f.language || "both";
+  if (els.graphFilterYearMin) els.graphFilterYearMin.value = String(f.yearMin ?? 1990);
+  if (els.graphFilterYearMax) els.graphFilterYearMax.value = String(f.yearMax ?? 2026);
+  updateGraphYearLabel();
+  if (els.graphFilterConfidence) els.graphFilterConfidence.value = String(f.minConfidence ?? 0);
+  if (els.graphFilterMaterial) els.graphFilterMaterial.value = f.materialKeyword || "";
+  if (els.graphFilterProcess) els.graphFilterProcess.value = f.processKeyword || "";
+  if (els.graphFilterParamMin) els.graphFilterParamMin.value = f.numericMin ?? "";
+  if (els.graphFilterParamMax) els.graphFilterParamMax.value = f.numericMax ?? "";
+  if (els.graphFilterNumericMin) els.graphFilterNumericMin.value = f.numericMin ?? "";
+  if (els.graphFilterNumericMax) els.graphFilterNumericMax.value = f.numericMax ?? "";
+  if (els.graphFilterNumericParam) els.graphFilterNumericParam.value = f.numericParam || "";
+  if (els.graphFilterContradictions) els.graphFilterContradictions.checked = !!f.showContradictions;
+  if (els.graphFilterGaps) els.graphFilterGaps.checked = !!f.showGaps;
+}
+
+function updateGraphYearLabel() {
+  const min = Number(els.graphFilterYearMin?.value) || 1990;
+  let max = Number(els.graphFilterYearMax?.value) || 2026;
+  if (min > max) {
+    max = min;
+    if (els.graphFilterYearMax) els.graphFilterYearMax.value = String(min);
+  }
+  if (els.graphFilterYearLabel) els.graphFilterYearLabel.textContent = `${min} — ${max}`;
+}
+
+function updateGraphFilterStatus() {
+  if (!els.graphFilterStatus) return;
+  if (!graphAdvancedFilters.active) {
+    els.graphFilterStatus.textContent = "";
+    return;
+  }
+  const { nodes, rels } = applyAdvancedGraphFilters(
+    [...graphData.nodes],
+    [...graphData.relationships],
+  );
+  els.graphFilterStatus.textContent = `Фильтр: ${nodes.length} узл. · ${rels.length} связей`;
+}
+
+function saveGraphAdvancedFiltersSession() {
+  try {
+    sessionStorage.setItem(GRAPH_ADV_FILTERS_SESSION_KEY, JSON.stringify(graphAdvancedFilters));
+  } catch { /* ignore */ }
+}
+
+function loadGraphAdvancedFiltersSession() {
+  try {
+    const raw = sessionStorage.getItem(GRAPH_ADV_FILTERS_SESSION_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    graphAdvancedFilters = { ...defaultGraphAdvancedFilters(), ...parsed };
+  } catch { /* ignore */ }
+}
+
+function applyGraphAdvancedFiltersFromForm() {
+  const form = readGraphFilterForm();
+  graphAdvancedFilters = { ...form, active: true };
+  saveGraphAdvancedFiltersSession();
+  syncGraphFilterFormFromState(graphAdvancedFilters);
+  clearGraphNodeSelection();
+  resetGraphNetwork();
+  scheduleGraphViewsRender({ force: true });
+  updateGraphFilterStatus();
+}
+
+function resetGraphAdvancedFilters({ rerender = true } = {}) {
+  graphAdvancedFilters = defaultGraphAdvancedFilters();
+  try { sessionStorage.removeItem(GRAPH_ADV_FILTERS_SESSION_KEY); } catch { /* ignore */ }
+  syncGraphFilterFormFromState(graphAdvancedFilters);
+  if (els.graphFilterStatus) els.graphFilterStatus.textContent = "";
+  if (rerender) {
+    clearGraphNodeSelection();
+    resetGraphNetwork();
+    scheduleGraphViewsRender({ force: true });
+  }
+}
+
+function initGraphAdvancedFilters() {
+  if (!els.graphEntityTypeChecks) return;
+  loadGraphAdvancedFiltersSession();
+  els.graphEntityTypeChecks.innerHTML = ENTITY_TYPE_FILTERS.map((e) => `
+    <label class="graph-adv-check">
+      <input type="checkbox" data-entity-id="${esc(e.id)}" checked />
+      <span>${esc(e.label)}</span>
+    </label>`).join("");
+  if (els.graphDocTypeChecks) {
+    els.graphDocTypeChecks.innerHTML = DOC_CATEGORY_FILTERS.map((d) => `
+      <label class="graph-adv-check">
+        <input type="checkbox" data-doc-cat-id="${esc(d.id)}" checked />
+        <span>${esc(d.label)}</span>
+      </label>`).join("");
+  }
+  if (els.graphRelationTypeChecks) {
+    els.graphRelationTypeChecks.innerHTML = RELATION_TYPE_FILTERS.map((r) => `
+      <label class="graph-adv-check">
+        <input type="checkbox" data-rel-type-id="${esc(r.id)}" checked />
+        <span>${esc(r.label)}</span>
+      </label>`).join("");
+  }
+  syncGraphFilterFormFromState(graphAdvancedFilters);
+  updateGraphYearLabel();
+
+  const onYearInput = () => updateGraphYearLabel();
+  els.graphFilterYearMin?.addEventListener("input", onYearInput);
+  els.graphFilterYearMax?.addEventListener("input", onYearInput);
+
+  els.graphFilterApplyBtn?.addEventListener("click", applyGraphAdvancedFiltersFromForm);
+  els.graphFilterResetBtn?.addEventListener("click", () => resetGraphAdvancedFilters());
+
+  [els.graphFilterContradictions, els.graphFilterGaps].forEach((el) => {
+    el?.addEventListener("change", () => {
+      if (!graphAdvancedFilters.active) return;
+      const form = readGraphFilterForm();
+      graphAdvancedFilters = { ...graphAdvancedFilters, ...form, active: true };
+      saveGraphAdvancedFiltersSession();
+      scheduleGraphViewsRender();
+    });
+  });
+}
+
 function filteredGraph() {
   const layerMap = nodeLayerMap();
   let nodes = [...graphData.nodes];
@@ -3401,6 +4562,7 @@ function filteredGraph() {
     });
     primaryLayer = connectionFormationStep === 1 ? "L1" : "all";
     nodes = annotateGraphNodes(nodes, primaryLayer);
+    ({ nodes, rels } = applyAdvancedGraphFilters(nodes, rels));
     if (graphDensityMode === "compact") return applyCompactGraphFilter(nodes, rels);
     return { nodes, rels };
   }
@@ -3433,6 +4595,8 @@ function filteredGraph() {
     nodes = annotateGraphNodes(nodes, "all");
   }
 
+  ({ nodes, rels } = applyAdvancedGraphFilters(nodes, rels));
+
   if (graphDensityMode === "compact") {
     return applyCompactGraphFilter(nodes, rels);
   }
@@ -3448,18 +4612,26 @@ const DOC_SECTIONS_FALLBACK = [
   { id: "pipeline", title: "Пайплайн и слои L1–L6" },
   { id: "layer-agents", title: "Межслойные агенты (L1–L6)" },
   { id: "chat-agents", title: "Чат, роли и AI-агенты" },
+  { id: "analytics-synthesis", title: "Аналитика и синтез ответов" },
   { id: "agent-hierarchy", title: "Иерархия агентов" },
   { id: "orchestrator", title: "Оркестратор L1–L6" },
+  { id: "key-requirements", title: "Ключевые требования хакатона" },
+  { id: "functional-filters", title: "Функциональные фильтры" },
   { id: "roles-vs-agents", title: "Роли vs агенты" },
+  { id: "additional-wishes", title: "Дополнительные пожелания (MVP)" },
 ];
 
 const DOC_STATIC_FALLBACK = {
   pipeline: "/static/docs/21_pipeline_and_layers.md",
   "layer-agents": "/static/docs/24_layer_agents.md",
   "chat-agents": "/static/docs/22_chat_agents.md",
+  "analytics-synthesis": "/static/docs/25_analytics_synthesis.md",
   "agent-hierarchy": "/static/docs/agent_hierarchy.md",
   orchestrator: "/static/docs/orchestrator.md",
+  "key-requirements": "/static/docs/25_key_requirements.md",
+  "functional-filters": "/static/docs/25_functional_filters.md",
   "roles-vs-agents": "/static/docs/roles-vs-agents.md",
+  "additional-wishes": "/static/docs/27_additional_wishes.md",
 };
 
 function docLoadingSkeletonHtml() {
@@ -3683,6 +4855,10 @@ function switchPage(page) {
   if (page === "guide") {
     loadDocSections().then(() => loadDocSection(activeGuideSection));
   }
+  if (page === "settings") {
+    loadDashboardStats();
+    initTopicWatchlistUi();
+  }
   if (page === "chats") window.MKGAuth?.refreshChatsPage();
 }
 
@@ -3699,8 +4875,13 @@ window.MKG = {
   formatLogEntry,
   ensurePipeline,
   indexEmbeddings,
-  isDocIndexed: (docId) => indexedDocsSet.has(docId),
+  isDocIndexed: (docId) => {
+    const doc = docsListCache.find((d) => d.id === docId);
+    return isDocQdrantIndexed(doc || { id: docId });
+  },
   markDocIndexed: (docId) => { indexedDocsSet.add(docId); saveIndexedDocs(); },
+  showQdrantToast,
+  isDocQdrantIndexed,
   trackPipelineDoc(docId) { if (docId) pipelineQueue.add(docId); },
   retryPipelineStage,
   bindRetryButtons,
@@ -3879,7 +5060,7 @@ function graphContentKey(nodes, rels) {
 }
 
 function graphViewKey(nodes, rels) {
-  return `${graphLayerFilter}|${highlightCrossLayer}|${connectionFormationMode}|${connectionFormationStep}|${graphDensityMode}|${graphViewMode}|${graphDataKey(nodes, rels)}`;
+  return `${graphLayerFilter}|${highlightCrossLayer}|${connectionFormationMode}|${connectionFormationStep}|${graphDensityMode}|${graphViewMode}|${advancedFiltersSignature(graphAdvancedFilters)}|${graphDataKey(nodes, rels)}`;
 }
 
 function resetGraphNetwork() {
@@ -3978,7 +5159,10 @@ function getVisNetworkOptions(nodeCount) {
 function buildVisGraphItems(nodes, rels) {
   const layerMap = new Map();
   nodes.forEach((n) => layerMap.set(n.id, layerOf(n.label)));
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const compact = graphDensityMode === "compact";
+  const highlightContradictions = graphAdvancedFilters.active && graphAdvancedFilters.showContradictions;
+  const highlightGaps = graphAdvancedFilters.active && graphAdvancedFilters.showGaps;
   const visNodes = nodes.map((n) => {
     const layer = layerOf(n.label);
     const baseColor = LAYER_COLOR[layer] || LAYER_COLOR["L?"];
@@ -4001,6 +5185,11 @@ function buildVisGraphItems(nodes, rels) {
         colorBorder = clusterColor(clusterId);
         borderWidth = 2.5;
       }
+    }
+    if (highlightGaps && isGapNode(n)) {
+      colorBorder = "#c62828";
+      borderWidth = Math.max(borderWidth, 3);
+      colorBg = isGhost ? colorBg : "#ffebee";
     }
     const clusterHint = props.cluster_name ? `\n⬤ ${props.cluster_name}` : "";
     const item = {
@@ -4030,7 +5219,9 @@ function buildVisGraphItems(nodes, rels) {
   const visEdges = rels.slice(0, edgeLimit).map((r, i) => {
     const cross = isCrossLayerRel(r, layerMap);
     const emphasize = cross && highlightCrossLayer;
-    const showLabel = !compact && (emphasize || cross || rels.length < 25);
+    const contradiction = highlightContradictions && isContradictionRel(r, nodeById);
+    const gapEdge = highlightGaps && GAP_REL_TYPES.has(r.type);
+    const showLabel = !compact && (emphasize || cross || contradiction || rels.length < 25);
     return {
       id: `e${i}`,
       from: r.from || r.from_,
@@ -4039,20 +5230,24 @@ function buildVisGraphItems(nodes, rels) {
       title: r.type,
       arrows: { to: { enabled: true, scaleFactor: compact ? 0.45 : 0.6 } },
       font: {
-        size: emphasize ? 9 : 8,
+        size: emphasize || contradiction ? 9 : 8,
         align: "middle",
         strokeWidth: 0,
-        color: emphasize ? "#e65100" : (cross ? "#e65100" : "#546e7a"),
+        color: contradiction ? "#c62828" : (emphasize ? "#e65100" : (cross ? "#e65100" : "#546e7a")),
       },
-      color: cross
-        ? {
-          color: emphasize ? "rgba(255,152,0,0.95)" : "rgba(255,152,0,0.55)",
-          highlight: "#e65100",
-        }
-        : { color: "rgba(144,202,249,0.7)", highlight: "#0288d1" },
-      width: cross ? (emphasize ? 2.8 : (compact ? 1.2 : 2)) : 0.8,
+      color: contradiction
+        ? { color: "rgba(198,40,40,0.95)", highlight: "#b71c1c" }
+        : gapEdge
+          ? { color: "rgba(183,28,28,0.75)", highlight: "#c62828" }
+          : cross
+            ? {
+              color: emphasize ? "rgba(255,152,0,0.95)" : "rgba(255,152,0,0.55)",
+              highlight: "#e65100",
+            }
+            : { color: "rgba(144,202,249,0.7)", highlight: "#0288d1" },
+      width: contradiction ? 3 : (gapEdge ? 2.2 : (cross ? (emphasize ? 2.8 : (compact ? 1.2 : 2)) : 0.8)),
       smooth: { type: "dynamic", roundness: compact ? 0.35 : 0.5 },
-      dashes: cross ? false : undefined,
+      dashes: contradiction ? [8, 4] : (cross ? false : undefined),
     };
   });
   return { visNodes, visEdges };
@@ -4174,6 +5369,11 @@ function renderGraphMap(nodes, rels) {
       if (!params.nodes.length) return;
       const nodeId = params.nodes[0];
       const node = nodes.find((n) => n.id === nodeId) || graphData.nodes.find((n) => n.id === nodeId);
+      const multi = params.event?.srcEvent?.ctrlKey || params.event?.srcEvent?.metaKey;
+      if (graphComparePanelOpen && node && COMPARE_ENTITY_LABELS.has(node.label)) {
+        toggleCompareNodeSelection(node, { multi });
+        return;
+      }
       openDetailPanel(node);
     });
     attachGraphStabilizationHandlers();
@@ -4593,6 +5793,8 @@ async function loadGraph(docId, opts = {}) {
     graphData = { nodes, relationships: rels };
     multiDocCountByNodeId = buildMultiDocCountMap(nodes);
     lastGraphDataKey = newKey;
+    populateGraphGeographyOptions();
+    updateGraphFilterStatus();
     if (!dataChanged && !force) {
       updateCrossLayerStat();
       if (!silent) renderGraphViews();
@@ -4831,7 +6033,13 @@ async function renderDocsList({ silent = false } = {}) {
     if (seq !== docsListFetchSeq) return;
     docsListLoaded = true;
     docsListCache = data.items || [];
+    docsTotalCount = typeof data.total === "number" ? data.total : docsListCache.length;
+    notifyWatchlistMatches(docsListCache);
     updateGraphsPageState();
+    renderL3Stats();
+    if (embeddingStatusCache && els.l3EmbeddingStatus) {
+      els.l3EmbeddingStatus.textContent = formatEmbeddingStatus(embeddingStatusCache);
+    }
     if (!data.items?.length) {
       els.docs.innerHTML = '<div class="muted">Пока нет документов — загрузите файл выше</div>';
       window.MKGAuth?.syncDocsUploadFallback?.();
@@ -4905,6 +6113,10 @@ function bindEvents() {
     e.preventDefault();
     runSearch(els.qdrantSearchQuery?.value, els.qdrantSearchResults);
   });
+  els.qdrantSearchKeyword?.addEventListener("input", () => {
+    if (!lastQdrantSearchHits.length) return;
+    renderQdrantSearchResults(els.qdrantSearchResults, { showDoc: true });
+  });
   els.docListFilter?.addEventListener("input", (e) => {
     docListFilterText = e.target.value;
     renderDocsList();
@@ -4968,7 +6180,18 @@ function bindEvents() {
   els.viewRelsBtn?.addEventListener("click", () => setGraphViewMode("rels"));
   els.originalGraphBtn?.addEventListener("click", resetGraphFilters);
   els.headerNeo4jBtn?.addEventListener("click", openNeo4jBrowser);
+  els.graphCompareBtn?.addEventListener("click", toggleGraphComparePanel);
+  els.graphCompareClearBtn?.addEventListener("click", () => {
+    compareSelectedNodeIds.clear();
+    renderCompareSelectedChips();
+    renderCompareTable();
+  });
+  els.graphCompareRefreshBtn?.addEventListener("click", renderCompareTable);
+  els.dashboardRefreshBtn?.addEventListener("click", loadDashboardStats);
+  bindTopicWatchlistEvents();
   initGraphToolbarCollapse();
+  initGraphAdvancedFilters();
+  initQdrantPostFilters();
   initGraphResize();
   initGraphNodePanelResize();
 }

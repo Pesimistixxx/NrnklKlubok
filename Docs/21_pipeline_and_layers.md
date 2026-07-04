@@ -2,6 +2,8 @@
 
 > L3 = семантический поиск (Qdrant). L4 = HDBSCAN-кластеры и аномалии.
 
+UI cache: `?v=95` (при странном поведении — **Ctrl+F5**).
+
 ## Полный пайплайн (`processing_mode=full`)
 
 ```
@@ -30,6 +32,13 @@ Upload → OCR → Markdown → Qdrant (только mkg_chunks из MD)
 - Extraction, Neo4j, L4 **пропускаются**.
 - Используется для быстрой загрузки файла «только для ответов в чате».
 - Выбор режима: модальное окно при прикреплении файла в **Чат** (кнопка прикрепления) или параметр `processing_mode` при upload.
+- **Upgrade в full:** кнопка «↺ Построить полный граф» / `POST /api/v1/documents/{id}/reprocess-full` — запускает extraction → Neo4j → Qdrant → L4 для уже загруженного `answers_only` документа.
+
+## Граф «Все документы»
+
+- В списке документов: пункт **«Все документы»** → объединённый vis-network корпуса (`graphScope=all`).
+- Те же **расширенные фильтры**, L1–L6 chips, **Сравнение** Process/Material, expert edit на рёбрах.
+- API: merge локальных JSON-графов на клиенте; Neo4j — per-doc sync.
 
 ## Шесть онтологических слоёв
 
@@ -73,6 +82,22 @@ Upload → OCR → Markdown → Qdrant (только mkg_chunks из MD)
 
 Trace в ответе: `chat_role` → `qdrant_search` → `graph_traversal` → `llm_compose`.
 
+## Qdrant — корпус (не per-doc по умолчанию)
+
+- Вкладка **Qdrant** работает по **всему корпусу**: статистика **N / M документов** проиндексировано, точки L3+L4.
+- **Семантический поиск** — `POST /agents/search` без обязательного `document_id`; chip-фильтры post-search на клиенте.
+- **Карта L4-кластеров** — клик по кластеру → панель состава; аномалии — красные точки на карте.
+- Per-doc индексация — из карточки документа или «Все документы» на вкладке Qdrant.
+
+## Фильтрация (граф и Qdrant)
+
+Расширенные фильтры графа и post-search chips Qdrant — см. [`25_functional_filters.md`](25_functional_filters.md).
+
+Кратко:
+- **Граф:** тип документа, тип связи, язык, география, практика RU/foreign, диапазон Measurement, синонимы material/process.
+- **Qdrant:** doc type, слой L3/L4, min confidence (клиентские chip-фильтры).
+- **Чат:** facet-фильтры из пресета графа — в roadmap.
+
 ## Neo4j
 
 - Схема: `packages/graph/schema.cypher`.
@@ -110,4 +135,5 @@ flowchart LR
 
 - [`15_l3_qdrant_clustering.md`](15_l3_qdrant_clustering.md) — детали Qdrant и L3-узлов
 - [`22_chat_agents.md`](22_chat_agents.md) — роли, AI-режимы, trace
+- [`25_functional_filters.md`](25_functional_filters.md) — фильтры графа и Qdrant
 - [`14_agent_api.md`](14_agent_api.md) — REST для интеграций

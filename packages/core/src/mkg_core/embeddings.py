@@ -482,17 +482,21 @@ async def _qdrant_semantic(
     layer: str | None = None,
     limit: int = 10,
     retrieval_factor: str = "semantic",
+    score_threshold: float | None = None,
 ) -> list[dict[str, Any]]:
     qdrant = QdrantClientSingleton.instance().client
     filt = _doc_filter(document_id=document_id, document_ids=document_ids, layer=layer)
+    search_kwargs: dict[str, Any] = {
+        "collection_name": collection,
+        "query_vector": query_vector,
+        "query_filter": filt,
+        "limit": limit,
+        "with_payload": True,
+    }
+    if score_threshold is not None:
+        search_kwargs["score_threshold"] = score_threshold
     try:
-        results = await qdrant.search(
-            collection_name=collection,
-            query_vector=query_vector,
-            query_filter=filt,
-            limit=limit,
-            with_payload=True,
-        )
+        results = await qdrant.search(**search_kwargs)
     except Exception as exc:
         log.warning("qdrant search %s: %s", collection, exc)
         return []
@@ -564,20 +568,25 @@ async def combined_semantic_search(
     graph: dict[str, Any] | None = None,
     limit: int = 10,
     layers: list[str] | None = None,
+    score_threshold: float | None = None,
 ) -> list[dict[str, Any]]:
     """Двухфакторный поиск: L3 эмбеддинги + L4 эмбеддинги и контекст кластера HDBSCAN."""
     settings = get_settings()
     if not settings.yandex_api_key or not settings.yandex_folder_id:
         return []
 
+    q = (query or "").strip()
+    if not q:
+        return []
+
     await ensure_qdrant_collections()
     llm = YandexLLMClient.instance()
-    query_vector = await llm.embed(query, kind="query")
+    query_vector = await llm.embed(q, kind="query")
 
     want_l3 = not layers or "L3" in layers
     want_l4 = not layers or "L4" in layers
-    l3_limit = max(4, limit) if want_l3 else 0
-    l4_limit = max(3, limit // 2 + 2) if want_l4 else 0
+    l3_limit = max(6, limit) if want_l3 else 0
+    l4_limit = max(4, limit // 2 + 3) if want_l4 else 0
 
     l3_hits: list[dict[str, Any]] = []
     l4_hits: list[dict[str, Any]] = []
@@ -590,6 +599,7 @@ async def combined_semantic_search(
             layer="L3",
             limit=l3_limit,
             retrieval_factor="l3_embedding",
+            score_threshold=score_threshold,
         )
     if want_l4:
         l4_hits = await _qdrant_semantic(
@@ -600,6 +610,7 @@ async def combined_semantic_search(
             layer="L4",
             limit=l4_limit,
             retrieval_factor="l4_embedding",
+            score_threshold=score_threshold,
         )
 
     merged: dict[tuple[str, str], dict[str, Any]] = {}
@@ -682,24 +693,73 @@ async def combined_semantic_search(
 async def search_chat_retrieval(
     query: str,
     *,
-    limit: int = 5,
+    limit: int = 9,
     document_ids: list[str] | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Чат-поиск: L3 эмбеддинги + L4 эмбеддинги/кластеры, разбивка по факторам."""
-    if document_ids:
+    from mkg_core.graph_traversal import keyword_seeds_from_docs, neo4j_keyword_seeds
+    from mkg_core.search_query import effective_search_query
+
+    search_q = effective_search_query(query, history)
+    scoped = [d for d in (document_ids or []) if d]
+
+    if scoped:
         indexed_total = 0
-        for doc_id in document_ids:
+        for doc_id in scoped:
             counts = await count_indexed_points(document_id=doc_id)
             indexed_total += sum(counts.values())
     else:
         counts = await count_indexed_points()
         indexed_total = sum(counts.values())
 
-    all_hits = await combined_semantic_search(
-        query,
-        document_ids=document_ids,
-        limit=max(limit * 2, 10),
-    )
+    fetch_limit = max(limit * 2, 12)
+    all_hits: list[dict[str, Any]] = []
+    fallback: str | None = None
+
+    if search_q.strip():
+        all_hits = await combined_semantic_search(
+            search_q,
+            document_ids=scoped or None,
+            limit=fetch_limit,
+        )
+
+        if not all_hits and scoped and indexed_total == 0:
+            global_counts = await count_indexed_points()
+            if sum(global_counts.values()) > 0:
+                all_hits = await combined_semantic_search(
+                    search_q,
+                    document_ids=None,
+                    limit=fetch_limit,
+                )
+                if all_hits:
+                    fallback = "qdrant_global_retry"
+
+        if not all_hits:
+            fb_hits = keyword_seeds_from_docs(search_q, scoped, limit=fetch_limit) if scoped else []
+            if not fb_hits and scoped:
+                repo = get_repo()
+                all_doc_ids = [
+                    item["id"]
+                    for item in (repo.list(page=1, page_size=200)[0] or [])
+                    if item.get("id")
+                ]
+                if all_doc_ids:
+                    fb_hits = keyword_seeds_from_docs(search_q, all_doc_ids[:12], limit=fetch_limit)
+            if not fb_hits:
+                fb_hits = await neo4j_keyword_seeds(search_q, limit=fetch_limit)
+            if fb_hits:
+                all_hits = fb_hits
+                fallback = "graph_keyword" if scoped else "neo4j_keyword"
+            elif scoped and indexed_total > 0:
+                all_hits = await combined_semantic_search(
+                    search_q,
+                    document_ids=None,
+                    limit=fetch_limit,
+                    score_threshold=0.05,
+                )
+                if all_hits:
+                    fallback = "qdrant_global_retry"
 
     def _has_factor(hit: dict[str, Any], factor: str) -> bool:
         return factor in (hit.get("retrieval_factors") or [])
@@ -726,9 +786,11 @@ async def search_chat_retrieval(
         "l3_hits": l3_hits[:limit],
         "l4_hits": l4_hits[:limit],
         "cluster_hits": cluster_hits[:limit],
-        "all_hits": all_hits[: max(limit, 8)],
+        "all_hits": all_hits[: max(limit, 10)],
         "indexed_total": indexed_total,
         "cluster_ids": sorted(cluster_ids),
+        "search_query": search_q,
+        "fallback": fallback,
     }
 
 

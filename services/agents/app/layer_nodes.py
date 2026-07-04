@@ -7,6 +7,7 @@ from typing import Any
 
 from mkg_core.graph_traversal import discover_new_connections, walk_for_chat
 from mkg_core.ontology import L1_LABELS, L2_LABELS, L3_LABELS, L4_LABELS, L5_LABELS, L6_LABELS, LABEL_LAYER
+from mkg_core.query_facets import QueryFacets, enrich_search_with_facets, filter_hits_by_facets
 from mkg_core.store import get_repo
 
 from app.agent_bus import (
@@ -22,7 +23,8 @@ from app.agent_bus import (
 from app.client import GatewayClient
 from app.config import AgentSettings
 from app.state import OrchestratorState
-from app.utils import add_trace, add_warning, compact_text, text_from_props
+from app.graph_snapshot import snapshot_for_trace
+from app.utils import add_trace, add_warning, compact_text, effective_search_query, prior_turns, text_from_props
 
 _LAYER_LABELS: dict[str, frozenset[str]] = {
     "L1": L1_LABELS,
@@ -166,6 +168,77 @@ def _cluster_mates(graph: dict[str, Any], seed_ids: set[str]) -> list[dict[str, 
     return out
 
 
+def _l4_noise_anomalies(
+    doc_id: str,
+    graph: dict[str, Any],
+    query: str,
+    *,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    """L4 noise / HDBSCAN outliers (cluster_id=-1) релевантные запросу."""
+    q = query.strip().lower()
+    tokens = [t for t in q.split() if len(t) >= 3][:4]
+    out: list[dict[str, Any]] = []
+    for node in graph.get("nodes") or []:
+        label = str(node.get("label") or "")
+        if label not in L4_LABELS:
+            continue
+        props = dict(node.get("props") or {})
+        cid = props.get("cluster_id", props.get("l4_cluster"))
+        is_noise = False
+        try:
+            is_noise = int(cid) == -1
+        except (TypeError, ValueError):
+            is_noise = bool(props.get("is_anomaly"))
+        if not is_noise and not props.get("is_anomaly"):
+            continue
+        text = text_from_props(props)
+        if not text:
+            continue
+        text_l = text.lower()
+        score = 0.48
+        if q and q in text_l:
+            score = 0.85
+        elif tokens and any(t in text_l for t in tokens):
+            score = 0.72
+        nid = str(node.get("id") or "")
+        if not nid:
+            continue
+        out.append(
+            {
+                "doc_id": doc_id,
+                "document_id": doc_id,
+                "node_id": nid,
+                "neo4j_node_id": nid,
+                "label": label,
+                "layer": "L4",
+                "score": score,
+                "text": compact_text(text, 300),
+                "props": props,
+                "cluster_id": -1,
+                "is_anomaly": True,
+                "retrieval_sources": ["anomaly_noise"],
+            }
+        )
+    out.sort(key=lambda h: -float(h.get("score") or 0))
+    return out[:limit]
+
+
+def _anomaly_nodes_from_layer(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    flagged: list[dict[str, Any]] = []
+    for node in nodes:
+        props = dict(node.get("props") or {})
+        cid = props.get("cluster_id", props.get("l4_cluster"))
+        is_noise = False
+        try:
+            is_noise = int(cid) == -1
+        except (TypeError, ValueError):
+            is_noise = bool(props.get("is_anomaly"))
+        if is_noise or props.get("is_anomaly"):
+            flagged.append(node)
+    return flagged
+
+
 _LAYER_GAP_TARGETS: dict[str, str] = {
     "L1": "L3",
     "L2": "L3",
@@ -177,11 +250,16 @@ _LAYER_GAP_TARGETS: dict[str, str] = {
 
 
 def _bus_context_for_layer(state: OrchestratorState, layer: str) -> str:
-    """Сжатый контекст из шины для поискового запроса."""
+    """Сжатый контекст из шины и истории чата для поискового запроса."""
     agent_id = layer_to_agent_id(layer)
     round_num = int(state.get("round") or 0)
     bus = state.get("agent_bus") or []
     parts: list[str] = []
+    prior_user, prior_assistant = prior_turns(state.get("history") or [])
+    if prior_user:
+        parts.append(f"[prior Q]: {prior_user}")
+    if prior_assistant:
+        parts.append(f"[prior A]: {prior_assistant[:200]}")
     for msg in get_messages_for(bus, agent_id, round_num=round_num, types=REQUEST_TYPES):
         payload = msg.get("payload") or {}
         text = payload.get("question") or payload.get("gap") or payload.get("reason") or ""
@@ -232,6 +310,10 @@ def _post_layer_bus_messages(
     if node_count < 2 and loop_phase != "refinement":
         target = _LAYER_GAP_TARGETS.get(layer)
         if target:
+            prior_user, _ = prior_turns(state.get("history") or [])
+            layer_q = _LAYER_AGENT_QUESTIONS.get(layer, "")
+            if prior_user:
+                layer_q = f"{prior_user}. {layer_q}"
             bus = publish(
                 bus,
                 make_message(
@@ -240,8 +322,9 @@ def _post_layer_bus_messages(
                     type_="request_evidence",
                     payload={
                         "layer": target,
-                        "question": f"Нужно больше данных для {layer}: {_LAYER_AGENT_QUESTIONS.get(layer, '')}",
+                        "question": f"Нужно больше данных для {layer}: {layer_q}",
                         "gap": f"Слой {layer}: найдено только {node_count} узл.",
+                        "prior_question": prior_user or None,
                     },
                     round_num=round_num,
                 ),
@@ -261,6 +344,27 @@ def _post_layer_bus_messages(
                 round_num=round_num,
             ),
         )
+
+    if layer == "L4":
+        anomaly_count = int(layer_result.get("anomaly_count") or 0)
+        if anomaly_count > 0:
+            bus = publish(
+                bus,
+                make_message(
+                    from_agent=agent_id,
+                    to=layer_to_agent_id("L3"),
+                    type_="anomaly_found",
+                    payload={
+                        "layer": "L4",
+                        "target_layer": "L3",
+                        "anomaly_count": anomaly_count,
+                        "summary": layer_result.get("anomaly_evaluation")
+                        or f"L4: {anomaly_count} noise/outlier точек (cluster_id=-1)",
+                        "question": _LAYER_AGENT_QUESTIONS.get("L4", ""),
+                    },
+                    round_num=round_num,
+                ),
+            )
 
     return bus
 
@@ -299,6 +403,8 @@ async def run_layer_agent(
         return new_state
 
     query = str(new_state.get("query") or "")
+    history = list(new_state.get("history") or [])
+    prior_user, prior_assistant = prior_turns(history)
     doc_ids = list(new_state.get("candidate_doc_ids") or [])
     bus_ctx = _bus_context_for_layer(new_state, layer)
     prior_ctx = compact_text(
@@ -309,8 +415,16 @@ async def run_layer_agent(
         ),
         600,
     )
-    extra = " ".join(p for p in (prior_ctx, bus_ctx) if p).strip()
-    search_query = f"{query} {extra}".strip() if extra else query
+    history_ctx = compact_text(
+        " ".join(p for p in (prior_user, prior_assistant) if p),
+        400,
+    )
+    extra = " ".join(p for p in (prior_ctx, history_ctx, bus_ctx) if p).strip()
+    facets = QueryFacets.from_dict(new_state.get("query_facets"))
+    search_query = effective_search_query(query, history)
+    search_query = enrich_search_with_facets(search_query, facets)
+    if extra and extra not in search_query:
+        search_query = compact_text(f"{search_query} {extra}", 800)
     hits: list[dict[str, Any]] = []
 
     if layer == "L3" or layer == "L4":
@@ -336,13 +450,15 @@ async def run_layer_agent(
     for doc_id in doc_ids[: settings.max_docs]:
         graph = repo.read_graph(doc_id) or {}
         if graph.get("nodes"):
-            hits.extend(_nodes_from_graph_layer(doc_id, graph, layer, query, limit=settings.search_limit))
+            hits.extend(_nodes_from_graph_layer(doc_id, graph, layer, search_query, limit=settings.search_limit))
         if layer == "L4" and graph.get("nodes"):
             seed_ids = {str(h.get("node_id")) for h in hits if h.get("doc_id") == doc_id}
             for mate in _cluster_mates(graph, seed_ids):
                 mate["doc_id"] = doc_id
                 mate["document_id"] = doc_id
                 hits.append(mate)
+            for noise in _l4_noise_anomalies(doc_id, graph, search_query, limit=6):
+                hits.append(noise)
 
     if layer == "L4" and doc_ids:
         try:
@@ -374,6 +490,7 @@ async def run_layer_agent(
         else:
             merged_hits[key] = dict(hit)
     walk_hits = list(merged_hits.values())[: settings.max_context_nodes]
+    walk_hits = filter_hits_by_facets(walk_hits, facets)
 
     walked: dict[str, Any] = {"nodes": [], "relationships": [], "graph_walk_steps": []}
     try:
@@ -392,6 +509,7 @@ async def run_layer_agent(
     allowed = _LAYER_LABELS.get(layer, frozenset())
     if allowed:
         nodes_found = [n for n in nodes_found if str(n.get("label") or "") in allowed or _node_layer(n) == layer]
+    anomaly_nodes = _anomaly_nodes_from_layer(nodes_found) if layer == "L4" else []
     layer_result = {
         "layer": layer,
         "nodes_found": nodes_found,
@@ -409,6 +527,12 @@ async def run_layer_agent(
         "agent_question": _LAYER_AGENT_QUESTIONS.get(layer, f"Что даст слой {layer}?"),
         "hit_count": len(walk_hits),
         "walk_step_count": len(walked.get("graph_walk_steps") or []),
+        "anomaly_count": len(anomaly_nodes),
+        "anomaly_evaluation": (
+            f"L4 noise/outliers: {len(anomaly_nodes)} точек cluster_id=-1 требуют проверки"
+            if anomaly_nodes
+            else None
+        ),
     }
     results = list(new_state.get("layer_results") or [])
     results.append(layer_result)
@@ -419,6 +543,7 @@ async def run_layer_agent(
     )
 
     bus_in = get_messages_for(new_state.get("agent_bus") or [], layer_to_agent_id(layer), round_num=round_num)
+    acc = new_state.get("accumulated_graph") or {}
     add_trace(
         new_state,
         f"{layer.lower()}_agent",
@@ -432,11 +557,21 @@ async def run_layer_agent(
         rel_count=len(edges_found),
         hit_count=len(walk_hits),
         walk_step_count=layer_result["walk_step_count"],
+        search_query=compact_text(search_query, 120),
+        query_facets=facets.to_dict() or None,
+        prior_user_question=compact_text(prior_user, 80) or None,
+        prior_assistant_summary=compact_text(prior_assistant, 80) or None,
         reasoning=layer_result["reasoning_step"],
         situation_evaluation=layer_result["situation_evaluation"],
         agent_question=layer_result["agent_question"],
+        anomaly_count=layer_result.get("anomaly_count") or 0,
+        anomaly_evaluation=layer_result.get("anomaly_evaluation"),
         bus_in_count=len(bus_in),
         bus_messages=bus_summary(new_state.get("agent_bus"), limit=4),
+        graph_snapshot=snapshot_for_trace(
+            acc,
+            doc_ids=list(new_state.get("candidate_doc_ids") or []),
+        ),
     )
     return new_state
 

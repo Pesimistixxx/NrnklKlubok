@@ -22,6 +22,7 @@ class AgentRunRequest(BaseModel):
     user_role: str = "researcher"
     limit: int = Field(default=5, ge=1, le=20)
     history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+    speed_mode: str = Field(default="full", pattern="^(fast|full)$")
 
 
 class AgentRunOut(BaseModel):
@@ -40,6 +41,21 @@ class AgentRunOut(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     layer_results: list[dict[str, Any]] | None = None
     orchestrator_plan: dict[str, Any] | None = None
+
+
+class AgentRunStartOut(BaseModel):
+    run_id: str
+    status: str = "pending"
+
+
+class AgentRunStatusOut(BaseModel):
+    run_id: str
+    status: str
+    trace: list[dict[str, Any]] = Field(default_factory=list)
+    graph: dict[str, Any] | None = None
+    layer_results: list[dict[str, Any]] | None = None
+    result: AgentRunOut | None = None
+    error: str | None = None
 
 
 class ModeInfo(BaseModel):

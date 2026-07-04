@@ -1,135 +1,56 @@
 # Иерархия агентов MKG
 
-> **Межслойные агенты L1–L6** (`l1_agent` … `l6_agent`) — каноническое описание в разделе **Межслойные агенты (L1–L6)**: углы слоёв, `situation_evaluation`, метки Neo4j, отличие от ролей.
+> **Межслойные агенты L1–L6** — каноническое описание в **Межслойные агенты (L1–L6)**: гибкий цикл, JSON-шина, отличие от ролей.
 
-UI cache: `?v=76` (при странном поведении — **Ctrl+F5**).
+UI cache: `?v=95` (при странном поведении — **Ctrl+F5**).
 
-## Три оси: слой, роль, режим
-
-MKG использует **иерархическую оркестрацию** по слоям графа (L1–L6) и **параллельно** — роли пользователя и AI-режимы. Последовательный **цикл L1→L6** с накоплением контекста — раздел **«Цикл межслойных агентов»** в **Межслойные агенты (L1–L6)**. Это разные измерения:
+## Три оси: слой, роль, скорость
 
 | Измерение | Что задаёт | Пример |
 |-----------|------------|--------|
-| **Слой (L1–L6)** | *Откуда* брать evidence в графе MKG | L4-агент ищет Claim и аномалии |
-| **Роль пользователя** | *Как* формулировать ответ (стиль, права) | Валидатор → акцент на проверку |
-| **AI-режим** | *Какой* LangGraph-граф запустить | Аудит, Гипотезы, Оркестратор |
+| **Слой (L1–L6)** | *Откуда* evidence | L4 → Claim, аномалии |
+| **Роль** | *Как* ответ (стиль, права) | Валидатор → проверка |
+| **Скорость** | Быстрый RAG / Подробный оркестратор | `fast` / `full` |
+| **AI-режим (API)** | LangGraph-граф | Аудит, Гипотезы |
 
-Роль **не заменяет** layer agent: аналитик в режиме «Оркестратор» всё равно проходит L1→L6, но ответ звучит «аналитически».
-
-## Межслойные агенты
-
-Шесть агентов последовательно оценивают один вопрос — каждый через призму своего слоя онтологии MKG.
+Порядок layer agents **не фиксирован L1→L6** — маршрутизатор + JSON-шина (`AGENT_LOOP_MAX_ROUNDS`, default 4).
 
 ```mermaid
 flowchart TB
   Q[Вопрос]
-
-  subgraph LA ["Межслойные агенты — см. раздел «Межслойные агенты»"]
-    L1["l1_agent · L1<br/>объекты, материалы"]
-    L2["l2_agent · L2<br/>контекст, авторы"]
-    L3["l3_agent · L3<br/>текст, цитаты"]
-    L4["l4_agent · L4<br/>факты, claims"]
-    L5["l5_agent · L5<br/>верификация"]
-    L6["l6_agent · L6<br/>ТЭП, решения"]
-    L1 --> L2 --> L3 --> L4 --> L5 --> L6
+  subgraph LA ["Гибкий цикл"]
+    ROUTER[orchestrator_router]
+    BUS[(agent_bus)]
+    Lx[l1…l6_agent]
+    ROUTER --> Lx --> BUS --> ROUTER
   end
-
-  Q --> L1
-  L6 --> RES[layer_results]
-
-  subgraph parallel ["Параллельно (другая ось)"]
-    ROLE["Роли: Валидатор, Аналитик…"]
-    MODE["Режимы: Диалог, Аудит, Гипотезы…"]
-  end
+  Q --> ROUTER
+  ROUTER --> RES[layer_results]
 ```
 
-| Агент | Слой | Угол (кратко) |
-|-------|------|---------------|
-| `l1_agent` | L1 | Материалы, процессы, оборудование |
-| `l2_agent` | L2 | Документы, эксперты, организации |
-| `l3_agent` | L3 | Текстовые фрагменты, Qdrant L3 |
-| `l4_agent` | L4 | Факты, claims, аномалии L4 |
-| `l5_agent` | L5 | Верификация, противоречия |
-| `l6_agent` | L6 | ТЭП, технологические решения |
-
-Полная таблица, алгоритм `run_layer_agent`, метки Neo4j и trace-поля — раздел **Межслойные агенты (L1–L6)**.
-
-## Оркестратор (координатор, не layer agent)
-
-Оркестратор **не** является межслойным агентом. Он планирует обход, вызывает L1→L6, ищет связи и синтезирует ответ.
+## Оркестратор
 
 | Узел | Назначение |
 |------|------------|
-| `orchestrator_init` | Выбор документов |
-| `orchestrator_plan` | LLM → `planned_layers`, `focus`, `keywords` |
-| `layer_loop_start` | Маркер начала цикла L1→L6 |
-| `l1_agent` … `l6_agent` | Вызов межслойных агентов (см. выше) |
-| `discover_new_connections` | Cross-layer / cross-document пути |
-| `connection_gap_analyzer` | Пробелы → повтор layer agents |
-| `orchestrator_synthesize` | Финальный LLM-ответ |
+| `orchestrator_init` | Документы, `agent_bus` |
+| `orchestrator_plan` | `planned_layers`, `query_facets` |
+| `agent_loop_start` | round=0 |
+| `orchestrator_router` | Следующий `l*_agent` |
+| `discover_new_connections` | Cross-layer пути |
+| `connection_gap_analyzer` | `gap_found` → шина или synthesize |
+| `orchestrator_synthesize` | Structured ответ |
 
-Детали LangGraph-потока — раздел **Оркестратор L1–L6**. Код: `orchestrator_graph.py`, `layer_nodes.py`.
-
-## Роли пользователя (параллельная ось)
-
-Роли задают **стиль ответа и права**, не слой графа. Одна роль может работать с любым AI-режимом (если `can_run_agents`).
-
-| Роль | Agent ID | Угол для пользователя | Типичный режим |
-|------|----------|----------------------|----------------|
-| `admin` | security | Администрирование, полный доступ | любой |
-| `researcher` | synthesis | Гипотезы, обзоры, связи между фактами | Гипотезы, Оркестратор |
-| `engineer` | ingestion | Пайплайн данных, без LangGraph-агентов | — |
-| `analyst` | retrieval | Паттерны, Qdrant, граф | Диалог, Аномалии |
-| `validator` | validation | Проверка фактов, severity | Аудит |
-| `security` | security | RBAC, грифы L5 | — |
-| `anomaly_hunter` | retrieval | L4-выбросы, HDBSCAN | Аномалии |
-| `viewer` | notification | Только чтение | Диалог |
-
-## AI-режимы (LangGraph)
-
-Режим выбирает **граф обработки**, не слой. Только `orchestrator_mode` последовательно запускает L1–L6.
-
-| Mode ID | UI | Угол задачи | Trace (кратко) | Когда использовать |
-|---------|-----|-------------|----------------|-------------------|
-| *(null)* | **Диалог** | Быстрый ответ по RAG | `qdrant_search` → `graph_traversal` → layer trace → `llm_compose` | Обычный вопрос |
-| `orchestrator_mode` | **Оркестратор** | Полный обход слоёв + синтез | `layer_loop_start` → L1…L6 → discover → gap → synthesize | Сложный вопрос, все слои |
-| `audit_mode` | **Аудит** | Противоречия, issue/severity | planner → retrieval → analyzer → `final_report` | Валидация фактов |
-| `hypothesis_mode` | **Гипотезы** | Гипотезы и связи между claims | planner → hypothesis builder → critique | Исследовательский синтез |
-| `anomaly_mode` | **Аномалии** | L4-выбросы HDBSCAN + соседи | anomaly walk → explain | Охота за outliers |
-| `literature_review_mode` | **Обзор** | Структурированный обзор источников | grouped sources, consensus | Обзор литературы |
-| `recommendation_mode` | **Советы** | Рекомендации, похожие кейсы | retrieval → recommendation builder | Практические советы |
-
-> **`anomaly_mode`** — внутренний LangGraph-режим, **не** роль. Роль для аномалий — `anomaly_hunter`. См. **Межслойные агенты (L1–L6)**.
-
-API: `GET /api/v1/agents-service/modes`, `POST /api/v1/agents-service/run`.
-
-## Как измерения складываются
+## Чат: как складывается
 
 ```mermaid
 flowchart LR
-  Q[Вопрос пользователя]
-  R[Роль → системный промпт]
-  M[Режим → LangGraph]
-  Q --> M
-  R --> M
-  M --> D{Режим?}
-  D -->|Диалог| RAG[Gateway chat_engine<br/>+ layer trace]
-  D -->|orchestrator_mode| ORCH[L1…L6 layer agents<br/>+ Synthesizer]
-  D -->|audit / hypothesis / …| AG[Agent graph]
-  ORCH --> OUT[Ответ + trace + sources]
-  RAG --> OUT
-  AG --> OUT
-  R --> OUT
+  Q[Вопрос] --> S{speed_mode}
+  R[Роль] --> S
+  S -->|fast| FAST[/chat/complete]
+  S -->|full + agents| ASYNC[/run/async + poll]
+  S -->|full без agents| RAG[/chat/complete RAG]
 ```
 
-**Пример:** роль `validator` + режим `audit_mode` → ответ с акцентом на противоречия, без обхода всех шести слоёв.
+## Безопасность MVP
 
-**Пример:** роль `researcher` + режим `orchestrator_mode` → полный L1→L6, ответ в исследовательском стиле.
-
-## Связанные разделы
-
-- **Межслойные агенты (L1–L6)** — каноническое описание layer agents, диаграммы
-- **Чат, роли и AI-агенты** — режимы, trace, upload
-- **Пайплайн и слои L1–L6** — ingestion
-- **Оркестратор L1–L6** — LangGraph-поток
-- **Роли vs агенты** — схема UI → gateway → agents
+localhost без server auth; роль — клиентский выбор. Production требует auth middleware.

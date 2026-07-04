@@ -26,6 +26,11 @@ DOC_SECTIONS: dict[str, dict[str, str]] = {
         "file": "22_chat_agents.md",
         "source": "repo",
     },
+    "analytics-synthesis": {
+        "title": "Аналитика и синтез ответов",
+        "file": "25_analytics_synthesis.md",
+        "source": "repo",
+    },
     "agent-hierarchy": {
         "title": "Иерархия агентов",
         "file": "23_agent_hierarchy.md",
@@ -36,10 +41,25 @@ DOC_SECTIONS: dict[str, dict[str, str]] = {
         "file": "orchestrator.md",
         "source": "static",
     },
+    "key-requirements": {
+        "title": "Ключевые требования хакатона",
+        "file": "25_key_requirements.md",
+        "source": "repo",
+    },
+    "functional-filters": {
+        "title": "Функциональные фильтры",
+        "file": "25_functional_filters.md",
+        "source": "repo",
+    },
     "roles-vs-agents": {
         "title": "Роли vs агенты",
         "file": "roles-vs-agents.md",
         "source": "static",
+    },
+    "additional-wishes": {
+        "title": "Дополнительные пожелания (MVP)",
+        "file": "27_additional_wishes.md",
+        "source": "repo",
     },
 }
 

@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
 
+from mkg_core.answer_structure import SYNTH_STRUCTURE_RULES, extract_synthesis_entities
+from mkg_core.query_facets import QueryFacets, enrich_search_with_facets, parse_facets_from_plan
 from mkg_core.text_sanitize import sanitize_user_facing_text
 
 from app.agent_bus import (
@@ -22,7 +24,17 @@ from app.config import AgentSettings
 from app.layer_nodes import make_layer_runner
 from app.llm import AgentLLM
 from app.state import OrchestratorState
-from app.utils import add_trace, add_warning, format_history_context, normalize_list, remaining_seconds
+from app.graph_snapshot import graph_snapshot_from_acc, snapshot_for_trace
+from app.utils import (
+    add_trace,
+    add_warning,
+    effective_search_query,
+    format_history_context,
+    history_memory_meta,
+    normalize_list,
+    prior_turns,
+    remaining_seconds,
+)
 
 _LAYER_AGENTS = tuple(layer_to_agent_id(l) for l in ALL_LAYERS)
 RouterTarget = Literal[
@@ -33,22 +45,38 @@ RouterTarget = Literal[
 _ORCHESTRATOR_PLAN_PROMPT = """
 Ты Orchestrator Agent для knowledge graph MKG (6 слоёв L1–L6).
 По вопросу пользователя выбери, какие слои обязательно исследовать.
+Во входе есть conversation_history — предыдущие реплики чата.
+Если текущий query короткий или это продолжение («Подумай еще раз», «уточни», «продолжи»),
+keywords и focus бери из предыдущего вопроса пользователя в conversation_history, а не из текущей реплики.
 Верни только JSON:
 {
   "layers": ["L1","L2","L3","L4","L5","L6"],
   "focus": "кратко на русском",
   "keywords": ["..."],
   "must_find_connections": true,
-  "priority_layers": ["L3","L4"]
+  "priority_layers": ["L3","L4"],
+  "query_facets": {
+    "materials": ["..."],
+    "processes": ["..."],
+    "geography": ["domestic|foreign|страна"],
+    "year_min": 2015,
+    "year_max": 2024,
+    "numeric_min": null,
+    "numeric_max": null,
+    "numeric_param": "concentration|temperature|flow_rate",
+    "conditions": ["температура", "давление"]
+  }
 }
 layers — подмножество из L1,L2,L3,L4,L5,L6. priority_layers — с чего начать (не обязательно L1).
+query_facets — структурированный разбор вопроса: материал, процесс, география (domestic=RU, foreign), годы, числовые ограничения.
+Декомпозируй сложный вопрос: L1=материалы/процессы, L2=география/авторы, L3=текст, L4=измерения/факты, L5=верификация, L6=ТЭП.
 must_find_connections всегда true.
 """.strip()
 
 _ROUTER_PROMPT = """
 Ты Orchestrator Router. Выбери следующий узел для исследования графа MKG.
 Доступные агенты: l1_agent…l6_agent, discover_new_connections (завершить цикл), orchestrator_synthesize (только если данных достаточно).
-Учитывай agent_bus (запросы между агентами), round/max_rounds, planned_layers, layer_results.
+Учитывай agent_bus (запросы между агентами), round/max_rounds, planned_layers, layer_results, conversation_history.
 Верни только JSON: {"next": "l3_agent"|"discover_new_connections", "reason": "кратко"}
 """.strip()
 
@@ -62,18 +90,25 @@ _GAP_PROMPT = """
 }
 """.strip()
 
-_SYNTH_PROMPT = """
-Ты Synthesizer Agent. Сформируй ответ на русском по вопросу и evidence из слоёв L1–L6.
+_SYNTH_PROMPT = (
+    """
+Ты Synthesizer Agent. Сформируй структурированный ответ на русском по вопросу и evidence из слоёв L1–L6.
+Во входе conversation_history — предыдущий обмен. Если query — продолжение («Подумай еще раз», «уточни»),
+ответ должен явно опираться на предыдущую тему и дополнять/уточнять prior answer, а не начинать с нуля.
 Верни только JSON:
 {
-  "summary": "развёрнутый связный ответ для пользователя",
+  "summary": "Markdown с разделами ## для пользователя",
   "warnings": []
 }
-Опирайся только на переданные узлы и связи; если данных мало — укажи в warnings.
+"""
+    + SYNTH_STRUCTURE_RULES
+    + """
+Опирайся только на переданные узлы, layer_results, sources, knowledge_gaps, experts, anomalies и gaps.
+Если данных мало — укажи в warnings и в «Пробелы в знаниях».
 Никогда не включай в summary document_id, neo4j_node_id, node_id, коды L1–L6 и внутренний жаргон.
-Ссылайся на документы по смыслу или названию. Если ответ неполный — в конце summary задай один уместный
-уточняющий вопрос или предложи следующий шаг.
-""".strip()
+Ссылайся на документы по смыслу или названию.
+"""
+).strip()
 
 # Complementary layers when a layer finds few nodes
 _LAYER_GAP_TARGETS: dict[str, str] = {
@@ -105,6 +140,17 @@ def _pick_next_layer_heuristic(state: OrchestratorState) -> str | None:
 
     pending = get_pending_requests(bus, round_num=round_num)
     for msg in pending:
+        msg_type = str(msg.get("type") or "")
+        if msg_type == "anomaly_found":
+            to = str(msg.get("to") or "")
+            if to.endswith("_agent"):
+                layer = agent_id_to_layer(to)
+                if layer in planned_set:
+                    return layer
+            payload = msg.get("payload") or {}
+            target = str(payload.get("target_layer") or "L3").upper()
+            if target in planned_set:
+                return target
         to = str(msg.get("to") or "")
         if to.endswith("_agent"):
             layer = agent_id_to_layer(to)
@@ -179,7 +225,22 @@ async def orchestrator_init(
     new_state.setdefault("round", 0)
     new_state.setdefault("max_rounds", settings.agent_loop_max_rounds)
     new_state.setdefault("layers_invoked", [])
-    add_trace(new_state, "orchestrator_init", doc_count=len(new_state.get("candidate_doc_ids") or []))
+    history = list(new_state.get("history") or [])
+    memory = history_memory_meta(history)
+    add_trace(
+        new_state,
+        "orchestrator_init",
+        doc_count=len(new_state.get("candidate_doc_ids") or []),
+        history_turn_count=memory["turn_count"],
+        history_truncated=memory["truncated"],
+    )
+    if memory["turn_count"]:
+        add_trace(
+            new_state,
+            "chat_memory",
+            turn_count=memory["turn_count"],
+            truncated=memory["truncated"],
+        )
     return new_state
 
 
@@ -201,12 +262,15 @@ async def orchestrator_plan(
         _trace_loop_start(new_state)
         return new_state
     try:
+        prior_user, prior_assistant = prior_turns(new_state.get("history") or [])
         plan = await llm.generate_json(
             instructions=_ORCHESTRATOR_PLAN_PROMPT,
             payload={
                 "query": new_state.get("query"),
                 "doc_count": len(new_state.get("candidate_doc_ids") or []),
                 "conversation_history": format_history_context(new_state.get("history") or []),
+                "prior_user_question": prior_user,
+                "prior_assistant_summary": prior_assistant,
             },
             max_tokens=350,
             timeout=timeout,
@@ -224,12 +288,37 @@ async def orchestrator_plan(
         picked = list(ALL_LAYERS)
     new_state["planned_layers"] = picked
     new_state["orchestrator_plan"] = plan if isinstance(plan, dict) else {"layers": picked}
+    facets = parse_facets_from_plan(plan if isinstance(plan, dict) else {})
+    new_state["query_facets"] = facets.to_dict()
+    bus = list(new_state.get("agent_bus") or [])
+    if facets.to_dict():
+        bus = publish(
+            bus,
+            make_message(
+                from_agent="orchestrator",
+                to="broadcast",
+                type_="query_facets",
+                payload={
+                    "query_facets": facets.to_dict(),
+                    "focus": plan.get("focus") if isinstance(plan, dict) else None,
+                    "layers": picked,
+                    "search_hint": enrich_search_with_facets(
+                        str(new_state.get("query") or ""),
+                        facets,
+                    ),
+                },
+                round_num=0,
+            ),
+        )
+        new_state["agent_bus"] = bus
     add_trace(
         new_state,
         "orchestrator_plan",
         layers=picked,
         focus=(plan.get("focus") if isinstance(plan, dict) else None),
         priority_layers=(plan.get("priority_layers") if isinstance(plan, dict) else None),
+        query_facets=new_state.get("query_facets"),
+        history_turn_count=history_memory_meta(new_state.get("history") or []).get("turn_count", 0),
     )
     _trace_loop_start(new_state)
     return new_state
@@ -271,6 +360,7 @@ async def orchestrator_router(
                 instructions=_ROUTER_PROMPT,
                 payload={
                     "query": new_state.get("query"),
+                    "conversation_history": format_history_context(new_state.get("history") or []),
                     "round": new_state.get("round"),
                     "max_rounds": new_state.get("max_rounds"),
                     "planned_layers": new_state.get("planned_layers"),
@@ -347,10 +437,11 @@ async def discover_connections_node(
     new_state = dict(state)
     acc = dict(new_state.get("accumulated_graph") or {})
     doc_ids = list(new_state.get("candidate_doc_ids") or [])
+    search_q = effective_search_query(str(new_state.get("query") or ""), new_state.get("history") or [])
     try:
         expanded = await discover_new_connections(
             acc,
-            str(new_state.get("query") or ""),
+            search_q,
             document_ids=doc_ids or None,
             max_paths=10,
         )
@@ -369,6 +460,10 @@ async def discover_connections_node(
         cross_document=counts.get("cross_document", 0),
         neo4j_paths=counts.get("neo4j_paths", 0),
         total_discoveries=counts.get("total", 0),
+        graph_snapshot=snapshot_for_trace(
+            expanded,
+            doc_ids=list(new_state.get("candidate_doc_ids") or []),
+        ),
     )
     return new_state
 
@@ -388,6 +483,7 @@ async def connection_gap_analyzer(
                 instructions=_GAP_PROMPT,
                 payload={
                     "query": new_state.get("query"),
+                    "conversation_history": format_history_context(new_state.get("history") or []),
                     "node_count": len(acc.get("nodes") or []),
                     "rel_count": len(acc.get("relationships") or []),
                     "layer_results": new_state.get("layer_results") or [],
@@ -474,12 +570,20 @@ async def orchestrator_synthesize(
                 }
             )
         try:
+            prior_user, prior_assistant = prior_turns(new_state.get("history") or [])
+            synth_ctx = extract_synthesis_entities(acc)
             result = await llm.generate_json(
                 instructions=_SYNTH_PROMPT,
                 payload={
                     "query": new_state.get("query"),
                     "conversation_history": format_history_context(new_state.get("history") or []),
+                    "prior_user_question": prior_user,
+                    "prior_assistant_summary": prior_assistant,
                     "layer_results": new_state.get("layer_results") or [],
+                    "sources": synth_ctx.get("source_hints") or [],
+                    "knowledge_gaps": synth_ctx.get("knowledge_gaps") or [],
+                    "experts": synth_ctx.get("experts") or [],
+                    "anomalies": synth_ctx.get("anomalies") or [],
                     "nodes": nodes_preview,
                     "relationships": (acc.get("relationships") or [])[:24],
                     "new_connections": (acc.get("new_connections") or [])[:16],
@@ -532,7 +636,7 @@ async def orchestrator_synthesize(
         "round": new_state.get("round"),
         "max_rounds": new_state.get("max_rounds"),
     }
-    add_trace(new_state, "orchestrator_synthesize", node_count=len(graph_payload["nodes"]), round=new_state.get("round"))
+    add_trace(new_state, "orchestrator_synthesize", node_count=len(graph_payload["nodes"]), round=new_state.get("round"), graph_snapshot=snapshot_for_trace(acc, doc_ids=list(new_state.get("candidate_doc_ids") or [])))
     new_state["final_response"]["trace"] = normalize_list(new_state.get("trace"))
     return new_state
 

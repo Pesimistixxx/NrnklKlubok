@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MKG — AI-карта знаний</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=83" />
+  <link rel="stylesheet" href="/static/css/app.css?v=96" />
 </head>
 <body>
   <div class="app sidebar-hidden" id="appRoot">
@@ -72,6 +72,10 @@
               </div>
               <p class="chat-upload-error hidden" id="chatUploadError" role="alert"></p>
               <div class="chat-pending-attachments hidden" id="chatPendingAttachments" aria-live="polite"></div>
+              <div class="chat-speed-toggle" id="chatSpeedToggle" role="radiogroup" aria-label="Режим ответа">
+                <button type="button" class="chat-speed-pill active" data-speed="full" aria-pressed="true">Подробный · с рассуждениями</button>
+                <button type="button" class="chat-speed-pill" data-speed="fast" aria-pressed="false">Быстрый</button>
+              </div>
               <div class="chats-compose" id="chatsCompose">
                 <input type="file" id="chatFileInput" class="visually-hidden" multiple accept=".pdf,.docx,.xlsx,.md,.txt,.csv,.json,.yaml,.yml,.xml,.png,.jpg,.jpeg,.webp,.tif,.tiff" />
                 <button type="button" class="btn btn-ghost btn-icon chat-attach-btn" id="chatAttachBtn" title="Прикрепить файл или фото" aria-label="Прикрепить файл"><svg class="icon-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
@@ -266,6 +270,7 @@
                       <button type="button" class="view-btn" id="viewRelsBtn">Связи</button>
                     </div>
                     <div class="graph-toolbar-actions">
+                      <button class="btn btn-ghost btn-small" id="graphCompareBtn" type="button" title="Сравнить 2–3 процесса/материала">Сравнение</button>
                       <button class="btn btn-ghost btn-small" id="originalGraphBtn" type="button">Сброс</button>
                       <button class="btn btn-ghost btn-small" id="headerNeo4jBtn" type="button">Neo4j ↗</button>
                     </div>
@@ -280,6 +285,104 @@
                     <button type="button" class="layer-chip cross-layer-toggle" id="crossLayerToggle" title="Подсветить межслойные связи">Межслойные</button>
                     <button type="button" class="layer-chip connection-formation-toggle" id="connectionFormationBtn" title="Пошаговое появление слоёв L1→L6">Как формируются связи</button>
                     <button type="button" class="layer-chip" id="toggleNodeListBtn">Список узлов</button>
+                  </div>
+                  <div class="graph-advanced-filters" id="graphAdvancedFilters" title="Расширенные фильтры: география (RU/зарубежная практика), год публикации, достоверность extraction_confidence, числовой диапазон Measurement (концентрация, температура, расход).">
+                    <div class="graph-adv-filter-row">
+                      <label class="graph-adv-label" for="graphFilterSearch">Поиск</label>
+                      <input type="search" class="graph-adv-input" id="graphFilterSearch" placeholder="Текст в узлах…" autocomplete="off" />
+                    </div>
+                    <fieldset class="graph-adv-entity-types">
+                      <legend class="graph-adv-label">Тип сущности</legend>
+                      <div class="graph-adv-checkboxes" id="graphEntityTypeChecks"></div>
+                    </fieldset>
+                    <div class="graph-adv-filter-row">
+                      <label class="graph-adv-label" for="graphFilterGeography">География</label>
+                      <select class="graph-adv-select" id="graphFilterGeography">
+                        <option value="">Все регионы</option>
+                      </select>
+                    </div>
+                    <div class="graph-adv-filter-row">
+                      <label class="graph-adv-label" for="graphFilterPracticeRegion" title="Российская практика — Location.country/region с RU; зарубежная — остальные">Практика</label>
+                      <select class="graph-adv-select" id="graphFilterPracticeRegion">
+                        <option value="">Все</option>
+                        <option value="domestic">Российская (RU)</option>
+                        <option value="foreign">Зарубежная</option>
+                      </select>
+                    </div>
+                    <div class="graph-adv-filter-row graph-adv-year-row">
+                      <span class="graph-adv-label">Год публикации</span>
+                      <div class="graph-adv-year-range">
+                        <input type="range" id="graphFilterYearMin" min="1990" max="2026" value="1990" />
+                        <input type="range" id="graphFilterYearMax" min="1990" max="2026" value="2026" />
+                        <span class="graph-adv-year-values" id="graphFilterYearLabel">1990 — 2026</span>
+                      </div>
+                    </div>
+                    <div class="graph-adv-filter-row">
+                      <label class="graph-adv-label" for="graphFilterConfidence">Мин. достоверность</label>
+                      <select class="graph-adv-select" id="graphFilterConfidence">
+                        <option value="0">Любая</option>
+                        <option value="0.5">≥ 50%</option>
+                        <option value="0.7">≥ 70%</option>
+                        <option value="0.85">≥ 85%</option>
+                      </select>
+                    </div>
+                    <div class="graph-adv-filter-row">
+                      <label class="graph-adv-label" for="graphFilterMaterial">Материал</label>
+                      <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterMaterial" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
+                    </div>
+                    <div class="graph-adv-filter-row">
+                      <label class="graph-adv-label" for="graphFilterProcess">Процесс</label>
+                      <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterProcess" placeholder="Ключевое слово + синонимы…" autocomplete="off" />
+                    </div>
+                    <fieldset class="graph-adv-entity-types">
+                      <legend class="graph-adv-label">Тип документа</legend>
+                      <div class="graph-adv-checkboxes" id="graphDocTypeChecks"></div>
+                    </fieldset>
+                    <fieldset class="graph-adv-entity-types">
+                      <legend class="graph-adv-label">Тип связи</legend>
+                      <div class="graph-adv-checkboxes" id="graphRelationTypeChecks"></div>
+                    </fieldset>
+                    <div class="graph-adv-filter-row">
+                      <label class="graph-adv-label" for="graphFilterLanguage">Язык</label>
+                      <select class="graph-adv-select" id="graphFilterLanguage">
+                        <option value="both">RU + EN</option>
+                        <option value="ru">RU</option>
+                        <option value="en">EN</option>
+                      </select>
+                    </div>
+                    <div class="graph-adv-filter-row graph-adv-param-row">
+                      <span class="graph-adv-label">Параметр (Measurement)</span>
+                      <div class="graph-adv-param-range">
+                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericParam" placeholder="конц., temp, flow…" autocomplete="off" />
+                        <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMin" placeholder="мин" step="any" />
+                        <span class="graph-adv-param-sep">—</span>
+                        <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterParamMax" placeholder="макс" step="any" />
+                      </div>
+                    </div>
+                    <div class="graph-adv-filter-row">
+                      <label class="graph-adv-label" for="graphFilterNumericMin" title="Фильтр узлов Measurement по numeric_value, concentration, temperature, flow_rate">Числовой диапазон</label>
+                      <div class="graph-adv-numeric-range">
+                        <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMin" placeholder="мин" step="any" />
+                        <span class="graph-adv-numeric-sep">—</span>
+                        <input type="number" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericMax" placeholder="макс" step="any" />
+                        <input type="search" class="graph-adv-input graph-adv-input-narrow" id="graphFilterNumericParam" placeholder="параметр…" title="parameter: concentration, temperature…" autocomplete="off" />
+                      </div>
+                    </div>
+                    <div class="graph-adv-toggles">
+                      <label class="graph-adv-toggle">
+                        <input type="checkbox" id="graphFilterContradictions" />
+                        <span>Показывать противоречия</span>
+                      </label>
+                      <label class="graph-adv-toggle">
+                        <input type="checkbox" id="graphFilterGaps" />
+                        <span>Показывать пробелы</span>
+                      </label>
+                    </div>
+                    <div class="graph-adv-actions">
+                      <button type="button" class="btn btn-ghost btn-small" id="graphFilterResetBtn">Сбросить</button>
+                      <button type="button" class="btn btn-primary btn-small" id="graphFilterApplyBtn">Применить</button>
+                      <span class="graph-adv-status muted" id="graphFilterStatus"></span>
+                    </div>
                   </div>
                   <div class="connection-formation-timeline hidden" id="connectionFormationTimeline" aria-live="polite"></div>
                 </div>
@@ -296,6 +399,18 @@
             <div class="graph-rels-view hidden" id="graphRelsView">
               <div class="graph-rels-head"><span id="graphRelsCount" class="muted">0 связей</span></div>
               <div class="graph-rels-list" id="graphRelsList"></div>
+            </div>
+            <div class="graph-compare-panel hidden" id="graphComparePanel">
+              <div class="graph-compare-head">
+                <h3>Сравнительный анализ</h3>
+                <p class="muted small">Выберите 2–3 узла Process или Material на графе (Ctrl+клик), затем «Обновить таблицу».</p>
+              </div>
+              <div class="graph-compare-selected" id="graphCompareSelected"></div>
+              <div class="graph-compare-actions">
+                <button type="button" class="btn btn-ghost btn-small" id="graphCompareClearBtn">Очистить</button>
+                <button type="button" class="btn btn-primary btn-small" id="graphCompareRefreshBtn">Обновить таблицу</button>
+              </div>
+              <div class="graph-compare-table-wrap" id="graphCompareTableWrap"></div>
             </div>
           </div>
         </div>
@@ -314,6 +429,10 @@
             <input type="search" id="qdrantSearchQuery" placeholder="Запрос по всему корпусу…" autocomplete="off" />
             <button class="btn btn-primary btn-small" type="submit">Найти</button>
           </form>
+          <div class="search-form search-form-secondary">
+            <input type="search" id="qdrantSearchKeyword" placeholder="Фильтр результатов по слову…" autocomplete="off" />
+          </div>
+          <div class="qdrant-filter-chips" id="qdrantFilterChips" aria-label="Фильтры результатов поиска"></div>
           <p class="muted search-meta" id="qdrantSearchMeta"></p>
           <div class="search-results qdrant-search-results" id="qdrantSearchResults"></div>
         </section>
@@ -386,7 +505,33 @@
 
       <section class="page page-settings hidden" id="pageSettings">
         <div class="settings-page">
-          <h1>Настройки моделей</h1>
+          <h1>Настройки</h1>
+          <p class="muted page-lead">Модели пайплайна, обзор знаний и подписки на темы (MVP).</p>
+
+          <section class="settings-section dashboard-section" id="dashboardSection">
+            <h2>Обзор знаний</h2>
+            <p class="muted small">Покрытие корпуса, аномалии L4 и зоны риска (противоречия, разреженные кластеры).</p>
+            <div class="dashboard-cards" id="dashboardCards">
+              <div class="dashboard-card skeleton"><span class="dashboard-card-value">…</span><span class="dashboard-card-label">Загрузка</span></div>
+            </div>
+            <div class="dashboard-domains" id="dashboardDomains"></div>
+            <div class="dashboard-risks">
+              <h3 class="dashboard-risks-title">Зоны риска</h3>
+              <ul class="dashboard-risk-list" id="dashboardRiskList"></ul>
+            </div>
+            <button type="button" class="btn btn-ghost btn-small" id="dashboardRefreshBtn">Обновить обзор</button>
+          </section>
+
+          <section class="settings-section watchlist-section" id="watchlistSection">
+            <h2>Подписки на темы (MVP)</h2>
+            <p class="muted small">Ключевые слова через запятую. Toast при загрузке документа с совпадением в названии. Roadmap: email/push.</p>
+            <label class="small" for="topicWatchlistInput">Темы</label>
+            <input type="text" class="settings-text-input" id="topicWatchlistInput" placeholder="хвосты, медь, экология…" autocomplete="off" />
+            <button type="button" class="btn btn-ghost btn-small" id="topicWatchlistSaveBtn">Сохранить подписки</button>
+            <span class="muted small" id="topicWatchlistStatus"></span>
+          </section>
+
+          <h2 class="settings-subheading">Модели</h2>
           <p class="muted page-lead">Модель для каждого сервиса пайплайна. Сохраняется в Postgres и применяется к новым задачам.</p>
           <div class="settings-grid">
             <div class="settings-section">
@@ -470,9 +615,9 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
-  <script src="/static/js/icons.js?v=83"></script>
-  <script src="/static/js/graph-mini.js?v=83"></script>
-  <script src="/static/js/app.js?v=83"></script>
-  <script src="/static/js/chats.js?v=83"></script>
+  <script src="/static/js/icons.js?v=96"></script>
+  <script src="/static/js/graph-mini.js?v=96"></script>
+  <script src="/static/js/app.js?v=96"></script>
+  <script src="/static/js/chats.js?v=96"></script>
 </body>
 </html>

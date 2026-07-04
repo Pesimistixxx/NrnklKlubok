@@ -100,3 +100,27 @@ async def load_graph(payload: dict[str, Any]) -> dict[str, int]:
             rel_count += 1
 
     return {"nodes": node_count, "relationships": rel_count}
+
+
+async def patch_relationship_props(
+    from_id: str,
+    to_id: str,
+    rel_type: str,
+    props: dict[str, Any],
+) -> bool:
+    """Update edge properties in Neo4j (expert edits)."""
+    if not isinstance(rel_type, str) or not _SAFE_REL.match(rel_type):
+        return False
+    client = Neo4jClient.instance()
+    cypher = f"""
+    MATCH (a {{id: $from_id}})
+    MATCH (b {{id: $to_id}})
+    MERGE (a)-[r:{rel_type}]->(b)
+    SET r += $props
+    RETURN type(r) AS type
+    """
+    rows = await client.run_write(
+        cypher,
+        {"from_id": from_id, "to_id": to_id, "props": props},
+    )
+    return bool(rows)

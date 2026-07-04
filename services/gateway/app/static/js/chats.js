@@ -4,6 +4,7 @@
   const SESSION_KEY = "mkg_user_session";
   const ROLE_PROMPT_OPEN_KEY = "mkg_role_prompt_open";
   const CHAT_GRAPH_OPEN_KEY = "mkg_chat_graph_open";
+  const CHAT_SPEED_KEY = "mkg_chat_speed_mode";
   const $ = (id) => document.getElementById(id);
 
   const FALLBACK_ROLES = [
@@ -28,7 +29,41 @@
     recommendation_mode: "Советы",
     anomaly_mode: "Аномалии",
     dialog: "Диалог",
+    fast: "Быстрый",
   };
+
+  const SPEED_MODE_LABELS = {
+    fast: "Быстрый",
+    full: "Подробный · с рассуждениями",
+  };
+
+  function getChatSpeedMode() {
+    try {
+      const v = localStorage.getItem(CHAT_SPEED_KEY);
+      return v === "fast" ? "fast" : "full";
+    } catch {
+      return "full";
+    }
+  }
+
+  function setChatSpeedMode(mode) {
+    const next = mode === "fast" ? "fast" : "full";
+    try {
+      localStorage.setItem(CHAT_SPEED_KEY, next);
+    } catch { /* ignore */ }
+    syncChatSpeedToggleUi(next);
+    return next;
+  }
+
+  function syncChatSpeedToggleUi(mode) {
+    const root = $("chatSpeedToggle");
+    if (!root) return;
+    root.querySelectorAll(".chat-speed-pill[data-speed]").forEach((btn) => {
+      const active = btn.dataset.speed === mode;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
 
   let chartInstances = [];
   let chatGraphCollapsed = false;
@@ -38,6 +73,8 @@
   let lastFullscreenTrace = null;
   let lastReplayableWalk = null;
   let graphReplayBusy = false;
+  let liveAccumulatedGraph = null;
+  let graphPollTimer = null;
 
   let roles = [...FALLBACK_ROLES];
   let currentUser = null;
@@ -54,15 +91,18 @@
   /** Файлы, выбранные в compose и ожидающие отправки вместе с сообщением */
   let pendingComposeAttachments = null;
   let userScrolledUp = false;
+  let chatScrollProgrammatic = false;
   let lastMessagesFingerprint = "";
   let lastLoadedThreadId = null;
   const CHAT_SCROLL_THRESHOLD = 120;
-  const GRAPH_WALK_UI_STEP_MS = window.MKGMiniGraph?.GRAPH_WALK_UI_STEP_MS || 700;
+  const GRAPH_WALK_UI_STEP_MS = window.MKGMiniGraph?.GRAPH_WALK_UI_STEP_MS || 1300;
   const TYPEWRITER_MIN_MS = 8;
   const TYPEWRITER_MAX_MS = 16;
 
   let activeWalkCancel = null;
   let activeStreamPreview = null;
+  let currentThreadMessages = [];
+  let chatBusy = false;
 
   function showChatUploadError(msg) {
     const el = $("chatUploadError");
@@ -234,8 +274,18 @@
       const answersOnly = data.processing_mode === "answers_only";
       if (data.status === "loaded" && data.graph_nodes > 0 && window.MKG?.indexEmbeddings && !window.MKG.isDocIndexed(docId)) {
         await window.MKG.indexEmbeddings(docId, { silent: true });
-      } else if (data.status === "loaded" && answersOnly && window.MKG?.markDocIndexed) {
+        if (window.MKG.isDocIndexed(docId)) {
+          window.MKG.showQdrantToast?.(`Документ «${data.file_name || docId}» проиндексирован в Qdrant.`, { ms: 5500 });
+        }
+      } else if (answersOnly && ["md_ready", "loaded"].includes(data.status) && !window.MKG.isDocIndexed(docId) && window.MKG.indexEmbeddings) {
+        await window.MKG.indexEmbeddings(docId, { silent: true }).catch(() => {});
+      } else if (data.status === "loaded" && answersOnly && window.MKG?.markDocIndexed && window.MKG.isDocIndexed(docId)) {
         window.MKG.markDocIndexed(docId);
+      } else if (window.MKG?.isDocQdrantIndexed?.(data) && window.MKG?.markDocIndexed) {
+        window.MKG.markDocIndexed(docId);
+        if (TERMINAL_DOC_STATUSES.has(data.status) && data.step === "l4_done") {
+          window.MKG.showQdrantToast?.(`«${data.file_name || docId}» — L3+L4 в Qdrant, кластеризация L4 готова.`, { ms: 6000 });
+        }
       }
       if (TERMINAL_DOC_STATUSES.has(data.status)) {
         stopUploadPoll(docId);
@@ -456,6 +506,83 @@
     return esc(text).replace(/\n/g, "<br>");
   }
 
+  /** Обернуть ##-разделы структурированного ответа в collapsible blocks. */
+  function wrapAnswerSectionsHtml(html, msgId) {
+    if (!html || !/<h2\b/i.test(html)) return html;
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    const children = [...tmp.childNodes];
+    const sections = [];
+    let current = null;
+    for (const node of children) {
+      if (node.nodeType === 1 && node.tagName === "H2") {
+        if (current) sections.push(current);
+        current = { title: node.textContent.trim(), nodes: [] };
+      } else if (current) {
+        current.nodes.push(node);
+      }
+    }
+    if (current) sections.push(current);
+    if (sections.length < 2) return html;
+
+    const out = document.createElement("div");
+    out.className = "chat-answer-sections";
+    sections.forEach((sec, idx) => {
+      const details = document.createElement("details");
+      details.className = "chat-answer-section";
+      if (idx === 0) details.open = true;
+      const summary = document.createElement("summary");
+      summary.className = "chat-answer-section-summary";
+      const titleSpan = document.createElement("span");
+      titleSpan.className = "chat-answer-section-title";
+      titleSpan.textContent = sec.title;
+      summary.appendChild(titleSpan);
+      const explainBtn = document.createElement("button");
+      explainBtn.type = "button";
+      explainBtn.className = "chat-section-explain";
+      explainBtn.textContent = "Пояснить";
+      explainBtn.dataset.msgId = msgId || "";
+      explainBtn.dataset.section = sec.title;
+      explainBtn.title = "Пояснить этот раздел";
+      summary.appendChild(explainBtn);
+      details.appendChild(summary);
+      const body = document.createElement("div");
+      body.className = "chat-answer-section-body";
+      sec.nodes.forEach((n) => body.appendChild(n.cloneNode(true)));
+      details.appendChild(body);
+      out.appendChild(details);
+    });
+    return out.innerHTML;
+  }
+
+  function renderAgentAnswerHtml(text, msgId) {
+    const clean = sanitizeAgentAnswerBody(text);
+    return wrapAnswerSectionsHtml(renderChatMarkdown(clean), msgId);
+  }
+
+  function bindAnswerSectionExplain(el) {
+    if (!el) return;
+    el.querySelectorAll(".chat-section-explain").forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const section = btn.dataset.section || "";
+        const msgId = btn.dataset.msgId || "";
+        const details = btn.closest("details.chat-answer-section");
+        if (details) details.open = true;
+        if (msgId && section) {
+          sendChatMessage({
+            explain: true,
+            targetAgentMsgId: msgId,
+            explainSection: section,
+          });
+        }
+      });
+    });
+  }
+
   /** Убрать внутренние предупреждения и метки шагов из текста ответа (только синтез для пользователя). */
   const INTERNAL_ANSWER_LINE = /^(?:⚠\s*)?(?:gap\s*analyzer|connection_gap_analyzer)\s*:/i;
   const INTERNAL_AGENT_STEP_LINE = /^(?:⚠\s*)?(?:orchestrator_|connection_|discover_|layer_loop_|l[1-6]_)[a-z0-9_]*\s*:/i;
@@ -495,7 +622,14 @@
     if (!box || box.dataset.scrollBound) return;
     box.dataset.scrollBound = "1";
     box.addEventListener("scroll", () => {
+      if (chatScrollProgrammatic) return;
       userScrolledUp = !isChatNearBottom();
+    }, { passive: true });
+    box.addEventListener("wheel", () => {
+      chatScrollProgrammatic = false;
+    }, { passive: true });
+    box.addEventListener("touchstart", () => {
+      chatScrollProgrammatic = false;
     }, { passive: true });
   }
 
@@ -511,6 +645,16 @@
     const a = document.createElement("a");
     a.href = url;
     a.download = filename.endsWith(".md") ? filename : `${filename}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadJsonFile(filename, obj) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/ld+json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename.endsWith(".json") ? filename : `${filename}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -531,22 +675,91 @@
     return lines.join("\n");
   }
 
+  function buildChatJsonLdExport(msg) {
+    const role = roleMeta(msg.author_role);
+    const sources = msg.meta?.sources || [];
+    return {
+      "@context": {
+        "@vocab": "https://schema.org/",
+        "mkg": "https://mkg.local/ontology#",
+      },
+      "@type": "Answer",
+      "@id": `urn:mkg:chat:${msg.id || "answer"}`,
+      "text": msg.body || "",
+      "dateCreated": msg.created_at || new Date().toISOString(),
+      "author": {
+        "@type": "Person",
+        "name": msg.author_name || role.name_ru || "MKG Assistant",
+        "jobTitle": role.name_ru || msg.author_role,
+      },
+      "citation": sources.map((s, i) => ({
+        "@type": "CreativeWork",
+        "name": s.file_name || s.document_id || `source-${i + 1}`,
+        "identifier": s.document_id || undefined,
+        "description": s.text ? String(s.text).slice(0, 400) : undefined,
+        "mkg:layer": s.layer || undefined,
+      })),
+      "isBasedOn": sources.map((s) => s.document_id).filter(Boolean),
+    };
+  }
+
+  function openChatPrintView(msg) {
+    const md = buildChatMdExport(msg);
+    const bodyHtml = window.MKG?.renderMarkdownHtml
+      ? window.MKG.renderMarkdownHtml(md)
+      : `<pre>${esc(md)}</pre>`;
+    const stamp = msg.created_at ? new Date(msg.created_at).toLocaleString("ru-RU") : "";
+    const w = window.open("", "_blank", "noopener,noreferrer,width=900,height=720");
+    if (!w) {
+      showNotice("Разрешите всплывающие окна для печати/PDF", true);
+      return;
+    }
+    w.document.write(`<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"/><title>MKG — ответ</title>
+<style>
+  body{font-family:Georgia,serif;max-width:720px;margin:2rem auto;line-height:1.55;color:#111}
+  h1{font-size:1.25rem;font-weight:600} .meta{color:#666;font-size:.85rem;margin-bottom:1.5rem}
+  @media print{ body{margin:1cm} }
+</style></head><body>
+<h1>Ответ MKG</h1>
+<p class="meta">${esc(stamp)} · ${esc(msg.author_name || "")}</p>
+<div class="content">${bodyHtml}</div>
+<script>window.onload=function(){window.print();};<\/script>
+</body></html>`);
+    w.document.close();
+  }
+
+  function formatSourceReliability(conf) {
+    if (conf == null || conf === "") return "";
+    const n = Number(conf);
+    if (!Number.isFinite(n)) return "";
+    const pct = Math.round(n * 100);
+    if (pct >= 85) return `высокая · ${pct}%`;
+    if (pct >= 70) return `средняя · ${pct}%`;
+    return `низкая · ${pct}%`;
+  }
+
   function renderSourcesHtml(sources) {
     if (!sources?.length) return "";
     const chips = sources.map((s, i) => {
       const docId = s.document_id || "";
       const name = esc(s.file_name || docId.slice(-12) || "?");
       const layer = s.layer ? `<span class="chat-source-layer">${esc(s.layer)}</span>` : "";
-      return `<span class="chat-source-chip-wrap">${layer}<button type="button" class="chat-source-chip" data-doc-id="${esc(docId)}" data-source-idx="${i}" title="Открыть Markdown документа">${name}</button></span>`;
+      const rel = formatSourceReliability(s.extraction_confidence);
+      const relBadge = rel ? `<span class="chat-source-reliability" title="extraction_confidence">${esc(rel)}</span>` : "";
+      const date = s.source_date ? `<span class="chat-source-date">${esc(String(s.source_date))}</span>` : "";
+      return `<span class="chat-source-chip-wrap">${layer}${relBadge}${date}<button type="button" class="chat-source-chip" data-doc-id="${esc(docId)}" data-source-idx="${i}" title="Открыть Markdown документа">${name}</button></span>`;
     }).join("");
     const detailItems = sources.map((s) => {
       const docId = s.document_id || "";
       const name = esc(s.file_name || docId.slice(-12) || "?");
       const layer = s.layer ? `<span class="chat-source-layer">${esc(s.layer)}</span>` : "";
+      const rel = formatSourceReliability(s.extraction_confidence);
+      const meta = [rel, s.source_date].filter(Boolean).map((x) => esc(String(x))).join(" · ");
+      const metaLine = meta ? `<span class="chat-source-meta muted">${meta}</span><br>` : "";
       const snippet = s.text
         ? `<div class="chat-source-snippet md-render-view">${renderChatMarkdown(String(s.text).slice(0, 800))}</div>`
         : "";
-      return `<li><button type="button" class="chat-source-link" data-doc-id="${esc(docId)}" title="Открыть Markdown документа">${name}</button>${layer}${snippet ? `<br>${snippet}` : ""}</li>`;
+      return `<li>${metaLine}<button type="button" class="chat-source-link" data-doc-id="${esc(docId)}" title="Открыть Markdown документа">${name}</button>${layer}${snippet ? `<br>${snippet}` : ""}</li>`;
     }).join("");
     const detailsBlock = sources.some((s) => s.text)
       ? `<details class="chat-sources-details">
@@ -573,6 +786,7 @@
       const key = `${docId}:${nodeId || item.text?.slice(0, 40) || ""}`;
       if (seen.has(key)) return;
       seen.add(key);
+      const props = item.props || {};
       out.push({
         document_id: docId,
         file_name: item.file_name || docId.slice(-12),
@@ -582,6 +796,8 @@
         score: Number(item.score) || 0,
         text: String(item.text || item.quote || "").slice(0, 500),
         md_url: `/api/v1/documents/${docId}/markdown`,
+        extraction_confidence: item.extraction_confidence ?? props.extraction_confidence ?? props.confidence,
+        source_date: item.source_date ?? props.publication_year ?? props.year ?? props.updated_at,
       });
     };
     (evidence || []).forEach((ev) => push({
@@ -592,6 +808,7 @@
       layer: ev.layer,
       score: ev.score,
       text: ev.text || ev.quote,
+      props: ev.props || {},
     }));
     (layerResults || []).forEach((lr) => {
       (lr.nodes_found || []).forEach((n) => {
@@ -602,6 +819,7 @@
           label: n.label,
           layer: lr.layer || props.layer,
           text: props.quote || props.raw_text_ru || props.name_ru || props.text,
+          props,
         });
       });
     });
@@ -609,12 +827,18 @@
   }
 
   function replayPayloadFromMessage(msg) {
-    if (!msg || msg.msg_type !== "agent" || !hasContextGraph(msg.meta)) return null;
+    if (!msg || msg.msg_type !== "agent") return null;
+    const graph = extractGraphFromTrace(
+      msg.meta?.trace,
+      msg.meta?.graph,
+      msg.meta?.layer_results || msg.meta?.graph?.layer_results,
+    ) || msg.meta?.graph;
+    if (!graph?.nodes?.length && !graph?.relationships?.length && !graph?.graph_walk_steps?.length) return null;
     return {
       text: msg.body || "",
-      graph: msg.meta.graph,
-      trace: msg.meta.trace || [],
-      layerResults: msg.meta.layer_results || msg.meta.graph?.layer_results || null,
+      graph,
+      trace: msg.meta?.trace || [],
+      layerResults: msg.meta?.layer_results || msg.meta?.graph?.layer_results || null,
     };
   }
 
@@ -925,6 +1149,8 @@
     qdrant_search: "Qdrant",
     qdrant_l3: "Qdrant L3",
     qdrant_l4_cluster: "L4 кластеры",
+    fast_retrieval: "Поиск L3+L4",
+    graph_keyword_fallback: "Fallback граф/Neo4j",
     graph_traversal: "Обход (итог)",
     graph_walk_step: "Шаг графа",
     graph_sequential_walk: "Обход графа",
@@ -1006,10 +1232,17 @@
     { step: "llm_compose" },
   ];
 
+  const FAST_PIPELINE_STEPS = [
+    { step: "fast_retrieval", pipeline: "fast", l3_hit_count: 0, l4_hit_count: 0, hit_count: 0 },
+    { step: "graph_keyword_fallback", skipped: true, hit_count: 0, optional: true },
+    { step: "llm_compose" },
+  ];
+
   const PIPELINE_SETUP_STEPS = new Set([
     "orchestrator_init", "orchestrator_plan", "agent_loop_start", "layer_loop_start",
-    "chat_role", "chat_memory", "qdrant_l3", "qdrant_l4_cluster", "graph_walk_step",
-    "graph_traversal", "retrieval_search", "graph_context_loader",
+    "chat_memory", "qdrant_l3", "qdrant_l4_cluster", "fast_retrieval",
+    "graph_walk_step", "graph_traversal", "retrieval_search", "graph_context_loader",
+    "graph_keyword_fallback",
   ]);
 
   const PIPELINE_TAIL_STEPS = new Set([
@@ -1038,7 +1271,65 @@
     });
   }
 
+  const PIPELINE_MAX_CHIPS_PER_ROUND = 12;
+
+  function pipelineBusChipKey(m, roundNum) {
+    const fromLayer = agentIdToLayer(m.from) || m.from || "";
+    const toLayer = agentIdToLayer(m.to) || m.to || "";
+    const round = m.round ?? roundNum ?? 0;
+    return `${round}|${fromLayer}|${toLayer}|${m.type || ""}`;
+  }
+
+  function pipelineAgentChipKey(item) {
+    const layer = item.layer || agentStepToLayer(item.step) || "";
+    return `${item.round ?? 0}|${layer}|${item.skipped ? 1 : 0}`;
+  }
+
+  function capPipelineRoundItems(items, max = PIPELINE_MAX_CHIPS_PER_ROUND) {
+    if (!items?.length || items.length <= max) return { items: items || [], overflow: 0 };
+    return { items: items.slice(0, max), overflow: items.length - max };
+  }
+
+  function pipelineModelFingerprint(model, { live = false, activeId = -1 } = {}) {
+    const parts = [`live:${live ? 1 : 0}`, `active:${activeId}`];
+    model.setup.forEach((item) => parts.push(`s:${item.step}`));
+    model.rounds.forEach((round) => {
+      parts.push(`r:${round.round}`);
+      if (round.overflow) parts.push(`ov:${round.overflow}`);
+      round.items.forEach((item) => {
+        if (item.kind === "agent") {
+          parts.push(`a:${pipelineAgentChipKey(item)}`);
+        } else if (item.kind === "bus") {
+          parts.push(`b:${pipelineBusChipKey(item, item.round)}:${item.count || 1}`);
+        } else if (item.kind === "layer_batch") {
+          item.agents.forEach((a) => parts.push(`lb:${pipelineAgentChipKey(a)}`));
+        } else if (item.kind === "router") {
+          parts.push(`rt:${item.next_agent || ""}`);
+        } else {
+          parts.push(`${item.kind}:${item.step || item.id || ""}`);
+        }
+      });
+    });
+    model.tail.forEach((item) => parts.push(`t:${item.step}`));
+    return parts.join("|");
+  }
+
+  function inferTracePipelineKind(trace) {
+    const items = trace || [];
+    if (items.some((raw) => {
+      const step = typeof raw === "string" ? raw : raw.step;
+      return step === "agent_loop_start" || step === "layer_loop_start"
+        || String(step || "").startsWith("orchestrator");
+    })) return "orchestrator";
+    if (items.some((raw) => {
+      const t = typeof raw === "string" ? { step: raw } : raw;
+      return t.pipeline === "fast" || t.step === "fast_retrieval" || t.speed_mode === "fast";
+    })) return "fast";
+    return "dialog";
+  }
+
   function buildPipelineModel(trace) {
+    const pipelineKind = inferTracePipelineKind(trace);
     const setup = [];
     const tail = [];
     const roundMap = new Map();
@@ -1046,16 +1337,25 @@
     let maxRounds = 4;
     let seq = 0;
     let dialogLayerBatch = null;
-    const seenBusIds = new Set();
+    const seenBusKeys = new Map();
+    const seenAgentKeys = new Set();
 
     const flushDialogLayers = () => {
       if (!dialogLayerBatch?.length) return;
       const r = dialogLayerBatch[0].round ?? 0;
+      const agents = [];
+      const batchSeen = new Set();
+      dialogLayerBatch.forEach((a) => {
+        const k = pipelineAgentChipKey(a);
+        if (batchSeen.has(k)) return;
+        batchSeen.add(k);
+        agents.push(a);
+      });
       const bucket = ensureRound(r);
       bucket.items.push({
         kind: "layer_batch",
         round: r,
-        agents: dialogLayerBatch.slice(),
+        agents,
         id: seq++,
       });
       dialogLayerBatch = null;
@@ -1069,19 +1369,34 @@
 
     const pushBusMessages = (messages, roundNum) => {
       (messages || []).forEach((m) => {
-        const busKey = m.id || `${m.from}|${m.to}|${m.type}|${m.round ?? roundNum}`;
-        if (seenBusIds.has(busKey)) return;
-        seenBusIds.add(busKey);
-        ensureRound(m.round ?? roundNum ?? currentRound).items.push({
+        const round = m.round ?? roundNum ?? currentRound;
+        const busKey = pipelineBusChipKey(m, round);
+        const existing = seenBusKeys.get(busKey);
+        if (existing) {
+          existing.count = (existing.count || 1) + 1;
+          return;
+        }
+        const item = {
           kind: "bus",
           from: m.from,
           to: m.to,
           type: m.type,
           preview: m.preview,
-          round: m.round ?? roundNum ?? currentRound,
+          round,
+          count: 1,
           id: seq++,
-        });
+        };
+        seenBusKeys.set(busKey, item);
+        ensureRound(round).items.push(item);
       });
+    };
+
+    const pushAgentItem = (agentItem) => {
+      const agentKey = pipelineAgentChipKey(agentItem);
+      if (seenAgentKeys.has(agentKey)) return false;
+      seenAgentKeys.add(agentKey);
+      ensureRound(agentItem.round ?? currentRound).items.push(agentItem);
+      return true;
     };
 
     (trace || []).forEach((raw) => {
@@ -1102,6 +1417,22 @@
 
       if (PIPELINE_SETUP_STEPS.has(step)) {
         flushDialogLayers();
+        if (pipelineKind === "orchestrator" && (step === "chat_role" || step === "chat_memory")) {
+          return;
+        }
+        if (pipelineKind === "fast" && (step === "chat_role" || step === "chat_memory")) {
+          return;
+        }
+        if (pipelineKind === "fast" && step === "graph_keyword_fallback" && t.skipped) {
+          return;
+        }
+        setup.push({ kind: "setup", step, data: t, id: seq++ });
+        return;
+      }
+
+      if (step === "chat_role") {
+        flushDialogLayers();
+        if (pipelineKind === "orchestrator") return;
         setup.push({ kind: "setup", step, data: t, id: seq++ });
         return;
       }
@@ -1139,7 +1470,7 @@
         }
         flushDialogLayers();
         currentRound = agentItem.round;
-        ensureRound(currentRound).items.push(agentItem);
+        pushAgentItem(agentItem);
         pushBusMessages(t.bus_messages, currentRound);
         return;
       }
@@ -1159,7 +1490,12 @@
 
     flushDialogLayers();
 
-    const rounds = [...roundMap.values()].sort((a, b) => a.round - b.round);
+    const rounds = [...roundMap.values()]
+      .sort((a, b) => a.round - b.round)
+      .map((round) => {
+        const capped = capPipelineRoundItems(round.items);
+        return { round: round.round, items: capped.items, overflow: capped.overflow };
+      });
     const flatItems = [
       ...setup,
       ...rounds.flatMap((r) => r.items),
@@ -1198,8 +1534,13 @@
     const fromLayer = agentIdToLayer(item.from) || item.from || "?";
     const toLayer = agentIdToLayer(item.to) || item.to || "?";
     const type = item.type ? ` · ${item.type}` : "";
-    const title = `${fromLayer} → ${toLayer}${type}`;
-    return `<span class="agent-pipeline-bus st-${state}" title="${esc(title)}"><span class="agent-pipeline-bus-icon" aria-hidden="true">⇄</span><span class="agent-pipeline-bus-label">Шина</span><span class="agent-pipeline-bus-route">${esc(fromLayer)}→${esc(toLayer)}</span></span>`;
+    const count = item.count > 1 ? ` ×${item.count}` : "";
+    const title = `${fromLayer} → ${toLayer}${type}${count}`;
+    return `<span class="agent-pipeline-bus st-${state}" title="${esc(title)}"><span class="agent-pipeline-bus-icon" aria-hidden="true">⇄</span><span class="agent-pipeline-bus-label">Шина</span><span class="agent-pipeline-bus-route">${esc(fromLayer)}→${esc(toLayer)}</span>${item.count > 1 ? `<span class="agent-pipeline-bus-count">×${item.count}</span>` : ""}</span>`;
+  }
+
+  function renderPipelineOverflowChip(count) {
+    return `<span class="agent-pipeline-overflow muted" title="Ещё ${count} шагов в этом раунде">+${count}</span>`;
   }
 
   function renderPipelineSetupChip(item, state) {
@@ -1252,9 +1593,10 @@
       ? `<div class="agent-pipeline-rounds">${model.rounds.map((round) => {
         const maxR = model.maxRounds || "?";
         const track = joinPipelineTrack(round.items, opts);
+        const overflow = round.overflow ? renderPipelineOverflowChip(round.overflow) : "";
         return `<div class="agent-pipeline-round" data-round="${round.round}">
           <div class="agent-pipeline-round-head"><span class="agent-pipeline-round-id">R${round.round}</span><span class="agent-pipeline-round-cap muted">/${maxR}</span></div>
-          <div class="agent-pipeline-round-track">${track || '<span class="muted small">…</span>'}</div>
+          <div class="agent-pipeline-round-track">${track || '<span class="muted small">…</span>'}${overflow}</div>
         </div>`;
       }).join("")}</div>`
       : "";
@@ -1349,14 +1691,38 @@
     }));
   }
 
-  function buildRoundModel(steps, loopMeta) {
+  function collectTraceRoundNums(trace, loopMeta) {
+    const nums = new Set();
+    (trace || []).forEach((t) => {
+      if (t.round == null) return;
+      if (
+        t.step === "agent_loop_round"
+        || t.step === "agent_loop_start"
+        || t.step === "layer_loop_start"
+        || t.step === "orchestrator_router"
+        || /^l[1-6]_agent$/.test(t.step || "")
+      ) {
+        nums.add(Number(t.round));
+      }
+    });
+    if (!nums.size && loopMeta?.round_count) {
+      for (let i = 0; i < loopMeta.round_count; i += 1) nums.add(i);
+    }
+    if (!nums.size) nums.add(0);
+    return [...nums].sort((a, b) => a - b);
+  }
+
+  function buildRoundModel(steps, loopMeta, trace) {
     const byRound = new Map();
     for (const s of steps) {
       const r = s.round ?? 0;
       if (!byRound.has(r)) byRound.set(r, []);
       byRound.get(r).push(s);
     }
-    const roundNums = [...byRound.keys()].sort((a, b) => a - b);
+    const roundNums = collectTraceRoundNums(trace, loopMeta);
+    for (const r of roundNums) {
+      if (!byRound.has(r)) byRound.set(r, []);
+    }
     const maxR = loopMeta?.max_rounds ?? (roundNums.length ? Math.max(...roundNums) + 1 : 1);
     const defaultRound = roundNums[0] ?? 0;
     return { byRound, roundNums, maxR, defaultRound };
@@ -1370,8 +1736,9 @@
     const { roundNums, maxR, defaultRound } = roundModel;
     if (roundNums.length <= 1 && maxR <= 1) return "";
     const curHuman = defaultRound + 1;
-    const atFirst = defaultRound === roundNums[0];
-    const atLast = defaultRound === roundNums[roundNums.length - 1];
+    const idx = roundNums.indexOf(defaultRound);
+    const atFirst = idx <= 0;
+    const atLast = idx >= roundNums.length - 1;
     return `<div class="layer-round-nav" data-round="${defaultRound}" data-rounds="${roundNums.join(",")}" data-max="${maxR}">
       <button type="button" class="layer-round-btn layer-round-prev" aria-label="Предыдущий раунд"${atFirst ? " disabled" : ""}>◀</button>
       <span class="layer-round-indicator">раунд <span class="layer-round-current">${curHuman}</span>/<span class="layer-round-max">${maxR}</span></span>
@@ -1379,13 +1746,14 @@
     </div>`;
   }
 
-  function setLayerRoundNav(detail, round) {
-    const nav = detail?.querySelector(".layer-round-nav");
+  function setLayerRoundNav(detailsEl, round) {
+    const nav = detailsEl?.querySelector(".layer-round-nav");
     if (!nav) return;
     const rounds = nav.dataset.rounds.split(",").map(Number);
     const maxR = Number(nav.dataset.max) || rounds.length;
     if (!rounds.includes(round)) return;
     nav.dataset.round = String(round);
+    detailsEl.dataset.selectedRound = String(round);
     const curEl = nav.querySelector(".layer-round-current");
     if (curEl) curEl.textContent = String(round + 1);
     const maxEl = nav.querySelector(".layer-round-max");
@@ -1395,10 +1763,61 @@
     const nextBtn = nav.querySelector(".layer-round-next");
     if (prevBtn) prevBtn.disabled = idx <= 0;
     if (nextBtn) nextBtn.disabled = idx >= rounds.length - 1;
-    detail.querySelectorAll("[data-round]").forEach((el) => {
+    detailsEl.querySelectorAll("[data-round]").forEach((el) => {
       if (el.classList.contains("layer-round-nav")) return;
       const r = Number(el.dataset.round);
       el.classList.toggle("is-round-hidden", r !== round);
+    });
+  }
+
+  function handleLayerRoundNavClick(e) {
+    const btn = e.target.closest(".layer-round-prev, .layer-round-next");
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const detailsEl = btn.closest(".chat-layer-agents");
+    const nav = detailsEl?.querySelector(".layer-round-nav");
+    if (!nav) return;
+    const rounds = nav.dataset.rounds.split(",").map(Number);
+    const cur = Number(nav.dataset.round);
+    const idx = rounds.indexOf(cur);
+    if (btn.classList.contains("layer-round-prev") && idx > 0) {
+      setLayerRoundNav(detailsEl, rounds[idx - 1]);
+    } else if (btn.classList.contains("layer-round-next") && idx < rounds.length - 1) {
+      setLayerRoundNav(detailsEl, rounds[idx + 1]);
+    }
+  }
+
+  function bindLayerRoundNavEvents(root) {
+    root?.querySelectorAll(".layer-round-prev, .layer-round-next").forEach((btn) => {
+      if (btn.dataset.roundBound) return;
+      btn.dataset.roundBound = "1";
+      btn.addEventListener("click", handleLayerRoundNavClick);
+    });
+  }
+
+  function captureLayerAgentsUiState(container) {
+    const state = new Map();
+    container?.querySelectorAll(".chat-layer-agents[data-msg-id]").forEach((det) => {
+      const nav = det.querySelector(".layer-round-nav");
+      const roundRaw = nav?.dataset.round ?? det.dataset.selectedRound;
+      state.set(det.dataset.msgId, {
+        open: det.open,
+        round: roundRaw != null && roundRaw !== "" ? Number(roundRaw) : null,
+      });
+    });
+    return state;
+  }
+
+  function restoreLayerAgentsUiState(container, state) {
+    if (!container || !state?.size) return;
+    container.querySelectorAll(".chat-layer-agents[data-msg-id]").forEach((det) => {
+      const saved = state.get(det.dataset.msgId);
+      if (!saved) return;
+      if (saved.open) det.open = true;
+      if (saved.round != null && det.querySelector(".layer-round-nav")) {
+        setLayerRoundNav(det, saved.round);
+      }
     });
   }
 
@@ -1469,12 +1888,15 @@
     </li>`;
   }
 
-  function renderLayerAgentsHtml(trace, layerResults) {
+  function renderLayerAgentsHtml(trace, layerResults, selectedRound = null, msgId = null) {
     const steps = extractLayerAgentSteps(trace, layerResults);
     if (!steps.length) return "";
     const loopMeta = extractLoopMeta(trace);
-    const roundModel = buildRoundModel(steps, loopMeta);
-    const { defaultRound, roundNums } = roundModel;
+    const roundModel = buildRoundModel(steps, loopMeta, trace);
+    const { roundNums, maxR } = roundModel;
+    const defaultRound = selectedRound != null && roundNums.includes(selectedRound)
+      ? selectedRound
+      : roundModel.defaultRound;
     const flows = roundNums.map((r) => {
       const roundSteps = roundModel.byRound.get(r) || [];
       const flowMeta = { ...loopMeta, round: r, round_count: r + 1 };
@@ -1486,10 +1908,12 @@
       return `<div class="layer-round-bus-panel${roundPanelCls(r, defaultRound)}" data-round="${r}">${bus}</div>`;
     }).join("");
     const rows = steps.map((s, i) => renderLayerAgentRow(s, i, defaultRound)).join("");
-    const maxR = loopMeta.max_rounds || roundModel.maxR || "?";
-    const nav = renderRoundNav(roundModel);
-    return `<details class="chat-layer-agents">
-      <summary>Агенты · гибкий цикл (до ${maxR} раундов)</summary>
+    const maxLabel = loopMeta.max_rounds || maxR || "?";
+    const navModel = { ...roundModel, defaultRound };
+    const nav = renderRoundNav(navModel);
+    const msgAttr = msgId ? ` data-msg-id="${esc(msgId)}"` : "";
+    return `<details class="chat-layer-agents" data-selected-round="${defaultRound}"${msgAttr}>
+      <summary>Агенты · гибкий цикл (до ${maxLabel} раундов)</summary>
       ${nav}
       ${flows}
       ${busPanels}
@@ -1527,6 +1951,8 @@
     setChatGraphBuilding(false);
     lastFullscreenGraph = null;
     lastFullscreenTrace = null;
+    liveAccumulatedGraph = null;
+    stopGraphPoll();
     setLastReplayableWalk(null);
     updateChatGraphStats(null);
     window.MKGMiniGraph?.destroy($("chatGraphCanvas"));
@@ -1565,7 +1991,7 @@
   function updateStreamPreviewBody(text) {
     const preview = ensureStreamPreview();
     const body = preview?.querySelector(".chat-msg-body");
-    if (body) body.innerHTML = renderChatMarkdown(sanitizeAgentAnswerBody(text));
+    if (body) body.innerHTML = renderAgentAnswerHtml(text, "");
     scrollChatToBottom(false);
   }
 
@@ -1612,7 +2038,7 @@
 
     for (const lq of layerQuestions) {
       showAgentQuestion(lq.question);
-      await sleep(Math.min(GRAPH_WALK_UI_STEP_MS * 0.42, 450));
+      await sleep(Math.min(GRAPH_WALK_UI_STEP_MS * 0.45, 580));
     }
 
     if (walkPath.length && canvas) {
@@ -1706,24 +2132,45 @@
     </details>`;
   }
 
-  function renderAgentMessageTrace(m) {
+  function renderAgentMessageTrace(m, layerUiState = null) {
     const trace = m.meta?.trace;
     if (!trace?.length) return "";
+    const selectedRound = layerUiState?.round ?? null;
+    const msgId = m.id || null;
+    if (m.meta?.speed_mode === "fast" || m.meta?.mode === "fast") {
+      return renderFastTraceHtml(trace, m.meta?.timing_ms);
+    }
     const graphMeta = m.meta?.graph;
     const layerResults = graphMeta?.layer_results || m.meta?.layer_results;
     const isOrchestrator = m.meta?.mode === "orchestrator_mode";
     const isDialog = !m.meta?.mode || m.meta.mode === "dialog";
-    if (isOrchestrator) return renderOrchestratorTraceHtml(trace, layerResults);
-    if (isDialog) return renderDialogTraceHtml(trace, graphMeta, layerResults);
-    return `${renderLayerAgentsHtml(trace, layerResults)}${renderGraphWalkTimelineHtml(trace, graphMeta)}${renderReasoningChainHtml(trace)}`;
+    if (isOrchestrator) return renderOrchestratorTraceHtml(trace, layerResults, selectedRound, msgId);
+    if (isDialog) return renderDialogTraceHtml(trace, graphMeta, layerResults, selectedRound, msgId);
+    return `${renderLayerAgentsHtml(trace, layerResults, selectedRound, msgId)}${renderGraphWalkTimelineHtml(trace, graphMeta)}${renderReasoningChainHtml(trace)}`;
   }
 
-  function renderOrchestratorTraceHtml(trace, layerResults) {
-    return `${renderLayerAgentsHtml(trace, layerResults)}${renderGraphWalkTimelineHtml(trace, null)}${renderReasoningChainHtml(trace)}`;
+  function renderFastTraceHtml(trace, timingMs) {
+    const rows = (trace || []).map((t) => {
+      const label = TRACE_LABELS[t.step] || t.step || "?";
+      const extra = [];
+      if (t.hit_count != null) extra.push(`${t.hit_count} хит.`);
+      if (t.elapsed_ms != null) extra.push(`${t.elapsed_ms} мс`);
+      const suffix = extra.length ? ` · ${extra.join(" · ")}` : "";
+      return `<li>${esc(label)}${esc(suffix)}</li>`;
+    }).join("");
+    const total = timingMs != null ? ` · ${timingMs} мс` : "";
+    return `<details class="chat-trace-fast">
+      <summary>Trace (быстрый)${esc(total)}</summary>
+      <ul>${rows}</ul>
+    </details>`;
   }
 
-  function renderDialogTraceHtml(trace, graph, layerResults) {
-    return `${renderLayerAgentsHtml(trace, layerResults)}${renderGraphWalkTimelineHtml(trace, graph)}${renderReasoningChainHtml(trace)}`;
+  function renderOrchestratorTraceHtml(trace, layerResults, selectedRound = null, msgId = null) {
+    return `${renderLayerAgentsHtml(trace, layerResults, selectedRound, msgId)}${renderGraphWalkTimelineHtml(trace, null)}${renderReasoningChainHtml(trace)}`;
+  }
+
+  function renderDialogTraceHtml(trace, graph, layerResults, selectedRound = null, msgId = null) {
+    return `${renderLayerAgentsHtml(trace, layerResults, selectedRound, msgId)}${renderGraphWalkTimelineHtml(trace, graph)}${renderReasoningChainHtml(trace)}`;
   }
 
   const AGENT_TRACE_PREVIEW = [
@@ -1785,6 +2232,19 @@
       const mr = item.max_rounds ? `/${item.max_rounds}` : "";
       return `гибкий цикл ${r}${mr} · ${layers}`;
     }
+    if (item.step === "fast_retrieval") {
+      const l3 = item.l3_hit_count ?? item.hit_count ?? 0;
+      const l4 = item.l4_hit_count ?? 0;
+      const clusters = item.cluster_hit_count ?? 0;
+      const parts = [`L3:${l3}`, `L4:${l4}`];
+      if (clusters) parts.push(`кл:${clusters}`);
+      if (item.indexed_total != null) parts.push(`idx:${item.indexed_total}`);
+      if (item.warning) parts.push(String(item.warning));
+      return parts.join(" · ");
+    }
+    if (item.step === "graph_keyword_fallback") {
+      return `${item.hit_count ?? 0} хитов · ${item.source || "fallback"}`;
+    }
     if (item.step === "orchestrator_router") {
       const nxt = item.next_agent || "?";
       const bus = item.bus_size ? ` · шина:${item.bus_size}` : "";
@@ -1829,6 +2289,10 @@
     if (item.rel_count != null) parts.push(`связей: ${item.rel_count}`);
     if (item.walk_step_count != null) parts.push(`шагов обхода: ${item.walk_step_count}`);
     if (item.source) parts.push(`источник: ${item.source}`);
+    if (item.warning) parts.push(String(item.warning));
+    if (item.anomaly_count != null && item.anomaly_count > 0) {
+      parts.push(`аномалии: ${item.anomaly_count}`);
+    }
     if (item.fallback) parts.push("режим fallback (без Qdrant-хитов)");
     if (item.collection) parts.push(`коллекция: ${item.collection}`);
     if (item.indexed_total != null) parts.push(`индекс: ${item.indexed_total} точек`);
@@ -1861,6 +2325,16 @@
 
   let traceLiveTimer = null;
   let traceLivePollTimer = null;
+  let traceLiveFingerprint = "";
+
+  function paintTraceLive(model, { live = false, activeId = -1 } = {}) {
+    const el = $("chatTraceLive");
+    if (!el) return;
+    const fp = pipelineModelFingerprint(model, { live, activeId });
+    if (fp === traceLiveFingerprint) return;
+    traceLiveFingerprint = fp;
+    el.innerHTML = renderAgentPipeline(model, { live, activeId });
+  }
 
   function showTraceLive(previewSteps) {
     const el = $("chatTraceLive");
@@ -1868,12 +2342,13 @@
     let idx = 0;
     clearInterval(traceLiveTimer);
     clearInterval(traceLivePollTimer);
+    traceLiveFingerprint = "";
     const steps = normalizePipelineTraceItems(previewSteps);
     const render = () => {
       const partial = steps.slice(0, idx + 1);
       const model = buildPipelineModel(partial);
       const activeId = model.flatItems.length ? model.flatItems[model.flatItems.length - 1].id : -1;
-      el.innerHTML = renderAgentPipeline(model, { live: true, activeId });
+      paintTraceLive(model, { live: true, activeId });
     };
     render();
     traceLiveTimer = setInterval(() => {
@@ -1888,11 +2363,12 @@
   }
 
   function updateTraceLiveFromPoll(trace) {
-    const el = $("chatTraceLive");
-    if (!el || !trace?.length) return;
+    if (!trace?.length) return;
+    clearInterval(traceLiveTimer);
+    traceLiveTimer = null;
     const model = buildPipelineModel(trace);
     const activeId = model.flatItems.length ? model.flatItems[model.flatItems.length - 1].id : -1;
-    el.innerHTML = renderAgentPipeline(model, { live: true, activeId });
+    paintTraceLive(model, { live: true, activeId });
   }
 
   function showTraceComplete(trace) {
@@ -1900,9 +2376,10 @@
     traceLiveTimer = null;
     clearInterval(traceLivePollTimer);
     traceLivePollTimer = null;
-    const el = $("chatTraceLive");
-    if (!el || !trace?.length) return;
-    el.innerHTML = renderAgentPipeline(trace, { live: false });
+    if (!trace?.length) return;
+    const model = buildPipelineModel(trace);
+    traceLiveFingerprint = "";
+    paintTraceLive(model, { live: false, activeId: -1 });
   }
 
   function hideTraceLive() {
@@ -1910,20 +2387,67 @@
     traceLiveTimer = null;
     clearInterval(traceLivePollTimer);
     traceLivePollTimer = null;
+    traceLiveFingerprint = "";
     const el = $("chatTraceLive");
     if (el) el.innerHTML = "";
   }
 
-  function setChatGraphBuilding(on, text = "Поиск в Qdrant…") {
+  function setChatGraphBuilding(on, text = "Сбор графа…") {
     const el = $("chatGraphBuilding");
     const txt = $("chatGraphBuildingText");
+    const empty = $("chatGraphEmpty");
     if (on) toggleChatGraphPanel(true);
     if (el) el.classList.toggle("hidden", !on);
     if (txt && text) txt.textContent = text;
+    if (empty && on) empty.classList.add("hidden");
+  }
+
+  function extractGraphFromTrace(trace, graph, layerResults) {
+    let snap = graph && graph.nodes?.length ? { ...graph } : null;
+    for (const t of trace || []) {
+      const gs = t.graph_snapshot;
+      if (gs?.nodes?.length) {
+        snap = snap
+          ? (window.MKGMiniGraph?.mergeGraphs?.(snap, gs) || gs)
+          : gs;
+      }
+    }
+    if (!snap?.nodes?.length && layerResults?.length) {
+      const nodes = [];
+      const relationships = [];
+      for (const lr of layerResults) {
+        (lr.nodes_found || []).forEach((n) => nodes.push(n));
+        (lr.edges_found || []).forEach((r) => relationships.push(r));
+      }
+      if (nodes.length) {
+        snap = window.MKGMiniGraph?.normalizeGraph?.({ nodes, relationships }) || { nodes, relationships };
+      }
+    }
+    return snap;
+  }
+
+  function applyLiveGraphUpdate(graph, trace, layerResults) {
+    const merged = extractGraphFromTrace(trace, graph, layerResults);
+    if (!merged?.nodes?.length) return;
+    liveAccumulatedGraph = window.MKGMiniGraph?.normalizeGraph?.(
+      window.MKGMiniGraph?.mergeGraphs?.(liveAccumulatedGraph, merged) || merged
+    ) || merged;
+    mergeChatContextGraph(liveAccumulatedGraph, { building: true });
+  }
+
+  function stopGraphPoll() {
+    if (graphPollTimer) {
+      clearInterval(graphPollTimer);
+      graphPollTimer = null;
+    }
   }
 
   function showMessageContextGraph(msg) {
-    const graph = msg?.meta?.graph;
+    const graph = extractGraphFromTrace(
+      msg?.meta?.trace,
+      msg?.meta?.graph,
+      msg?.meta?.layer_results,
+    ) || msg?.meta?.graph;
     if (!graph) return;
     lastFullscreenGraph = graph;
     lastFullscreenTrace = msg.meta?.trace || [];
@@ -1936,11 +2460,11 @@
   }
 
   function hasContextGraph(meta) {
-    const g = meta?.graph;
+    const g = extractGraphFromTrace(meta?.trace, meta?.graph, meta?.layer_results);
     return !!(g && (g.nodes?.length || g.relationships?.length || g.graph_walk_steps?.length));
   }
 
-  function updateChatGraphStats(graph) {
+  function updateChatGraphStats(graph, { building = false } = {}) {
     const stats = $("chatGraphStats");
     const empty = $("chatGraphEmpty");
     const emptyMsg = $("chatGraphEmptyMsg");
@@ -1952,14 +2476,12 @@
     if (stats) {
       stats.textContent = nodes
         ? `${nodes} узл · ${rels} св${traverseCount ? ` · ${traverseCount} шаг.` : ""}`
-        : "0 узлов";
+        : (building ? "…" : "0 узлов");
     }
-    const showEmpty = nodes === 0 || rels === 0;
+    const showEmpty = !building && nodes === 0;
     if (empty) empty.classList.toggle("hidden", !showEmpty);
-    if (emptyMsg) {
-      emptyMsg.textContent = nodes > 0 && rels === 0
-        ? "Обход не нашёл связей"
-        : "Нет данных MKG для этого запроса.";
+    if (emptyMsg && showEmpty) {
+      emptyMsg.textContent = "Нет данных MKG для этого запроса.";
     }
     if (canvas) canvas.classList.toggle("hidden", showEmpty);
   }
@@ -1977,19 +2499,34 @@
     if (canvas) canvas.classList.add("hidden");
   }
 
-  function renderChatContextGraph(graph, { animate = true, walkPath = [], skipHighlight = false } = {}) {
+  function mergeChatContextGraph(graph, { building = false, animate = true } = {}) {
     const canvas = $("chatGraphCanvas");
     if (!canvas || chatGraphCollapsed) return;
     const safeGraph = normalizeChatGraph(graph);
-    updateChatGraphStats(safeGraph);
+    updateChatGraphStats(safeGraph, { building });
+    if (!safeGraph?.nodes?.length) return;
+    try {
+      return window.MKGMiniGraph?.mergeInto?.(canvas, safeGraph, { animate }) ||
+        window.MKGMiniGraph?.render(canvas, safeGraph, { animate });
+    } catch (err) {
+      console.warn("chat context graph merge failed:", err);
+      return null;
+    }
+  }
+
+  function renderChatContextGraph(graph, { animate = true, walkPath = [], skipHighlight = false, building = false } = {}) {
+    const canvas = $("chatGraphCanvas");
+    if (!canvas || chatGraphCollapsed) return;
+    const safeGraph = normalizeChatGraph(graph);
+    updateChatGraphStats(safeGraph, { building });
     const nodes = safeGraph?.nodes?.length || 0;
-    const rels = safeGraph?.relationships?.length || 0;
-    if (!nodes || !rels) {
+    if (!nodes) {
       window.MKGMiniGraph?.destroy(canvas);
       return;
     }
     const path = walkPath?.length ? walkPath : (safeGraph?.walk_path || []);
     try {
+      window.MKGMiniGraph?.destroy(canvas);
       const network = window.MKGMiniGraph?.render(canvas, safeGraph, { animate });
       if (!skipHighlight && path?.length) {
         window.MKGMiniGraph?.highlightWalkPath(canvas, path);
@@ -2060,7 +2597,7 @@
     const safeGraph = normalizeChatGraph(graph);
     const safeNodes = safeGraph?.nodes?.length || 0;
     const safeRels = safeGraph?.relationships?.length || 0;
-    if (safeNodes && safeRels) {
+    if (safeNodes) {
       try {
         const network = window.MKGMiniGraph?.render(canvas, safeGraph, { animate: false });
         setTimeout(() => {
@@ -2418,6 +2955,7 @@
       }
       lastLoadedThreadId = threadId;
       lastMessagesFingerprint = fp;
+      currentThreadMessages = items;
       renderMessages(items, options);
       syncLastReplayableFromMessages(items);
       items.forEach((m) => {
@@ -2446,6 +2984,130 @@
       }));
   }
 
+  function buildHistoryThrough(items, msgId) {
+    const idx = (items || []).findIndex((m) => m.id === msgId);
+    if (idx < 0) return buildHistory(items);
+    return buildHistory(items.slice(0, idx + 1));
+  }
+
+  function buildHistoryBeforeMessage(items, msgId) {
+    const idx = (items || []).findIndex((m) => m.id === msgId);
+    if (idx <= 0) return [];
+    return buildHistory(items.slice(0, idx));
+  }
+
+  function findPrecedingUserMessage(items, agentMsgId) {
+    const idx = (items || []).findIndex((m) => m.id === agentMsgId);
+    if (idx <= 0) return null;
+    for (let i = idx - 1; i >= 0; i--) {
+      if (items[i].msg_type === "user") return items[i];
+    }
+    return null;
+  }
+
+  function findFollowingMessages(items, msgId) {
+    const idx = (items || []).findIndex((m) => m.id === msgId);
+    if (idx < 0) return [];
+    return items.slice(idx + 1);
+  }
+
+  async function apiDeleteMessage(msgId, { cascade = false, after = false } = {}) {
+    if (!activeThreadId || !msgId) return false;
+    let qs = "";
+    if (cascade) qs = "?cascade=following";
+    else if (after) qs = "?cascade=after";
+    const r = await fetch(
+      `${API}/chat/threads/${encodeURIComponent(activeThreadId)}/messages/${encodeURIComponent(msgId)}${qs}`,
+      { method: "DELETE" },
+    );
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      showNotice(parseApiError(data, "Не удалось удалить сообщение"), true);
+      return false;
+    }
+    lastMessagesFingerprint = "";
+    await loadMessages(activeThreadId, { scroll: "restore", forceRender: true });
+    await loadThreads();
+    return true;
+  }
+
+  async function apiPatchMessage(msgId, body) {
+    if (!activeThreadId || !msgId) return null;
+    const r = await fetch(
+      `${API}/chat/threads/${encodeURIComponent(activeThreadId)}/messages/${encodeURIComponent(msgId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      },
+    );
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      showNotice(parseApiError(data, "Не удалось изменить сообщение"), true);
+      return null;
+    }
+    lastMessagesFingerprint = "";
+    return data;
+  }
+
+  function beginEditUserMessage(msgId, items) {
+    const msg = (items || currentThreadMessages).find((m) => m.id === msgId);
+    const article = document.querySelector(`.chat-msg[data-msg-id="${CSS.escape(msgId)}"]`);
+    if (!msg || !article || article.dataset.editing === "1") return;
+    article.dataset.editing = "1";
+    const content = article.querySelector(".chat-msg-content");
+    const actions = content?.querySelector(".chat-msg-actions");
+    if (actions) actions.classList.add("hidden");
+    const bodyEl = content?.querySelector(".chat-msg-body");
+    if (!bodyEl) return;
+    const prevHtml = bodyEl.innerHTML;
+    bodyEl.innerHTML = `
+      <textarea class="chat-msg-edit-input" rows="3">${esc(msg.body)}</textarea>
+      <div class="chat-msg-edit-actions">
+        <button type="button" class="chat-msg-action chat-msg-edit-save">Сохранить</button>
+        <button type="button" class="chat-msg-action chat-msg-edit-cancel">Отмена</button>
+      </div>`;
+    const input = bodyEl.querySelector(".chat-msg-edit-input");
+    const cancel = () => {
+      delete article.dataset.editing;
+      bodyEl.innerHTML = prevHtml;
+      if (actions) actions.classList.remove("hidden");
+    };
+    bodyEl.querySelector(".chat-msg-edit-cancel")?.addEventListener("click", cancel);
+    bodyEl.querySelector(".chat-msg-edit-save")?.addEventListener("click", async () => {
+      const nextText = (input?.value || "").trim();
+      if (!nextText) {
+        showNotice("Текст сообщения не может быть пустым", true);
+        return;
+      }
+      if (nextText === msg.body) {
+        cancel();
+        return;
+      }
+      const patched = await apiPatchMessage(msgId, nextText);
+      if (!patched) return;
+      await apiDeleteMessage(msgId, { cascade: true });
+      await loadMessages(activeThreadId, { scroll: "force", forceRender: true });
+      await sendChatMessage({
+        text: nextText,
+        skipUserPost: true,
+        editResend: true,
+        targetUserMsgId: msgId,
+      });
+    });
+    input?.focus();
+    if (input) {
+      input.selectionStart = input.value.length;
+      input.selectionEnd = input.value.length;
+    }
+  }
+
+  function isChatBusy() {
+    return chatBusy
+      || !!activeStreamPreview?.isConnected
+      || !$("chatTyping")?.classList.contains("hidden");
+  }
+
   function renderMessages(items, options = {}) {
     const el = $("chatMessages");
     if (!el) return;
@@ -2453,6 +3115,7 @@
     const prevScrollTop = el.scrollTop;
     const wasNearBottom = isChatNearBottom();
     destroyMessageCharts();
+    const layerAgentsState = captureLayerAgentsUiState(el);
     if (!items.length) {
       el.innerHTML = '<p class="chat-empty-hint">Выберите роль и напишите первое сообщение — AI ответит в режиме «Диалог».</p>';
       updateChatGraphStats(null);
@@ -2475,7 +3138,7 @@
         : esc(avatarText);
       const avatarCls = isUpload ? " chat-msg-avatar-icon" : "";
       const trace = m.meta?.trace;
-      const traceHtml = (isAgent && trace?.length) ? renderAgentMessageTrace(m) : "";
+      const traceHtml = (isAgent && trace?.length) ? renderAgentMessageTrace(m, layerAgentsState.get(m.id)) : "";
       const artifactsHtml = (isAgent && m.meta?.artifacts?.length)
         ? renderArtifactsHtml(m.meta.artifacts, m.id)
         : "";
@@ -2496,24 +3159,37 @@
           )).join("")
           : "";
       const saveMdBtn = isAgent
-        ? `<button type="button" class="btn btn-ghost btn-small chat-save-md" data-msg-id="${esc(m.id)}" title="Сохранить ответ как .md">Сохранить как MD</button>`
+        ? `<button type="button" class="btn btn-ghost btn-small chat-save-md" data-msg-id="${esc(m.id)}" title="Сохранить ответ как .md">MD</button>
+           <button type="button" class="btn btn-ghost btn-small chat-save-jsonld" data-msg-id="${esc(m.id)}" title="Скачать JSON-LD">JSON-LD</button>
+           <button type="button" class="btn btn-ghost btn-small chat-save-print" data-msg-id="${esc(m.id)}" title="Печать / PDF">PDF</button>`
         : "";
       const graphBtn = (isAgent && hasContextGraph(m.meta))
         ? `<button type="button" class="btn btn-ghost btn-small chat-show-graph" data-msg-id="${esc(m.id)}" title="Показать граф обхода контекста">Показать граф обхода</button>`
         : "";
-      const modeBadge = isAgent && m.meta?.mode && m.meta.mode !== "dialog"
+      const modeBadge = isAgent && m.meta?.mode && m.meta.mode !== "dialog" && m.meta.mode !== "fast"
         ? `<span class="chat-mode-badge">${esc(AGENT_MODE_TRACE[m.meta.mode] || m.meta.mode)}</span>`
         : "";
+      const speedBadge = isAgent && m.meta?.speed_mode
+        ? `<span class="chat-mode-badge chat-speed-${esc(m.meta.speed_mode)}">${esc(SPEED_MODE_LABELS[m.meta.speed_mode] || m.meta.speed_mode)}</span>`
+        : "";
       const bodyHtml = isAgent
-        ? `<div class="chat-msg-body md-render-view">${renderChatMarkdown(sanitizeAgentAnswerBody(m.body))}</div>`
+        ? `<div class="chat-msg-body md-render-view">${renderAgentAnswerHtml(m.body, m.id)}</div>`
         : `<div class="chat-msg-body">${esc(m.body)}</div>`;
+      const showMsgActions = isAgent && !isChatBusy();
+      const actionsHtml = showMsgActions
+        ? `<div class="chat-msg-actions">
+            <button type="button" class="chat-msg-action" data-action="explain" data-msg-id="${esc(m.id)}">Пояснить</button>
+            <button type="button" class="chat-msg-action" data-action="regenerate" data-msg-id="${esc(m.id)}">Обновить</button>
+          </div>`
+        : "";
       return `
-        <article class="chat-msg ${cls}">
+        <article class="chat-msg ${cls}" data-msg-id="${esc(m.id)}">
           <div class="chat-msg-avatar${avatarCls}" aria-hidden="true">${avatarHtml}</div>
           <div class="chat-msg-content">
             <header>
               <strong>${esc(m.author_name)}</strong>
               ${!isUser && !isUpload ? `<span class="user-role-badge role-${esc(m.author_role)}">${esc(role.name_ru || m.author_role)}</span>` : ""}
+              ${speedBadge}
               ${modeBadge}
               ${saveMdBtn}
               ${graphBtn}
@@ -2524,9 +3200,12 @@
             ${sourcesHtml}
             ${uploadHtml}
             ${artifactsHtml}
+            ${actionsHtml}
           </div>
         </article>`;
     }).join("");
+    restoreLayerAgentsUiState(el, layerAgentsState);
+    bindLayerRoundNavEvents(el);
     bindUploadCardEvents(el);
     el.querySelectorAll(".chat-save-md").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -2536,10 +3215,36 @@
         downloadTextAsMd(`mkg-chat-${stamp}.md`, buildChatMdExport(msg));
       });
     });
+    el.querySelectorAll(".chat-save-jsonld").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const msg = items.find((m) => m.id === btn.dataset.msgId);
+        if (!msg) return;
+        const stamp = msg.created_at ? new Date(msg.created_at).toISOString().slice(0, 10) : "chat";
+        downloadJsonFile(`mkg-chat-${stamp}.jsonld`, buildChatJsonLdExport(msg));
+      });
+    });
+    el.querySelectorAll(".chat-save-print").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const msg = items.find((m) => m.id === btn.dataset.msgId);
+        if (msg) openChatPrintView(msg);
+      });
+    });
     el.querySelectorAll(".chat-show-graph").forEach((btn) => {
       btn.addEventListener("click", () => {
         const msg = items.find((m) => m.id === btn.dataset.msgId);
         if (msg) showMessageContextGraph(msg);
+      });
+    });
+    el.querySelectorAll(".chat-msg-action").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const msgId = btn.dataset.msgId;
+        const action = btn.dataset.action;
+        if (!msgId || !action) return;
+        if (action === "explain") {
+          sendChatMessage({ explain: true, targetAgentMsgId: msgId });
+        } else if (action === "regenerate") {
+          sendChatMessage({ regenerate: true, targetAgentMsgId: msgId });
+        }
       });
     });
     el.querySelectorAll(".chat-source-link, .chat-source-chip").forEach((btn) => {
@@ -2549,6 +3254,7 @@
       });
     });
     mountMessageCharts(items);
+    bindAnswerSectionExplain(el);
     const scrollPolicy = options.scroll || (wasNearBottom ? "bottom" : "restore");
     applyChatScrollPolicy(scrollPolicy, prevScrollTop);
   }
@@ -2559,11 +3265,10 @@
     if (btn) { btn.disabled = true; btn.textContent = "…"; }
     try {
       if (!await requireIdentity()) return;
-      const n = threads.length + 1;
       const r = await fetch(`${API}/chat/threads`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: `Чат ${n}`, kind: "team", created_by: currentUser.id }),
+        body: JSON.stringify({ title: "Новый чат", kind: "team", created_by: currentUser.id }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -2609,9 +3314,108 @@
     return fallback;
   }
 
-  async function runChatLLM(query, history) {
+  async function runChatLLMOrchestratorAsync(query, history, docIds) {
+    const r = await fetch(`${API}/agents-service/run/async`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        mode: "orchestrator_mode",
+        user_role: currentUser.role_id,
+        doc_ids: docIds?.length ? docIds : undefined,
+        history,
+        limit: 5,
+        speed_mode: "full",
+      }),
+    });
+    const startData = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (r.status === 404 || r.status === 503) {
+        return runChatLLM(query, history, { usesOrchestrator: false, docIds });
+      }
+      throw new Error(parseApiError(startData, "Оркестратор недоступен"));
+    }
+    const runId = startData.run_id;
+    if (!runId) throw new Error("Не получен run_id оркестратора");
+
+    liveAccumulatedGraph = null;
+    window.MKGMiniGraph?.destroy($("chatGraphCanvas"));
+    const pollMs = 420;
+    const maxWaitMs = 600000;
+    const t0 = Date.now();
+
+    const pollOnce = async () => {
+      const sr = await fetch(`${API}/agents-service/run/${encodeURIComponent(runId)}`);
+      const status = await sr.json().catch(() => ({}));
+      if (!sr.ok) throw new Error(parseApiError(status, "Ошибка опроса оркестратора"));
+      if (status.trace?.length) {
+        updateTraceLiveFromPoll(status.trace);
+        applyLiveGraphUpdate(status.graph, status.trace, status.layer_results);
+        const lastStep = status.trace[status.trace.length - 1];
+        if (lastStep?.layer) {
+          setChatGraphBuilding(true, `Сбор графа… ${lastStep.layer} · ${lastStep.node_count ?? 0} узл.`);
+        } else if (lastStep?.step === "discover_new_connections") {
+          setChatGraphBuilding(true, `Сбор графа… новые связи · ${lastStep.node_count ?? 0} узл.`);
+        }
+      }
+      return status;
+    };
+
+    while (Date.now() - t0 < maxWaitMs) {
+      const status = await pollOnce();
+      if (status.status === "complete" && status.result) {
+        const res = status.result;
+        const trace = [{ step: "chat_role", pipeline: "orchestrator_mode", elapsed_ms: 0 }, ...(res.trace || [])];
+        return {
+          text: res.summary || "",
+          trace,
+          graph: res.graph || liveAccumulatedGraph,
+          artifacts: [],
+          sources: sourcesFromAgentResult(res),
+          layer_results: res.layer_results || null,
+          speed_mode: "full",
+          timing_ms: res.elapsed_ms || 0,
+        };
+      }
+      if (status.status === "error") {
+        throw new Error(status.error || "Оркестратор завершился с ошибкой");
+      }
+      await sleep(pollMs);
+    }
+    throw new Error("Превышено время ожидания оркестратора");
+  }
+
+  function sourcesFromAgentResult(res) {
+    const out = [];
+    const seen = new Set();
+    for (const lr of res.layer_results || []) {
+      for (const n of lr.nodes_found || []) {
+        const props = n.props || {};
+        const docId = props._doc_id || props.document_id;
+        const key = `${docId}|${n.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (docId) {
+          out.push({
+            document_id: docId,
+            node_id: n.id,
+            label: n.label,
+            layer: lr.layer,
+            text: props.quote || props.raw_text_ru || props.name_ru || "",
+          });
+        }
+      }
+    }
+    return out.slice(0, 8);
+  }
+
+  async function runChatLLM(query, history, { usesOrchestrator = false, docIds = [] } = {}) {
+    if (usesOrchestrator) {
+      return runChatLLMOrchestratorAsync(query, history, docIds);
+    }
     const prompt = (rolePromptData?.system_prompt || $("rolePromptText")?.value || "").trim();
-    const docIds = getMergedDocIds();
+    const docIdsMerged = docIds?.length ? docIds : getMergedDocIds();
+    const speedMode = getChatSpeedMode();
     const r = await fetch(`${API}/chat/complete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2620,9 +3424,10 @@
         role_id: currentUser.role_id,
         history,
         system_prompt: prompt || undefined,
-        include_graph: true,
-        include_artifacts: true,
-        document_ids: docIds,
+        include_graph: speedMode !== "fast",
+        include_artifacts: speedMode !== "fast",
+        document_ids: docIdsMerged,
+        speed_mode: speedMode,
       }),
     });
     const data = await r.json().catch(() => ({}));
@@ -2634,10 +3439,13 @@
       artifacts: data.artifacts || [],
       sources: data.sources || [],
       layer_results: data.layer_results || null,
+      speed_mode: data.speed_mode || speedMode,
+      timing_ms: data.timing_ms || 0,
     };
   }
 
-  function detectPipelineMode(trace) {
+  function detectPipelineMode(trace, speedMode) {
+    if (speedMode === "fast") return "fast";
     if ((trace || []).some((t) => String(t.step || "").startsWith("orchestrator"))) {
       return "orchestrator_mode";
     }
@@ -2645,16 +3453,41 @@
     return pipeline || "dialog";
   }
 
-  async function sendChatMessage() {
+  async function sendChatMessage(forcedOptions = null) {
+    if (chatBusy) return;
+    const opts = forcedOptions || {};
+    const fromInput = !forcedOptions;
     const input = $("chatMessageInput");
-    let text = (input?.value || "").trim();
-    const hasPending = pendingComposeAttachments?.files?.length;
-    if (!text && !hasPending) return;
+    let text = opts.text ?? (input?.value || "").trim();
+    const hasPending = fromInput && pendingComposeAttachments?.files?.length;
+    if (!text && !hasPending && !opts.explain && !opts.regenerate) return;
+
+    let skipUserPost = !!opts.skipUserPost;
+    let prefetchedHistory = null;
+
+    if (opts.explain && opts.targetAgentMsgId) {
+      const section = opts.explainSection ? String(opts.explainSection).trim() : "";
+      text = section
+        ? `Поясни подробнее раздел «${section}» предыдущего ответа простым языком`
+        : "Поясни подробнее предыдущий ответ простым языком";
+      prefetchedHistory = buildHistoryThrough(currentThreadMessages, opts.targetAgentMsgId);
+    } else if (opts.regenerate && opts.targetAgentMsgId) {
+      const userMsg = findPrecedingUserMessage(currentThreadMessages, opts.targetAgentMsgId);
+      if (!userMsg?.body) {
+        showNotice("Не найден вопрос для обновления", true);
+        return;
+      }
+      text = userMsg.body;
+      prefetchedHistory = buildHistoryBeforeMessage(currentThreadMessages, userMsg.id);
+      skipUserPost = true;
+    }
+
     const btn = $("chatSendBtn");
     const attachBtn = $("chatAttachBtn");
     if (btn) { btn.disabled = true; btn.textContent = "…"; }
     if (attachBtn) attachBtn.disabled = true;
-    let history = [];
+    chatBusy = true;
+    let history = prefetchedHistory || [];
     let messageAttachments = [];
     try {
       if (!await requireIdentity()) return;
@@ -2695,42 +3528,59 @@
         }
       }
 
-      try {
-        const mr = await fetch(`${API}/chat/threads/${encodeURIComponent(activeThreadId)}/messages`);
-        if (mr.ok) {
-          const md = await mr.json();
-          history = buildHistory(md.items || []);
-        }
-      } catch { /* ignore */ }
+      if (!prefetchedHistory) {
+        try {
+          const mr = await fetch(`${API}/chat/threads/${encodeURIComponent(activeThreadId)}/messages`);
+          if (mr.ok) {
+            const md = await mr.json();
+            history = buildHistory(md.items || []);
+          }
+        } catch { /* ignore */ }
+      }
 
-      input.value = "";
+      if (fromInput) input.value = "";
       userScrolledUp = false;
       const docIds = getMergedDocIds();
-      await postMessage(text, "user", null, null, {
-        document_ids: docIds,
-        attachments: messageAttachments.length ? messageAttachments : undefined,
-      });
-      await loadMessages(activeThreadId, { scroll: "force" });
+      if (!skipUserPost) {
+        await postMessage(text, "user", null, null, {
+          document_ids: docIds,
+          attachments: messageAttachments.length ? messageAttachments : undefined,
+        });
+        await loadThreads();
+        const activeThread = threads.find((x) => x.id === activeThreadId);
+        if ($("chatActiveTitle") && activeThread) $("chatActiveTitle").textContent = activeThread.title;
+        await loadMessages(activeThreadId, { scroll: "force" });
+      } else {
+        await loadMessages(activeThreadId, { scroll: "force", forceRender: true });
+      }
 
       const role = roleMeta(currentUser.role_id);
-      const usesOrchestrator = role.can_run_agents !== false;
-      const tracePreview = usesOrchestrator ? AGENT_PIPELINE_STEPS : DIALOG_PIPELINE_STEPS;
+      const speedMode = getChatSpeedMode();
+      const isFast = speedMode === "fast";
+      const usesOrchestrator = !isFast && role.can_run_agents !== false;
+      const tracePreview = isFast
+        ? FAST_PIPELINE_STEPS
+        : usesOrchestrator
+          ? AGENT_PIPELINE_STEPS
+          : DIALOG_PIPELINE_STEPS;
       showTyping(true, tracePreview);
-      setChatGraphBuilding(true, usesOrchestrator
-        ? "Оркестратор: гибкий цикл агентов (шина)…"
-        : "Qdrant L3+L4 → обход графа…");
+      if (!isFast) {
+        setChatGraphBuilding(true, usesOrchestrator
+          ? "Сбор графа… оркестратор"
+          : "Сбор графа… Qdrant → обход");
+      }
       let result = null;
       try {
-        result = await runChatLLM(text, history);
+        result = await runChatLLM(text, history, { usesOrchestrator, docIds });
         if (result?.text) result.text = sanitizeAgentAnswerBody(result.text);
         if (result?.trace?.length) showTraceComplete(result.trace);
 
-        if (result.graph) {
+        if (!isFast && result.graph) {
           lastFullscreenGraph = result.graph;
           lastFullscreenTrace = result.trace;
         }
 
-        if (result?.graph?.nodes?.length) {
+        if (!isFast && result?.graph?.nodes?.length) {
           setLastReplayableWalk({
             text: result.text,
             graph: result.graph,
@@ -2740,7 +3590,7 @@
         }
 
         if (result.text) {
-          if (result.graph?.nodes?.length) {
+          if (!isFast && result.graph?.nodes?.length) {
             setChatGraphBuilding(false);
             try {
               await replayAnswerWithWalk({
@@ -2760,11 +3610,15 @@
 
         await postMessage(result.text, "agent", "MKG AI", null, {
           trace: result.trace,
-          mode: detectPipelineMode(result.trace),
-          graph: result.graph || null,
-          layer_results: result.layer_results || null,
-          artifacts: result.artifacts || [],
+          mode: detectPipelineMode(result.trace, result.speed_mode),
+          speed_mode: result.speed_mode || speedMode,
+          timing_ms: result.timing_ms,
+          graph: isFast ? null : (result.graph || null),
+          layer_results: isFast ? null : (result.layer_results || null),
+          artifacts: isFast ? [] : (result.artifacts || []),
           sources: result.sources || [],
+          ...(opts.regenerate ? { regenerated: true } : {}),
+          ...(opts.explain ? { explained: true } : {}),
         });
       } catch (e) {
         const raw = typeof e.message === "string" ? e.message : "AI недоступен";
@@ -2783,13 +3637,17 @@
         showTyping(false);
         setChatGraphBuilding(false);
         if (result?.graph?.nodes?.length) {
+          updateChatGraphStats(normalizeChatGraph(result.graph), { building: false });
           toggleChatGraphPanel(true);
+        } else if (!isFast) {
+          updateChatGraphStats(null, { building: false });
         }
       }
 
       await loadMessages(activeThreadId, { scroll: "bottom" });
       await loadThreads();
     } finally {
+      chatBusy = false;
       if (btn) { btn.disabled = false; btn.textContent = "Отправить"; }
       if (attachBtn) attachBtn.disabled = !canShowUpload(roleMeta(currentUser?.role_id));
     }
@@ -2819,6 +3677,10 @@
   }
 
   function bindEvents() {
+    syncChatSpeedToggleUi(getChatSpeedMode());
+    $("chatSpeedToggle")?.querySelectorAll(".chat-speed-pill[data-speed]").forEach((btn) => {
+      btn.addEventListener("click", () => setChatSpeedMode(btn.dataset.speed));
+    });
     $("chatNewBtn")?.addEventListener("click", (e) => { e.preventDefault(); createThread(); });
     $("chatSendBtn")?.addEventListener("click", (e) => { e.preventDefault(); sendChatMessage(); });
     $("chatMessageInput")?.addEventListener("keydown", (e) => {
@@ -2862,22 +3724,6 @@
     $("chatAgentsDocLink")?.addEventListener("click", (e) => {
       e.preventDefault();
       window.MKG?.openDocGuide?.("layer-agents");
-    });
-    $("chatMessages")?.addEventListener("click", (e) => {
-      const btn = e.target.closest(".layer-round-prev, .layer-round-next");
-      if (!btn || btn.disabled) return;
-      e.preventDefault();
-      const detail = btn.closest(".chat-layer-agents");
-      const nav = detail?.querySelector(".layer-round-nav");
-      if (!nav) return;
-      const rounds = nav.dataset.rounds.split(",").map(Number);
-      const cur = Number(nav.dataset.round);
-      const idx = rounds.indexOf(cur);
-      if (btn.classList.contains("layer-round-prev") && idx > 0) {
-        setLayerRoundNav(detail, rounds[idx - 1]);
-      } else if (btn.classList.contains("layer-round-next") && idx < rounds.length - 1) {
-        setLayerRoundNav(detail, rounds[idx + 1]);
-      }
     });
   }
 

@@ -166,6 +166,22 @@ class GraphRelationshipDetailOut(BaseModel):
     related_edges: list[GraphRelationship] = Field(default_factory=list)
 
 
+class GraphRelationshipPatchIn(BaseModel):
+    expert_comment: str = Field(..., min_length=1, max_length=4000)
+    edited_by: str = Field(default="", max_length=120)
+    role_id: str = Field(default="engineer", max_length=32)
+
+
+class GraphRelationshipPatchOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    document_id: str
+    type: str
+    from_: str = Field(alias="from")
+    to: str
+    props: dict = Field(default_factory=dict)
+    expert_edits_count: int = 0
+
+
 class LayerPipelineOut(BaseModel):
     status: str | None = None
     step: str | None = None
@@ -484,9 +500,13 @@ class UserOut(BaseModel):
 
 
 class ChatThreadCreate(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
+    title: str = Field(default="Новый чат", max_length=200)
     kind: str = Field(default="team", pattern="^(team|agent)$")
     created_by: str | None = None
+
+
+class ChatThreadUpdate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
 
 
 class ChatThreadOut(BaseModel):
@@ -511,6 +531,10 @@ class MessageCreate(BaseModel):
     body: str = Field(..., min_length=1, max_length=20000)
     msg_type: str = Field(default="user", pattern="^(user|agent|system)$")
     meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class MessageUpdate(BaseModel):
+    body: str = Field(..., min_length=1, max_length=20000)
 
 
 class ChatMessageOut(BaseModel):
@@ -543,6 +567,10 @@ class ChatCompleteIn(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=12000)
     include_graph: bool = True
     include_artifacts: bool = True
+    speed_mode: Literal["fast", "full"] = Field(
+        default="full",
+        description="fast — RAG за ~5 с без оркестратора; full — оркестратор и цепочки рассуждений",
+    )
     document_ids: list[str] = Field(
         default_factory=list,
         description="Ограничить поиск Qdrant документами, загруженными в чат",
@@ -578,6 +606,8 @@ class ChatSourceOut(BaseModel):
     text: str = ""
     md_file: str = ""
     md_url: str = ""
+    extraction_confidence: float | None = None
+    source_date: str | None = None
 
 
 class ChatCompleteOut(BaseModel):
@@ -588,6 +618,7 @@ class ChatCompleteOut(BaseModel):
     sources: list[ChatSourceOut] = Field(default_factory=list)
     layer_results: list[dict[str, Any]] | None = None
     timing_ms: int = 0
+    speed_mode: Literal["fast", "full"] = "full"
 
 
 class QueryTestIn(BaseModel):
@@ -618,6 +649,7 @@ class AgentServiceRunIn(BaseModel):
     user_role: str = "researcher"
     limit: int = Field(default=5, ge=1, le=20)
     history: list[ChatHistoryTurn] = Field(default_factory=list, max_length=20)
+    speed_mode: Literal["fast", "full"] = "full"
 
 
 class AgentServiceRunOut(BaseModel):
@@ -680,6 +712,12 @@ class L4ClusterEdgeOut(BaseModel):
     type: str = ""
     from_label: str | None = None
     to_label: str | None = None
+    from_short: str = ""
+    to_short: str = ""
+    from_text: str = ""
+    to_text: str = ""
+    layer: str = "L?"
+    description: str = ""
     other_cluster_id: int | None = None
     other_cluster_name: str | None = None
 

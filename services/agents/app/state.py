@@ -16,6 +16,7 @@ AgentModeLiteral = Literal[
 class MKGAgentState(TypedDict, total=False):
     start_ts: float
     query: str
+    history: list[dict[str, str]]
     mode: AgentModeLiteral
     requested_mode: AgentModeLiteral | None
     doc_ids: list[str]
@@ -51,12 +52,14 @@ class MKGAgentState(TypedDict, total=False):
     mode_result: dict[str, Any]
     anomaly_seeds: list[dict[str, Any]]
     walk_graph: dict[str, Any]
+    query_facets: dict[str, Any]
     final_response: dict[str, Any]
 
 
 class OrchestratorState(TypedDict, total=False):
     start_ts: float
     query: str
+    history: list[dict[str, str]]
     doc_ids: list[str]
     user_role: str
     limit: int
@@ -67,6 +70,7 @@ class OrchestratorState(TypedDict, total=False):
     candidate_doc_ids: list[str]
     planned_layers: list[str]
     orchestrator_plan: dict[str, Any]
+    query_facets: dict[str, Any]
     layer_results: list[dict[str, Any]]
     accumulated_graph: dict[str, Any]
     connection_gaps: dict[str, Any]

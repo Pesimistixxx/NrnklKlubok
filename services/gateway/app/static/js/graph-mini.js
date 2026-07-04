@@ -15,6 +15,50 @@
   };
 
   const instances = new WeakMap();
+  const resizeObservers = new WeakMap();
+  const resizeTimers = new WeakMap();
+  const RESIZE_DEBOUNCE_MS = 150;
+
+  function bindCameraStable(network, inst) {
+    if (inst._cameraBound || !network) return;
+    inst._cameraBound = true;
+    inst.userMovedCamera = !!inst.userMovedCamera;
+    network.on("dragStart", () => { inst.userMovedCamera = true; });
+    network.on("zoom", () => { inst.userMovedCamera = true; });
+  }
+
+  function debouncedViewportRefresh(container, inst, { fit = false } = {}) {
+    const prev = resizeTimers.get(container);
+    if (prev) clearTimeout(prev);
+    resizeTimers.set(container, setTimeout(() => {
+      resizeTimers.delete(container);
+      if (!inst?.network) return;
+      inst.network.redraw();
+      if (fit && !inst.userMovedCamera) {
+        inst.network.fit({ animation: { duration: 180, easingFunction: "easeInOutQuad" } });
+      }
+    }, RESIZE_DEBOUNCE_MS));
+  }
+
+  function attachResizeObserver(container, inst) {
+    if (resizeObservers.has(container) || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => debouncedViewportRefresh(container, inst, { fit: false }));
+    ro.observe(container);
+    resizeObservers.set(container, ro);
+  }
+
+  function detachGraphObservers(container) {
+    const ro = resizeObservers.get(container);
+    if (ro) {
+      ro.disconnect();
+      resizeObservers.delete(container);
+    }
+    const t = resizeTimers.get(container);
+    if (t) {
+      clearTimeout(t);
+      resizeTimers.delete(container);
+    }
+  }
 
   function layerOf(label) {
     return LABEL_LAYER[label] || "L?";
@@ -124,6 +168,7 @@
     if (inst?.network) {
       inst.network.destroy();
     }
+    detachGraphObservers(container);
     instances.delete(container);
     if (container) container.innerHTML = "";
   }
@@ -195,14 +240,253 @@
       dataSets.edges.update(visEdges.map((e) => ({ id: e.id, hidden: false })));
     }
 
-    instances.set(container, { network, dataSets });
+    const inst = { network, dataSets, edgeSeq: visEdges.length, userMovedCamera: false, hasInitialFit: false };
+    bindCameraStable(network, inst);
+    attachResizeObserver(container, inst);
+    instances.set(container, inst);
     return network;
   }
 
-  const GRAPH_WALK_UI_STEP_MS = 900;
-  const WALK_FOCUS_EASING = "easeInOutCubic";
+  function mergeGraphs(a, b) {
+    return normalizeGraph({
+      ...(a || {}),
+      nodes: [...(a?.nodes || []), ...(b?.nodes || [])],
+      relationships: [...(a?.relationships || []), ...(b?.relationships || [])],
+      document_ids: [...new Set([...(a?.document_ids || []), ...(b?.document_ids || [])])],
+    });
+  }
+
+  /** Incrementally add nodes/edges to an existing mini-graph (live orchestrator updates). */
+  function mergeInto(container, graph, opts = {}) {
+    if (!container) return null;
+    const normalized = normalizeGraph(graph || {});
+    const nodes = normalized.nodes || [];
+    const rels = normalized.relationships || [];
+    if (!nodes.length && !rels.length) return null;
+
+    let inst = instances.get(container);
+    if (!inst?.network || typeof vis === "undefined") {
+      return renderMiniGraph(container, normalized, opts);
+    }
+
+    const { dataSets, network } = inst;
+    bindCameraStable(network, inst);
+    attachResizeObserver(container, inst);
+    const existingIds = new Set(dataSets.nodes.get().map((n) => n.id));
+    const animate = opts.animate !== false;
+    const newVisNodes = [];
+    for (const n of nodes) {
+      if (existingIds.has(n.id)) continue;
+      existingIds.add(n.id);
+      const built = buildVisItems([n], [], { animate: false }).visNodes[0];
+      if (built) {
+        if (animate) {
+          built.hidden = true;
+          built.opacity = 0;
+        }
+        newVisNodes.push(built);
+      }
+    }
+    if (newVisNodes.length) {
+      dataSets.nodes.add(newVisNodes);
+      if (animate) {
+        newVisNodes.forEach((u, idx) => {
+          setTimeout(() => dataSets.nodes.update({ id: u.id, hidden: false, opacity: 1 }), idx * 40);
+        });
+      }
+    }
+
+    let edgeSeq = inst.edgeSeq ?? dataSets.edges.length;
+    const existingEdgeKeys = new Set(
+      dataSets.edges.get().map((e) => `${e.from}|${e.to}`)
+    );
+    const nodeIds = new Set(dataSets.nodes.get().map((n) => n.id));
+    for (const r of rels) {
+      const { from, to } = relEndpoints(r);
+      if (!from || !to || !nodeIds.has(from) || !nodeIds.has(to)) continue;
+      const key = `${from}|${to}`;
+      if (existingEdgeKeys.has(key)) continue;
+      existingEdgeKeys.add(key);
+      const traversed = !!(r.props && r.props._traversed);
+      const edge = {
+        id: `e${edgeSeq}`,
+        from,
+        to,
+        title: r.type,
+        arrows: { to: { enabled: true, scaleFactor: 0.4 } },
+        color: {
+          color: traversed ? "rgba(2,136,209,0.95)" : "rgba(144,202,249,0.75)",
+          highlight: "#0288d1",
+        },
+        width: traversed ? 2.4 : 0.8,
+        smooth: { type: "dynamic", roundness: 0.35 },
+        hidden: animate,
+      };
+      dataSets.edges.add(edge);
+      if (animate) {
+        setTimeout(() => dataSets.edges.update({ id: edge.id, hidden: false }), 80);
+      }
+      edgeSeq += 1;
+    }
+    inst.edgeSeq = edgeSeq;
+
+    if (newVisNodes.length) {
+      if (!inst.userMovedCamera) {
+        network.setOptions({ physics: { enabled: true } });
+        let fitted = false;
+        network.once("stabilizationIterationsDone", () => {
+          if (fitted || inst.userMovedCamera) {
+            network.setOptions({ physics: { enabled: false } });
+            return;
+          }
+          fitted = true;
+          if (!inst.hasInitialFit) {
+            network.fit({ animation: { duration: 220, easingFunction: "easeInOutQuad" } });
+            inst.hasInitialFit = true;
+          }
+          setTimeout(() => network.setOptions({ physics: { enabled: false } }), 260);
+        });
+      } else {
+        network.redraw();
+      }
+    }
+    return network;
+  }
+
+  const GRAPH_WALK_UI_STEP_MS = 1300;
+  const WALK_NODE_FADE_MS = 350;
+  const WALK_EDGE_FADE_MS = 350;
+  const WALK_STEP_OVERLAP_MS = 220;
+  const WALK_FOCUS_SCALE = 1.015;
+  const WALK_FOCUS_EASING = "easeInOutQuart";
   const WALK_HIGHLIGHT_BORDER = "#ffb74d";
   const WALK_HIGHLIGHT_EDGE = "rgba(255, 183, 77, 0.92)";
+
+  function parseColor(input) {
+    if (!input) return { r: 176, g: 190, b: 197, a: 1 };
+    const s = String(input).trim();
+    const rgba = s.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)/i);
+    if (rgba) {
+      return { r: +rgba[1], g: +rgba[2], b: +rgba[3], a: rgba[4] != null ? +rgba[4] : 1 };
+    }
+    const hex = s.replace("#", "");
+    if (hex.length >= 6) {
+      return {
+        r: parseInt(hex.slice(0, 2), 16),
+        g: parseInt(hex.slice(2, 4), 16),
+        b: parseInt(hex.slice(4, 6), 16),
+        a: 1,
+      };
+    }
+    return { r: 176, g: 190, b: 197, a: 1 };
+  }
+
+  function rgbaStr(c) {
+    const a = Math.max(0, Math.min(1, c.a));
+    return `rgba(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)}, ${a.toFixed(3)})`;
+  }
+
+  function lerpColor(a, b, t) {
+    return {
+      r: a.r + (b.r - a.r) * t,
+      g: a.g + (b.g - a.g) * t,
+      b: a.b + (b.b - a.b) * t,
+      a: a.a + (b.a - a.a) * t,
+    };
+  }
+
+  function easeInOutQuad(t) {
+    return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  }
+
+  function runTween({ duration, onUpdate, onDone, isCancelled }) {
+    const start = performance.now();
+    let rafId = null;
+    const tick = (now) => {
+      if (isCancelled?.()) return;
+      const raw = Math.min(1, (now - start) / duration);
+      const eased = easeInOutQuad(raw);
+      onUpdate(eased, raw);
+      if (raw < 1) {
+        rafId = requestAnimationFrame(tick);
+      } else if (onDone) {
+        onDone();
+      }
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }
+
+  function nodeStyleSnapshot(origNodes, nodeId) {
+    const orig = origNodes.get(nodeId);
+    if (!orig) return null;
+    return {
+      borderWidth: orig.borderWidth ?? 1.5,
+      color: orig.color ? JSON.parse(JSON.stringify(orig.color)) : {},
+    };
+  }
+
+  function edgeStyleSnapshot(origEdges, edgeId) {
+    const orig = origEdges.get(edgeId);
+    if (!orig) return null;
+    return {
+      width: orig.width ?? 1,
+      color: orig.color ? JSON.parse(JSON.stringify(orig.color)) : {},
+    };
+  }
+
+  function tweenNodeStyle(dataSets, nodeId, fromStyle, toStyle, duration, isCancelled) {
+    if (!nodeId || !fromStyle || !toStyle) return () => {};
+    const fromBorder = parseColor(fromStyle.color?.border);
+    const toBorder = parseColor(toStyle.color?.border);
+    const fromBg = parseColor(fromStyle.color?.background);
+    const toBg = parseColor(toStyle.color?.background);
+    const fromBw = fromStyle.borderWidth ?? 1.5;
+    const toBw = toStyle.borderWidth ?? 2.5;
+    return runTween({
+      duration,
+      isCancelled,
+      onUpdate: (eased) => {
+        dataSets.nodes.update({
+          id: nodeId,
+          borderWidth: fromBw + (toBw - fromBw) * eased,
+          color: {
+            ...(toStyle.color || {}),
+            border: rgbaStr(lerpColor(fromBorder, toBorder, eased)),
+            background: rgbaStr(lerpColor(fromBg, toBg, eased)),
+            highlight: toStyle.color?.highlight || { background: "#01579b", border: "#fff" },
+          },
+        });
+      },
+      onDone: () => {
+        dataSets.nodes.update({ id: nodeId, borderWidth: toStyle.borderWidth, color: toStyle.color });
+      },
+    });
+  }
+
+  function tweenEdgeStyle(dataSets, edgeId, fromStyle, toStyle, duration, isCancelled) {
+    if (!edgeId || !fromStyle || !toStyle) return () => {};
+    const fromColor = parseColor(fromStyle.color?.color || fromStyle.color);
+    const toColor = parseColor(toStyle.color?.color || toStyle.color);
+    const fromWidth = fromStyle.width ?? 1;
+    const toWidth = toStyle.width ?? 2.1;
+    return runTween({
+      duration,
+      isCancelled,
+      onUpdate: (eased) => {
+        dataSets.edges.update({
+          id: edgeId,
+          width: fromWidth + (toWidth - fromWidth) * eased,
+          color: { color: rgbaStr(lerpColor(fromColor, toColor, eased)) },
+        });
+      },
+      onDone: () => {
+        dataSets.edges.update({ id: edgeId, color: toStyle.color, width: toStyle.width });
+      },
+    });
+  }
 
   function snapshotGraphStyles(dataSets) {
     const nodes = new Map();
@@ -222,26 +506,7 @@
     return { nodes, edges };
   }
 
-  function restoreNodeStyle(dataSets, origNodes, nodeId) {
-    const orig = origNodes.get(nodeId);
-    if (!orig || !nodeId) return;
-    dataSets.nodes.update({ id: nodeId, borderWidth: orig.borderWidth, color: orig.color });
-  }
-
-  function fadeEdgeStyle(dataSets, origEdges, edgeId, stepMs = 55) {
-    const orig = origEdges.get(edgeId);
-    if (!orig) return;
-    dataSets.edges.update({
-      id: edgeId,
-      color: { color: "rgba(255, 183, 77, 0.45)" },
-      width: Math.max(1, (orig.width || 1) * 1.15),
-    });
-    setTimeout(() => {
-      dataSets.edges.update({ id: edgeId, color: orig.color, width: orig.width });
-    }, stepMs * 2);
-  }
-
-  function highlightWalkPath(containerOrNetwork, walkPath, { intervalMs = GRAPH_WALK_UI_STEP_MS, onStep = null, initialDelayMs = 280 } = {}) {
+  function highlightWalkPath(containerOrNetwork, walkPath, { intervalMs = GRAPH_WALK_UI_STEP_MS, onStep = null, initialDelayMs = 320 } = {}) {
     if (!walkPath?.length) return Promise.resolve();
     let inst = instances.get(containerOrNetwork);
     if (!inst) {
@@ -253,24 +518,50 @@
 
     const { nodes: origNodes, edges: origEdges } = snapshotGraphStyles(dataSets);
     let prevNodeId = null;
+    let prevNodeStyle = null;
     let prevEdgeIds = [];
     let cancelled = false;
     let timerId = null;
+    const activeTweens = [];
+    const isCancelled = () => cancelled;
+    const stopTweens = () => {
+      while (activeTweens.length) {
+        const stop = activeTweens.pop();
+        try { stop(); } catch { /* ignore */ }
+      }
+    };
+    const pushTween = (stop) => {
+      if (typeof stop === "function") activeTweens.push(stop);
+    };
 
-    const focusDuration = Math.min(intervalMs * 0.58, 520);
+    const focusDuration = Math.min(intervalMs * 0.72, 920);
+    const stepGapMs = Math.max(480, intervalMs - WALK_STEP_OVERLAP_MS);
 
     const highlightStep = (step) => {
       const nid = step.node_id;
       if (prevNodeId && prevNodeId !== nid) {
-        restoreNodeStyle(dataSets, origNodes, prevNodeId);
+        const orig = nodeStyleSnapshot(origNodes, prevNodeId);
+        if (orig && prevNodeStyle) {
+          pushTween(tweenNodeStyle(dataSets, prevNodeId, prevNodeStyle, orig, WALK_NODE_FADE_MS, isCancelled));
+        }
       }
-      prevEdgeIds.forEach((eid) => fadeEdgeStyle(dataSets, origEdges, eid));
+      prevEdgeIds.forEach((eid) => {
+        const orig = edgeStyleSnapshot(origEdges, eid);
+        if (!orig) return;
+        const current = dataSets.edges.get(eid);
+        const fromStyle = edgeStyleSnapshot(
+          new Map([[eid, { width: current?.width, color: current?.color }]]),
+          eid,
+        );
+        if (fromStyle) {
+          pushTween(tweenEdgeStyle(dataSets, eid, fromStyle, orig, WALK_EDGE_FADE_MS, isCancelled));
+        }
+      });
       prevEdgeIds = [];
 
       if (nid) {
-        const orig = origNodes.get(nid);
-        dataSets.nodes.update({
-          id: nid,
+        const orig = nodeStyleSnapshot(origNodes, nid);
+        const highlightStyle = {
           borderWidth: 2.5,
           color: {
             ...(orig?.color || {}),
@@ -278,11 +569,20 @@
             background: orig?.color?.background || "#0071e3",
             highlight: { background: "#01579b", border: "#fff" },
           },
-        });
+        };
+        const currentNode = dataSets.nodes.get(nid);
+        const fromStyle = nodeStyleSnapshot(
+          new Map([[nid, { borderWidth: currentNode?.borderWidth, color: currentNode?.color }]]),
+          nid,
+        ) || orig;
+        if (fromStyle) {
+          pushTween(tweenNodeStyle(dataSets, nid, fromStyle, highlightStyle, WALK_NODE_FADE_MS, isCancelled));
+          prevNodeStyle = highlightStyle;
+        }
         try {
           network.selectNodes([nid]);
           network.focus(nid, {
-            scale: 1.03,
+            scale: WALK_FOCUS_SCALE,
             animation: { duration: focusDuration, easingFunction: WALK_FOCUS_EASING },
           });
         } catch { /* ignore */ }
@@ -293,7 +593,19 @@
           filter: (e) => e.from === step.from_id && e.to === nid,
         });
         edges.forEach((e) => {
-          dataSets.edges.update({ id: e.id, color: { color: WALK_HIGHLIGHT_EDGE }, width: 2.1 });
+          const orig = edgeStyleSnapshot(origEdges, e.id);
+          const current = dataSets.edges.get(e.id);
+          const fromStyle = edgeStyleSnapshot(
+            new Map([[e.id, { width: current?.width, color: current?.color }]]),
+            e.id,
+          ) || orig;
+          const highlightStyle = {
+            width: 2.1,
+            color: { color: WALK_HIGHLIGHT_EDGE },
+          };
+          if (fromStyle && orig) {
+            pushTween(tweenEdgeStyle(dataSets, e.id, fromStyle, highlightStyle, WALK_EDGE_FADE_MS, isCancelled));
+          }
           prevEdgeIds.push(e.id);
         });
       }
@@ -316,7 +628,7 @@
           try { onStep(step, idx, walkPath); } catch { /* ignore */ }
         }
         idx += 1;
-        timerId = setTimeout(tick, intervalMs);
+        timerId = setTimeout(tick, stepGapMs);
       };
       timerId = setTimeout(tick, initialDelayMs);
     });
@@ -324,6 +636,7 @@
     const cancel = () => {
       cancelled = true;
       if (timerId) clearTimeout(timerId);
+      stopTweens();
     };
 
     promise.cancel = cancel;
@@ -334,14 +647,18 @@
     render: renderMiniGraph,
     destroy,
     normalizeGraph,
+    mergeGraphs,
+    mergeInto,
     dedupeGraphNodes,
     highlightWalkPath,
     GRAPH_WALK_UI_STEP_MS,
-    refreshViewport(container) {
+    WALK_NODE_FADE_MS,
+    WALK_EDGE_FADE_MS,
+    WALK_STEP_OVERLAP_MS,
+    refreshViewport(container, { fit = false } = {}) {
       const inst = instances.get(container);
       if (!inst?.network) return;
-      inst.network.redraw();
-      inst.network.fit({ animation: { duration: 200, easingFunction: "easeInOutQuad" } });
+      debouncedViewportRefresh(container, inst, { fit: fit && !inst.userMovedCamera });
     },
     layerOf,
     LAYER_COLOR,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 from mkg_core.meta_db import init_schema, pool
 
 _COLLAB_INITIALIZED = False
+_DEFAULT_THREAD_TITLE = "Новый чат"
+_PLACEHOLDER_TITLE_RE = re.compile(r"^Чат \d+$")
 
 _COLLAB_SQL = """
 CREATE TABLE IF NOT EXISTS mkg_users (
@@ -49,6 +52,47 @@ CREATE TABLE IF NOT EXISTS role_prompts (
 """
 
 
+def _is_placeholder_title(title: str | None) -> bool:
+    t = (title or "").strip()
+    return not t or t == _DEFAULT_THREAD_TITLE or bool(_PLACEHOLDER_TITLE_RE.match(t))
+
+
+def derive_thread_title(body: str, *, max_len: int = 55) -> str:
+    text = re.sub(r"\s+", " ", (body or "").strip())
+    if not text:
+        return _DEFAULT_THREAD_TITLE
+    if len(text) <= max_len:
+        return text[:200]
+    cut = text[:max_len].rstrip()
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return (cut + "…")[:200]
+
+
+async def _migrate_thread_titles(conn) -> None:
+    rows = await conn.fetch(
+        """
+        SELECT t.id,
+          (SELECT body FROM chat_messages m
+           WHERE m.thread_id = t.id AND m.msg_type = 'user'
+           ORDER BY m.created_at ASC LIMIT 1) AS first_body
+        FROM chat_threads t
+        WHERE t.title = $1 OR t.title ~ '^Чат [0-9]+$'
+        """,
+        _DEFAULT_THREAD_TITLE,
+    )
+    for row in rows:
+        body = row.get("first_body")
+        if not body:
+            continue
+        title = derive_thread_title(str(body))
+        await conn.execute(
+            "UPDATE chat_threads SET title = $1 WHERE id = $2",
+            title,
+            row["id"],
+        )
+
+
 async def init_collab_schema() -> None:
     global _COLLAB_INITIALIZED
     if _COLLAB_INITIALIZED:
@@ -57,6 +101,7 @@ async def init_collab_schema() -> None:
     p = await pool()
     async with p.acquire() as conn:
         await conn.execute(_COLLAB_SQL)
+        await _migrate_thread_titles(conn)
     _COLLAB_INITIALIZED = True
 
 
@@ -119,20 +164,53 @@ async def list_threads(limit: int = 50) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+async def get_thread(thread_id: str) -> dict[str, Any] | None:
+    await init_collab_schema()
+    p = await pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT t.*,
+              (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id = t.id) AS message_count,
+              (SELECT MAX(created_at) FROM chat_messages m WHERE m.thread_id = t.id) AS last_message_at
+            FROM chat_threads t
+            WHERE t.id = $1
+            """,
+            thread_id,
+        )
+    return dict(row) if row else None
+
+
 async def create_thread(title: str, *, kind: str = "team", created_by: str | None = None) -> dict[str, Any]:
     await init_collab_schema()
     tid = f"thread:{uuid.uuid4().hex[:12]}"
+    clean_title = title.strip()[:200] or _DEFAULT_THREAD_TITLE
     p = await pool()
     async with p.acquire() as conn:
         await conn.execute(
             "INSERT INTO chat_threads (id, title, kind, created_by) VALUES ($1, $2, $3, $4)",
             tid,
-            title.strip()[:200] or "Новый чат",
+            clean_title,
             kind,
             created_by,
         )
         row = await conn.fetchrow("SELECT * FROM chat_threads WHERE id = $1", tid)
-    return dict(row) if row else {"id": tid, "title": title, "kind": kind}
+    return dict(row) if row else {"id": tid, "title": clean_title, "kind": kind}
+
+
+async def update_thread_title(thread_id: str, title: str) -> dict[str, Any] | None:
+    await init_collab_schema()
+    clean_title = title.strip()[:200] or _DEFAULT_THREAD_TITLE
+    p = await pool()
+    async with p.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE chat_threads SET title = $1 WHERE id = $2",
+            clean_title,
+            thread_id,
+        )
+        if not result.endswith("1"):
+            return None
+    return await get_thread(thread_id)
 
 
 async def list_messages(thread_id: str, limit: int = 200) -> list[dict[str, Any]]:
@@ -194,10 +272,117 @@ async def add_message(
             msg_type,
             meta_json,
         )
+        if msg_type == "user":
+            thread_row = await conn.fetchrow(
+                "SELECT title FROM chat_threads WHERE id = $1",
+                thread_id,
+            )
+            if thread_row and _is_placeholder_title(str(thread_row["title"])):
+                await conn.execute(
+                    "UPDATE chat_threads SET title = $1 WHERE id = $2",
+                    derive_thread_title(body),
+                    thread_id,
+                )
         row = await conn.fetchrow("SELECT * FROM chat_messages WHERE id = $1", mid)
     item = dict(row) if row else {}
     if item.get("meta") and isinstance(item["meta"], str):
         item["meta"] = json.loads(item["meta"])
+    return item
+
+
+async def get_message(message_id: str, thread_id: str) -> dict[str, Any] | None:
+    await init_collab_schema()
+    p = await pool()
+    async with p.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM chat_messages WHERE id = $1 AND thread_id = $2",
+            message_id,
+            thread_id,
+        )
+    if not row:
+        return None
+    item = dict(row)
+    if item.get("meta") and isinstance(item["meta"], str):
+        try:
+            item["meta"] = json.loads(item["meta"])
+        except json.JSONDecodeError:
+            pass
+    return item
+
+
+async def delete_message(message_id: str, thread_id: str) -> bool:
+    await init_collab_schema()
+    p = await pool()
+    async with p.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM chat_messages WHERE id = $1 AND thread_id = $2",
+            message_id,
+            thread_id,
+        )
+    return result.endswith("1")
+
+
+async def delete_messages_from(
+    message_id: str,
+    thread_id: str,
+    *,
+    inclusive: bool = True,
+) -> int:
+    """Удалить сообщение и все последующие в треде (по created_at)."""
+    await init_collab_schema()
+    p = await pool()
+    async with p.acquire() as conn:
+        anchor = await conn.fetchrow(
+            "SELECT created_at FROM chat_messages WHERE id = $1 AND thread_id = $2",
+            message_id,
+            thread_id,
+        )
+        if not anchor:
+            return 0
+        op = ">=" if inclusive else ">"
+        result = await conn.execute(
+            f"DELETE FROM chat_messages WHERE thread_id = $1 AND created_at {op} $2",
+            thread_id,
+            anchor["created_at"],
+        )
+    try:
+        return int(result.split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+async def update_message_body(
+    message_id: str,
+    thread_id: str,
+    body: str,
+) -> dict[str, Any] | None:
+    await init_collab_schema()
+    clean = body.strip()
+    if not clean:
+        raise ValueError("empty_body")
+    p = await pool()
+    async with p.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE chat_messages SET body = $1 WHERE id = $2 AND thread_id = $3",
+            clean,
+            message_id,
+            thread_id,
+        )
+        if not result.endswith("1"):
+            return None
+        row = await conn.fetchrow(
+            "SELECT * FROM chat_messages WHERE id = $1 AND thread_id = $2",
+            message_id,
+            thread_id,
+        )
+    if not row:
+        return None
+    item = dict(row)
+    if item.get("meta") and isinstance(item["meta"], str):
+        try:
+            item["meta"] = json.loads(item["meta"])
+        except json.JSONDecodeError:
+            pass
     return item
 
 

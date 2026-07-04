@@ -14,7 +14,22 @@ from typing import Any
 
 from mkg_core.graph_payload import GraphPayload, dedupe_graph_payload
 
-# ── Слои и метки узлов ──────────────────────────────────────────────
+# ── Масштабируемость доменов ─────────────────────────────────────────
+# Новые предметные области (гидрометаллургия, пирометаллургия, экология, переработка отходов)
+# подключаются без смены архитектуры L1–L6:
+#   1. Расширить L1_LABELS новыми типами сущностей (напр. WasteStream, Pollutant) при необходимости.
+#   2. Добавить корпус документов по домену → extraction L1–L6 → Neo4j → Qdrant.
+#   3. Подсказки LLM: гидрометаллургия (leaching, solvent extraction, SX-EW, LIX),
+#      пирометаллургия (smelting, roasting, matte, slag, converter),
+#      экология (emissions, tailings, remediation), отходы (recycling, circular economy).
+# Слои L2–L6 переиспользуются: Location/Expert (L2), Measurement/Claim (L4), TEP (L6).
+DOMAIN_PROMPT_HINTS: dict[str, tuple[str, ...]] = {
+    "hydrometallurgy": ("выщелачивание", "leaching", "экстракция", "SX-EW", "LIX", "электролиз"),
+    "pyrometallurgy": ("плавка", "smelting", "обжиг", "roasting", "шлак", "slag", "конвертер"),
+    "ecology": ("выбросы", "emissions", "хвостохранилище", "tailings", "ремедиация"),
+    "waste": ("переработка отходов", "recycling", "утилизация", "circular economy"),
+}
+
 L1_LABELS = frozenset(
     {"Material", "Process", "Equipment", "ChemicalReagent", "StandardMetric", "PhaseState", "Property"}
 )

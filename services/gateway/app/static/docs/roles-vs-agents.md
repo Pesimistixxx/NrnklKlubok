@@ -1,10 +1,12 @@
 # Роли vs агенты
 
-В MKG **роли пользователя**, **межслойные агенты L1–L6** и **AI-режимы** — три разные оси.
+В MKG **роли пользователя**, **межслойные агенты L1–L6** и **AI-режимы (API)** — три разные оси.
 Роли задают права и системный промпт; межслойные агенты — оценку задачи по слою знаний;
-AI-режимы — выбор LangGraph-графа.
+AI-режимы — выбор LangGraph-графа **только через API** (в UI чата их нет).
 
 > Подробно о межслойных агентах: раздел **Межслойные агенты (L1–L6)**.
+
+UI cache: `?v=95` (при странном поведении — **Ctrl+F5**).
 
 ## Схема
 
@@ -12,27 +14,28 @@ AI-режимы — выбор LangGraph-графа.
 flowchart TB
   subgraph ui [UI Чат]
     ROLE[Роль пользователя]
-    MODE[AI-режим]
+    SPEED[Быстрый / Подробный]
   end
   subgraph gateway [Gateway]
     CHAT[POST /chat/complete]
-    AGENTS[POST /agents-service/run]
+    ASYNC[POST /agents-service/run/async]
   end
-  subgraph orch [Оркестратор orchestrator_mode]
-    L1[l1_agent … l6_agent]
-    N4j[(Neo4j)]
-    QD[(Qdrant)]
+  subgraph orch [Оркестратор · гибкий цикл]
+    ROUTER[orchestrator_router]
+    Lx[l1_agent … l6_agent]
+    BUS[(agent_bus)]
     SYN[orchestrator_synthesize]
+    ROUTER --> Lx
+    Lx --> BUS --> ROUTER
+    ROUTER --> SYN
   end
   ROLE --> CHAT
-  ROLE --> AGENTS
-  MODE --> CHAT
-  MODE --> AGENTS
-  CHAT --> DIALOG[Диалог RAG + layer trace]
-  AGENTS --> L1
-  L1 --> N4j
-  L1 --> QD
-  L1 --> SYN
+  ROLE --> ASYNC
+  SPEED --> CHAT
+  SPEED -->|full| ASYNC
+  CHAT -->|fast / fallback| RAG[RAG + layer trace]
+  ASYNC --> ROUTER
+  CHAT --> AGENTS[POST /agents-service/run · API modes]
   AGENTS --> MODES[hypothesis / audit / anomaly_mode …]
 ```
 
@@ -51,47 +54,30 @@ flowchart TB
 | `anomaly_hunter` | Охотник за аномалиями | ✅ | retrieval |
 | `viewer` | Наблюдатель | ❌ | notification |
 
-**Роль** влияет на:
-- системный промпт (`GET/PUT /api/v1/roles/{id}/prompt`);
-- права upload / extraction / запуск агентов;
-- отображение badge в чате.
+**Роль** влияет на системный промпт, права upload/extraction и badge в чате.
 
-## AI-режимы (LangGraph)
+## Скорость vs AI-режим
 
-| Mode ID | UI | Назначение |
-|---------|-----|------------|
-| *(null)* | **Диалог** | Dual Qdrant L3+L4 → graph walk → LLM |
-| `orchestrator_mode` | Оркестратор | L1–L6 layer agents последовательно |
-| `hypothesis_mode` | Гипотезы | Гипотезы и связи между фактами |
-| `audit_mode` | Аудит | Противоречия, issue/severity |
-| `anomaly_mode` | Аномалии | L4-выбросы HDBSCAN + Neo4j |
-| `literature_review_mode` | Обзор | Структурированный обзор |
-| `recommendation_mode` | Советы | Рекомендации по теме |
+| UI | `speed_mode` | Путь |
+|----|--------------|------|
+| **Быстрый** | `fast` | `/chat/complete` — Qdrant L3+L4, без оркестратора |
+| **Подробный** + `can_run_agents` | `full` | `/run/async` оркестратор + poll graph |
+| **Подробный** без агентов | `full` | `/chat/complete` RAG-fallback |
 
-## Диалог vs агент
+AI-режимы (`audit_mode`, `hypothesis_mode`, …) — `POST /query` или `/agents-service/run`, **не pill в UI**.
 
-### Диалог (`mode = null`)
+## Когда что использовать
 
-Trace: `chat_role` → `qdrant_l3` → `qdrant_l4_cluster` → `graph_traversal` → `llm_compose`.
-
-Не использует LangGraph; быстрый RAG через `chat_engine.py`.
-
-### Agent modes
-
-Trace: `capabilities_check` → `llm_scope_planner` → `document_selector` →
-`retrieval_search` → … → `final_report_builder`.
-
-**orchestrator_mode** — отдельный граф с `l1_agent` … `l6_agent`.
-
-## Когда что выбирать
-
-| Задача | Роль | Режим |
-|--------|------|-------|
-| Быстрый вопрос по документам | analyst | Диалог |
-| Поиск аномалий L4 | anomaly_hunter | anomaly_mode |
-| Полный обход всех слоёв | researcher | orchestrator_mode |
+| Задача | Роль | UI |
+|--------|------|-----|
+| Быстрый вопрос по корпусу | analyst | Быстрый |
+| Полный обход слоёв + trace | researcher | Подробный |
 | Загрузка и пайплайн | engineer | — (без агента) |
+| Аномалии L4 (API) | anomaly_hunter | `POST /query` mode=anomaly_mode |
 
 Источник ролей: `services/gateway/app/roles.py`  
-Источник агентов: `services/agents/app/graph.py`, `orchestrator_graph.py`  
-Иерархия layer agents и углы L1–L6: раздел **Межслойные агенты (L1–L6)** в документации приложения.
+Источник агентов: `orchestrator_graph.py`, `layer_nodes.py`, `agent_bus.py`
+
+## Безопасность MVP
+
+localhost без server auth; роль — клиентский выбор. Production требует auth middleware.
