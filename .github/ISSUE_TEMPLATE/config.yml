@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Документация MKG
+    url: https://github.com/Pesimistixxx/NrnklKlubok/blob/master/README.md
+    about: Обзор проекта и ссылки на Docs/
+  - name: Smoke test
+    url: https://github.com/Pesimistixxx/NrnklKlubok/blob/master/Docs/18_smoke_test.md
+    about: Проверка локального запуска после изменений
